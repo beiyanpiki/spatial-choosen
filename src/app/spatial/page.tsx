@@ -9,11 +9,6 @@ import {
   Heading,
   HStack,
   Input,
-  NumberDecrementStepper,
-  NumberIncrementStepper,
-  NumberInput,
-  NumberInputField,
-  NumberInputStepper,
   Stack,
   Select,
   Text,
@@ -25,9 +20,116 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { colorForLabel } from '@/lib/colors';
 import { getProject, upsertProject } from '@/lib/projects';
-import { Point, Project, Region } from '@/types/project';
+import {
+  ChipType,
+  Point,
+  Project,
+  Region,
+  Spot,
+} from '@/types/project';
 
 const formatLabel = (label: number) => `#${label}`;
+
+const CHIP_LAYOUTS: Record<ChipType, { grid: number; spot: number; gap: number }> = {
+  '50um': { grid: 64, spot: 50, gap: 50 },
+  '15um': { grid: 96, spot: 25, gap: 15 },
+};
+
+type RawChipConfig = {
+  chip?: string | null;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+};
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
+const parseChipType = (value: unknown): ChipType | null => {
+  if (!value) return null;
+  const normalized = String(value).toLowerCase();
+  if (normalized === '50um' || normalized === '50μm' || normalized === '50') return '50um';
+  if (normalized === '15um' || normalized === '15μm' || normalized === '15') return '15um';
+  return null;
+};
+
+const normalizeChipRect = (
+  raw: RawChipConfig,
+  imageWidth?: number,
+  imageHeight?: number,
+) => {
+  if (!imageWidth || !imageHeight) return null;
+  const parsedWidth = Number(raw.width);
+  const width = Number.isFinite(parsedWidth) ? parsedWidth : undefined;
+  const parsedHeight = Number(raw.height);
+  const height = Number.isFinite(parsedHeight) && parsedHeight > 0 ? parsedHeight : width;
+  const parsedX = Number(raw.x);
+  const parsedY = Number(raw.y);
+  const x = Number.isFinite(parsedX) ? parsedX : undefined;
+  const y = Number.isFinite(parsedY) ? parsedY : undefined;
+  if (x === undefined || y === undefined || width === undefined || !height || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  const normX = clamp01(x / imageWidth);
+  const normY = clamp01(y / imageHeight);
+  const normW = Math.min(width / imageWidth, 1 - normX);
+  const normH = Math.min(height / imageHeight, 1 - normY);
+
+  if (normW <= 0 || normH <= 0) return null;
+
+  return {
+    x: normX,
+    y: normY,
+    width: normW,
+    height: normH,
+  } as const;
+};
+
+const buildSpotMatrix = (
+  rect: { x: number; y: number; width: number; height: number },
+  chipType: ChipType,
+  imageWidth?: number,
+  imageHeight?: number,
+): Spot[][] => {
+  if (!imageWidth || !imageHeight) return [];
+  const layout = CHIP_LAYOUTS[chipType];
+  const cols = layout.grid;
+  const rows = layout.grid;
+  const rectWidthPx = rect.width * imageWidth;
+  const rectHeightPx = rect.height * imageHeight;
+  const scale = Math.min(
+    rectWidthPx / (cols * layout.spot + (cols + 1) * layout.gap),
+    rectHeightPx / (rows * layout.spot + (rows + 1) * layout.gap),
+  );
+
+  if (!Number.isFinite(scale) || scale <= 0) return [];
+
+  const spotPx = layout.spot * scale;
+  const gapPx = layout.gap * scale;
+  const usedWidth = cols * spotPx + (cols + 1) * gapPx;
+  const usedHeight = rows * spotPx + (rows + 1) * gapPx;
+  const offsetX = rect.x * imageWidth + (rectWidthPx - usedWidth) / 2 + gapPx;
+  const offsetY = rect.y * imageHeight + (rectHeightPx - usedHeight) / 2 + gapPx;
+
+  const matrix: Spot[][] = [];
+  for (let row = 0; row < rows; row += 1) {
+    const rowSpots: Spot[] = [];
+    const yPx = offsetY + row * (spotPx + gapPx);
+    for (let col = 0; col < cols; col += 1) {
+      const xPx = offsetX + col * (spotPx + gapPx);
+      rowSpots.push({
+        x: xPx / imageWidth,
+        y: yPx / imageHeight,
+        sizeX: spotPx / imageWidth,
+        sizeY: spotPx / imageHeight,
+      });
+    }
+    matrix.push(rowSpots);
+  }
+
+  return matrix;
+};
 
 function SpatialContent() {
   const searchParams = useSearchParams();
@@ -52,6 +154,7 @@ function SpatialContent() {
   const [highlightedLabel, setHighlightedLabel] = useState<number | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
   const [showHatching, setShowHatching] = useState(true);
+  const [configName, setConfigName] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -72,7 +175,7 @@ function SpatialContent() {
       loadedImageRef.current = image;
       setCanvasRefresh((v) => v + 1);
     };
-  }, [project?.imageData]);
+  }, [project]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -132,6 +235,51 @@ function SpatialContent() {
     persist({ ...project, regions: nextRegions });
   };
 
+  const applyChipType = useCallback((nextType: ChipType | null, pushHistory = true) => {
+    if (!project) return;
+    const rect = project.chipRect ?? null;
+    let spotMatrix: Spot[][] | undefined;
+    if (rect && nextType && project.imageWidth && project.imageHeight) {
+      spotMatrix = buildSpotMatrix(rect, nextType, project.imageWidth, project.imageHeight);
+    }
+    persist({ ...project, chipType: nextType, chipRect: rect, spotMatrix }, pushHistory);
+  }, [persist, project]);
+
+  const handleConfigUpload = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0 || !project) return;
+    const file = fileList[0];
+    try {
+      const rawText = await file.text();
+      const parsed = JSON.parse(rawText) as RawChipConfig;
+      const rect = normalizeChipRect(parsed, project.imageWidth, project.imageHeight);
+
+      if (!rect) {
+        toast({
+          title: 'Invalid config file',
+          description: 'Missing or invalid x/y/width/height values.',
+          status: 'error',
+        });
+        return;
+      }
+
+      const parsedType = parseChipType(parsed.chip);
+      const spotMatrix = parsedType && project.imageWidth && project.imageHeight
+        ? buildSpotMatrix(rect, parsedType, project.imageWidth, project.imageHeight)
+        : undefined;
+
+      persist({ ...project, chipRect: rect, chipType: parsedType, spotMatrix });
+      setConfigName(file.name);
+      toast({ title: 'Config loaded', status: 'success', duration: 1800 });
+    } catch (error) {
+      console.error(error);
+      toast({
+        title: 'Failed to read config',
+        description: 'Ensure the file is valid JSON with chip/x/y/width/height.',
+        status: 'error',
+      });
+    }
+  };
+
   const onPointerPos = useCallback((event: React.PointerEvent<HTMLCanvasElement>): Point | null => {
     const rect = hostRect;
     if (!rect) return null;
@@ -185,7 +333,7 @@ function SpatialContent() {
     return relativeToImage(relative);
   }, [onPointerPos, relativeToImage]);
 
-  const pointInPolygon = (point: Point, polygon: Point[]) => {
+  const pointInPolygon = useCallback((point: Point, polygon: Point[]) => {
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
       const xi = polygon[i].x;
@@ -197,7 +345,65 @@ function SpatialContent() {
       if (intersect) inside = !inside;
     }
     return inside;
-  };
+  }, []);
+
+  const polygonIntersectsRect = useCallback((
+    polygon: Point[],
+    rect: { x: number; y: number; width: number; height: number },
+  ) => {
+    const pointInRect = (point: Point) =>
+      point.x >= rect.x && point.x <= rect.x + rect.width
+      && point.y >= rect.y && point.y <= rect.y + rect.height;
+
+    const segmentsIntersect = (p1: Point, p2: Point, q1: Point, q2: Point) => {
+      const cross = (a: Point, b: Point, c: Point) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      const d1 = cross(p1, p2, q1);
+      const d2 = cross(p1, p2, q2);
+      const d3 = cross(q1, q2, p1);
+      const d4 = cross(q1, q2, p2);
+      const hasOppSign = (a: number, b: number) => (a > 0 && b < 0) || (a < 0 && b > 0);
+      if (hasOppSign(d1, d2) && hasOppSign(d3, d4)) return true;
+      const onSegment = (a: Point, b: Point, c: Point) =>
+        Math.min(a.x, b.x) <= c.x && c.x <= Math.max(a.x, b.x)
+        && Math.min(a.y, b.y) <= c.y && c.y <= Math.max(a.y, b.y)
+        && Math.abs(cross(a, b, c)) < 1e-9;
+      return (
+        (Math.abs(d1) < 1e-9 && onSegment(p1, p2, q1))
+        || (Math.abs(d2) < 1e-9 && onSegment(p1, p2, q2))
+        || (Math.abs(d3) < 1e-9 && onSegment(q1, q2, p1))
+        || (Math.abs(d4) < 1e-9 && onSegment(q1, q2, p2))
+      );
+    };
+
+    if (polygon.length === 0) return false;
+    // Any polygon vertex inside rect
+    if (polygon.some((pt) => pointInRect(pt))) return true;
+
+    // Any rect corner inside polygon
+    const corners: Point[] = [
+      { x: rect.x, y: rect.y },
+      { x: rect.x + rect.width, y: rect.y },
+      { x: rect.x + rect.width, y: rect.y + rect.height },
+      { x: rect.x, y: rect.y + rect.height },
+    ];
+    if (corners.some((c) => pointInPolygon(c, polygon))) return true;
+
+    // Edge intersection
+    const rectEdges: [Point, Point][] = [
+      [corners[0], corners[1]],
+      [corners[1], corners[2]],
+      [corners[2], corners[3]],
+      [corners[3], corners[0]],
+    ];
+    for (let i = 0; i < polygon.length; i += 1) {
+      const a = polygon[i];
+      const b = polygon[(i + 1) % polygon.length];
+      for (const [r1, r2] of rectEdges) {
+        if (segmentsIntersect(a, b, r1, r2)) return true;
+      }
+    }
+    return false;
+  }, [pointInPolygon]);
 
   const findRegionAtPoint = (point: Point): Region | null => {
     if (!project) return null;
@@ -395,6 +601,20 @@ function SpatialContent() {
     setPan({ x: 0, y: 0 });
   }, [applyZoom]);
 
+  const spotAssignments = useMemo(() => {
+    if (!project?.spotMatrix || project.spotMatrix.length === 0) return null;
+    return project.spotMatrix.map((row) => row.map((spot) => {
+      const rect = { x: spot.x, y: spot.y, width: spot.sizeX, height: spot.sizeY };
+      for (let i = project.regions.length - 1; i >= 0; i -= 1) {
+        const region = project.regions[i];
+        if (polygonIntersectsRect(region.points, rect)) {
+          return { regionId: region.id, color: region.color };
+        }
+      }
+      return null;
+    }));
+  }, [polygonIntersectsRect, project?.spotMatrix, project?.regions]);
+
   // Canvas draw loop
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -428,6 +648,41 @@ function SpatialContent() {
       x: transform.originX + pt.x * transform.width,
       y: transform.originY + pt.y * transform.height,
     });
+
+    const drawChipOverlay = () => {
+      if (!project.chipRect) return;
+      const { x, y, width, height } = project.chipRect;
+      const topLeft = projectToScreen({ x, y });
+      const rectWidth = width * transform.width;
+      const rectHeight = height * transform.height;
+
+      if (project.chipType && project.spotMatrix && project.spotMatrix.length > 0) {
+        ctx.save();
+        ctx.lineWidth = 0.8;
+        project.spotMatrix.forEach((row, rIdx) => {
+          row.forEach((spot, cIdx) => {
+            const spotOrigin = projectToScreen({ x: spot.x, y: spot.y });
+            const w = spot.sizeX * transform.width;
+            const h = spot.sizeY * transform.height;
+            const assignment = spotAssignments?.[rIdx]?.[cIdx];
+            const fillColor = assignment?.color ?? '#e5e5e5';
+            const strokeColor = assignment ? '#1a202c' : '#a0a0a0';
+            ctx.globalAlpha = assignment ? 0.85 : 0.9;
+            ctx.fillStyle = fillColor;
+            ctx.strokeStyle = strokeColor;
+            ctx.fillRect(spotOrigin.x, spotOrigin.y, w, h);
+            ctx.strokeRect(spotOrigin.x, spotOrigin.y, w, h);
+          });
+        });
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#000000';
+      ctx.strokeRect(topLeft.x, topLeft.y, rectWidth, rectHeight);
+      ctx.restore();
+    };
 
     const drawPath = (pts: Point[], color: string, isSelected: boolean) => {
       if (pts.length < 2) return;
@@ -479,6 +734,8 @@ function SpatialContent() {
       ctx.globalAlpha = 1;
     };
 
+    drawChipOverlay();
+
     project.regions.forEach((region) =>
       drawPath(
         region.points,
@@ -489,7 +746,7 @@ function SpatialContent() {
     if (currentPoints.length > 1) {
       drawPath(currentPoints, colorForLabel(currentLabel), false);
     }
-  }, [project, project?.imageData, currentPoints, currentLabel, canvasRefresh, selectedRegionIds, highlightedLabel, showHatching, getTransform]);
+  }, [project, project?.imageData, currentPoints, currentLabel, canvasRefresh, selectedRegionIds, highlightedLabel, showHatching, getTransform, spotAssignments]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -581,13 +838,29 @@ function SpatialContent() {
     [project?.regions, selectedRegionIds],
   );
 
+  const chipRectInfo = useMemo(() => {
+    if (!project?.chipRect || !project.imageWidth || !project.imageHeight) return null;
+    return {
+      x: Math.round(project.chipRect.x * project.imageWidth),
+      y: Math.round(project.chipRect.y * project.imageHeight),
+      width: Math.round(project.chipRect.width * project.imageWidth),
+      height: Math.round(project.chipRect.height * project.imageHeight),
+    };
+  }, [project?.chipRect, project?.imageHeight, project?.imageWidth]);
+
+  const spotGridSize = useMemo(() => {
+    if (!project?.spotMatrix || project.spotMatrix.length === 0) return null;
+    return {
+      rows: project.spotMatrix.length,
+      cols: project.spotMatrix[0]?.length ?? 0,
+    };
+  }, [project?.spotMatrix]);
+
   const cursor = useMemo(() => {
     if (isPanning) return 'grabbing';
     if (tool === 'edit') return 'pointer';
     return 'crosshair';
   }, [isPanning, tool]);
-
-  const transform = getTransform();
 
   const handleSaveProject = async () => {
     if (!project) return;
@@ -668,41 +941,57 @@ function SpatialContent() {
             <Input value={project.id} isReadOnly fontFamily="mono" />
           </Stack>
 
-          <Stack direction="row" spacing={3}>
-            <Stack flex="1" spacing={2}>
-              <Text fontWeight="semibold" fontSize="sm">Chip Width (µm)</Text>
-              <NumberInput
-                min={0}
-                value={project.chipWidth ?? ''}
-                onChange={(value) => {
-                  const parsed = Number(value);
-                  persist({ ...project, chipWidth: Number.isFinite(parsed) ? parsed : undefined });
-                }}
-              >
-                <NumberInputField />
-                <NumberInputStepper>
-                  <NumberIncrementStepper />
-                  <NumberDecrementStepper />
-                </NumberInputStepper>
-              </NumberInput>
+          <Stack spacing={3}>
+            <Heading size="sm">Chip config</Heading>
+            <Stack spacing={2}>
+              <Text fontWeight="semibold" fontSize="sm">Upload config (JSON)</Text>
+              <Button as="label" variant="outline" colorScheme="brand" cursor="pointer" size="sm" width="fit-content">
+                Upload
+                <Input
+                  type="file"
+                  accept="application/json"
+                  display="none"
+                  onChange={(e) => handleConfigUpload(e.target.files)}
+                />
+              </Button>
+              <Text fontSize="xs" color="gray.500">
+                {configName ? `Loaded: ${configName}` : 'Fields: chip, x, y, width, height (image pixel coords).'}
+              </Text>
             </Stack>
-            <Stack flex="1" spacing={2}>
-              <Text fontWeight="semibold" fontSize="sm">Chip Height (µm)</Text>
-              <NumberInput
-                min={0}
-                value={project.chipHeight ?? ''}
-                onChange={(value) => {
-                  const parsed = Number(value);
-                  persist({ ...project, chipHeight: Number.isFinite(parsed) ? parsed : undefined });
-                }}
+
+            <Stack spacing={2}>
+              <Text fontWeight="semibold" fontSize="sm">Chip type</Text>
+              <Select
+                size="sm"
+                value={project.chipType ?? ''}
+                onChange={(e) => applyChipType(parseChipType(e.target.value))}
               >
-                <NumberInputField />
-                <NumberInputStepper>
-                  <NumberIncrementStepper />
-                  <NumberDecrementStepper />
-                </NumberInputStepper>
-              </NumberInput>
+                <option value="">None</option>
+                <option value="50um">50 µm</option>
+                <option value="15um">15 µm</option>
+              </Select>
+              <Text fontSize="xs" color="gray.500">
+                {project.chipType
+                  ? 'Change to regenerate spot layout instantly.'
+                  : 'When type is empty, spots stay hidden until you pick one.'}
+              </Text>
             </Stack>
+
+            {chipRectInfo ? (
+              <Text fontSize="sm" color="gray.600">
+                Area: {chipRectInfo.width} × {chipRectInfo.height}px at ({chipRectInfo.x}, {chipRectInfo.y})
+              </Text>
+            ) : (
+              <Text fontSize="sm" color="gray.500">No chip rectangle loaded.</Text>
+            )}
+
+            {project.chipType && spotGridSize ? (
+              <Text fontSize="sm" color="gray.600">
+                Spot grid: {spotGridSize.cols} × {spotGridSize.rows} ({project.chipType})
+              </Text>
+            ) : (
+              <Text fontSize="sm" color="gray.500">Spots render after both config and chip type are set.</Text>
+            )}
           </Stack>
 
           <Stack spacing={3}>
