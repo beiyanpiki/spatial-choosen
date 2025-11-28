@@ -14,9 +14,11 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import { readProjects, upsertProject } from '@/lib/projects';
-import { Project } from '@/types/project';
+import { decodeBundleFromFile, Coord } from '@/lib/bundleDecoder';
+import { buildSpotMatrix, normalizeChipRect, parseChipType } from '@/lib/chip';
+import { ChipRect, ChipType, MatrixDtype, Project, Spot } from '@/types/project';
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
   year: 'numeric',
@@ -24,35 +26,37 @@ const dateFormatter = new Intl.DateTimeFormat('en', {
   day: 'numeric',
 });
 
-type PendingImage = {
-  dataUrl: string;
+type PendingBundle = {
+  imageDataUrl: string;
   width: number;
   height: number;
+  coord: Coord;
+  chipType: ChipType | null;
+  chipRect: ChipRect | null;
+  spotMatrix?: Spot[][];
+  matrixBuffer: ArrayBuffer;
+  matrixShape: number[];
+  matrixDtype: MatrixDtype;
+  bundleName: string;
 };
 
-async function readImageFile(file: File): Promise<PendingImage> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
+async function measureImage(dataUrl: string): Promise<{ width: number; height: number }> {
   const img = new Image();
   img.src = dataUrl;
   await img.decode();
-
-  return { dataUrl, width: img.naturalWidth, height: img.naturalHeight };
+  return { width: img.naturalWidth, height: img.naturalHeight };
 }
 
 export default function HomePage() {
   const router = useRouter();
 
   const [projectName, setProjectName] = useState('');
-  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
+  const [pendingBundle, setPendingBundle] = useState<PendingBundle | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isParsingBundle, setIsParsingBundle] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [feedback, setFeedback] = useState<{ text: string; tone: 'success' | 'error' | 'info' } | null>(null);
+  const [isPendingTransition, startTransition] = useTransition();
 
   useEffect(() => {
     let active = true;
@@ -67,23 +71,60 @@ export default function HomePage() {
     return () => { active = false; };
   }, []);
 
-  const canCreate = projectName.trim().length > 1 && !!pendingImage;
+  const canCreate = projectName.trim().length > 1 && !!pendingBundle;
 
-  const handleFile = async (fileList: FileList | null) => {
+  const handleBundleFile = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const file = fileList[0];
     try {
-      const img = await readImageFile(file);
-      setPendingImage(img);
-      setFeedback({ text: `Loaded ${file.name} (${img.width}×${img.height})`, tone: 'success' });
+      setIsParsingBundle(true);
+      // Yield to paint the loading state before heavy parse.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const decoded = await decodeBundleFromFile(file);
+      const { width, height } = await measureImage(decoded.imageDataUrl);
+      const chipType = parseChipType(decoded.coord.chip);
+      const chipRect = normalizeChipRect(decoded.coord, width, height);
+      const spotMatrix = chipType && chipRect
+        ? buildSpotMatrix(chipRect, chipType, width, height)
+        : undefined;
+      const matrixBuffer = decoded.matrix.data.buffer.slice(
+        decoded.matrix.data.byteOffset,
+        decoded.matrix.data.byteOffset + decoded.matrix.data.byteLength,
+      );
+
+      startTransition(() => {
+        setPendingBundle({
+          imageDataUrl: decoded.imageDataUrl,
+          width,
+          height,
+          coord: decoded.coord,
+          chipType,
+          chipRect,
+          spotMatrix,
+          matrixBuffer,
+          matrixShape: decoded.matrix.shape,
+          matrixDtype: decoded.matrix.dtype,
+          bundleName: file.name,
+        });
+      });
+
+      if (!projectName.trim()) {
+        setProjectName(file.name.replace(/\.[^.]+$/, ''));
+      }
+
+      const chipMsg = chipType ? `chip ${chipType}` : 'chip unspecified';
+      setFeedback({ text: `Bundle loaded (${width}×${height}, ${chipMsg})`, tone: 'success' });
     } catch (error) {
       console.error(error);
-      setFeedback({ text: 'Unable to read image', tone: 'error' });
+      setFeedback({ text: 'Failed to read bundle. Ensure JSON schema is correct.', tone: 'error' });
+      setPendingBundle(null);
+    } finally {
+      setIsParsingBundle(false);
     }
   };
 
   const createProject = async () => {
-    if (!canCreate || !pendingImage) return;
+    if (!canCreate || !pendingBundle) return;
     setIsSaving(true);
     try {
       const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `proj-${Date.now()}`;
@@ -91,9 +132,16 @@ export default function HomePage() {
         id,
         name: projectName.trim(),
         createdAt: new Date().toISOString(),
-        imageData: pendingImage.dataUrl,
-        imageWidth: pendingImage.width,
-        imageHeight: pendingImage.height,
+        imageData: pendingBundle.imageDataUrl,
+        imageWidth: pendingBundle.width,
+        imageHeight: pendingBundle.height,
+        chipType: pendingBundle.chipType,
+        chipRect: pendingBundle.chipRect,
+        spotMatrix: pendingBundle.spotMatrix,
+        chipFromBundle: Boolean(pendingBundle.chipType),
+        matrixShape: pendingBundle.matrixShape,
+        matrixDtype: pendingBundle.matrixDtype,
+        matrixData: pendingBundle.matrixBuffer,
         regions: [],
       };
       await upsertProject(project);
@@ -120,7 +168,7 @@ export default function HomePage() {
         <Box bg="white" boxShadow="sm" borderRadius="lg" p={6} border="1px solid" borderColor="gray.100">
           <Stack spacing={4}>
             <Heading size="md">New Project</Heading>
-            <Text color="gray.600">Give it a name, choose a slide image (kept in your browser), and we will generate an ID.</Text>
+            <Text color="gray.600">Provide a bundle (image + hull + matrix), keep everything local, and jump into annotation.</Text>
 
             <Stack spacing={2}>
               <Text fontWeight="semibold" fontSize="sm">Project Name</Text>
@@ -132,28 +180,48 @@ export default function HomePage() {
             </Stack>
 
             <Stack spacing={3}>
-              <Text fontWeight="semibold" fontSize="sm">Slide Image</Text>
+              <Text fontWeight="semibold" fontSize="sm">Upload bundle (JSON)</Text>
               <Flex align="center" gap={3} flexWrap="wrap">
-                <Button as="label" cursor="pointer" colorScheme="brand" variant="solid">
-                  Select image
+                <Button
+                  as="label"
+                  cursor="pointer"
+                  colorScheme="brand"
+                  variant="solid"
+                  isLoading={isParsingBundle || isPendingTransition}
+                  loadingText="Loading bundle"
+                  spinnerPlacement="end"
+                >
+                  Select bundle
                   <Input
                     type="file"
-                    accept="image/*"
+                    accept="application/json"
                     display="none"
-                    onChange={(e) => handleFile(e.target.files)}
+                    onChange={(e) => handleBundleFile(e.target.files)}
                   />
                 </Button>
-                {pendingImage && (
-                  <Badge colorScheme="green">{pendingImage.width} × {pendingImage.height}</Badge>
+                {pendingBundle && (
+                  <Badge colorScheme="green">{pendingBundle.width} × {pendingBundle.height}</Badge>
                 )}
               </Flex>
-              {pendingImage && (
+              {pendingBundle && (
                 <Box borderRadius="md" overflow="hidden" border="1px solid" borderColor="gray.100">
-                  <AspectRatio ratio={pendingImage.width / pendingImage.height}>
+                  <AspectRatio ratio={pendingBundle.width / pendingBundle.height}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={pendingImage.dataUrl} alt="Selected preview" style={{ objectFit: 'cover' }} />
+                    <img src={pendingBundle.imageDataUrl} alt="Selected preview" style={{ objectFit: 'cover' }} />
                   </AspectRatio>
                 </Box>
+              )}
+              {pendingBundle && (
+                <Stack spacing={1} fontSize="sm" color="gray.600">
+                  <Text>Bundle: {pendingBundle.bundleName}</Text>
+                  <Text>
+                    Hull: x={pendingBundle.coord.x}, y={pendingBundle.coord.y}, w={pendingBundle.coord.width}, h={pendingBundle.coord.height}
+                  </Text>
+                  <Text>
+                    Chip: {pendingBundle.chipType ? `${pendingBundle.chipType === '50um' ? '50 μm' : '15 μm'} (locked from bundle)` : 'unspecified'}
+                  </Text>
+                  <Text>Matrix shape: {pendingBundle.matrixShape.join(' × ')} ({pendingBundle.matrixDtype})</Text>
+                </Stack>
               )}
             </Stack>
 

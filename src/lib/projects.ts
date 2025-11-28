@@ -2,10 +2,11 @@ import { Project } from "@/types/project";
 
 const STORAGE_KEY = "spatial-web-projects";
 const DB_NAME = "spatial-web";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const IMAGE_STORE = "project-images";
+const MATRIX_STORE = "project-matrix";
 
-type ProjectMeta = Omit<Project, "imageData">;
+type ProjectMeta = Omit<Project, "imageData" | "matrixData">;
 
 const isBrowser = () => typeof window !== "undefined";
 
@@ -19,6 +20,9 @@ const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
     const db = request.result;
     if (!db.objectStoreNames.contains(IMAGE_STORE)) {
       db.createObjectStore(IMAGE_STORE);
+    }
+    if (!db.objectStoreNames.contains(MATRIX_STORE)) {
+      db.createObjectStore(MATRIX_STORE);
     }
   };
   request.onsuccess = () => resolve(request.result);
@@ -74,11 +78,38 @@ const deleteImage = async (projectId: string) => {
   await txDone(tx);
 };
 
+const saveMatrix = async (projectId: string, buffer: ArrayBuffer) => {
+  const db = await openDb();
+  const tx = db.transaction(MATRIX_STORE, "readwrite");
+  tx.objectStore(MATRIX_STORE).put(buffer, projectId);
+  await txDone(tx);
+};
+
+const readMatrix = async (projectId: string): Promise<ArrayBuffer | undefined> => {
+  const db = await openDb();
+  const tx = db.transaction(MATRIX_STORE, "readonly");
+  const req = tx.objectStore(MATRIX_STORE).get(projectId);
+  const value = await new Promise<ArrayBuffer | undefined>((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result as ArrayBuffer | undefined);
+    req.onerror = () => reject(req.error);
+  });
+  await txDone(tx);
+  return value ?? undefined;
+};
+
+const deleteMatrix = async (projectId: string) => {
+  const db = await openDb();
+  const tx = db.transaction(MATRIX_STORE, "readwrite");
+  tx.objectStore(MATRIX_STORE).delete(projectId);
+  await txDone(tx);
+};
+
 const migrateInline = async (raw: unknown[]): Promise<ProjectMeta[]> => {
   const metas: ProjectMeta[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { imageData, ...rest } = entry as Project;
+    const { imageData, matrixData, ...rest } = entry as Project;
+    void matrixData;
     const meta = rest as ProjectMeta;
     if (typeof imageData === "string") {
       try {
@@ -112,17 +143,23 @@ export async function readProjects(): Promise<Project[]> {
 }
 
 export async function persistProjects(projects: Project[]) {
-  const metas = projects.map(({ imageData, ...rest }) => {
+  const metas = projects.map(({ imageData, matrixData, ...rest }) => {
     void imageData;
+    void matrixData;
     return rest;
   });
   persistMetas(metas);
-  await Promise.all(projects.map((p) => saveImage(p.id, p.imageData)));
+  await Promise.all(projects.map(async (p) => {
+    await saveImage(p.id, p.imageData);
+    if (p.matrixData) {
+      await saveMatrix(p.id, p.matrixData);
+    }
+  }));
 }
 
 export async function upsertProject(project: Project) {
   const metas = await readMetas();
-  const { imageData, ...meta } = project;
+  const { imageData, matrixData, ...meta } = project;
   const idx = metas.findIndex((p) => p.id === project.id);
   if (idx >= 0) {
     metas[idx] = meta;
@@ -131,19 +168,26 @@ export async function upsertProject(project: Project) {
   }
   persistMetas(metas);
   await saveImage(project.id, imageData);
+  if (matrixData) {
+    await saveMatrix(project.id, matrixData);
+  }
 }
 
 export async function getProject(projectId: string): Promise<Project | undefined> {
   const metas = await readMetas();
   const meta = metas.find((p) => p.id === projectId);
   if (!meta) return undefined;
-  const imageData = await readImage(projectId);
+  const [imageData, matrixData] = await Promise.all([
+    readImage(projectId),
+    readMatrix(projectId),
+  ]);
   if (!imageData) return undefined;
-  return { ...meta, imageData } as Project;
+  return { ...meta, imageData, matrixData } as Project;
 }
 
 export async function deleteProject(projectId: string) {
   const metas = await readMetas();
   persistMetas(metas.filter((p) => p.id !== projectId));
   await deleteImage(projectId);
+  await deleteMatrix(projectId);
 }

@@ -18,6 +18,7 @@ import {
 } from '@chakra-ui/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import polygonClipping from 'polygon-clipping';
 import { colorForLabel } from '@/lib/colors';
 import { getProject, upsertProject } from '@/lib/projects';
 import {
@@ -27,109 +28,9 @@ import {
   Region,
   Spot,
 } from '@/types/project';
+import { buildSpotMatrix, parseChipType } from '@/lib/chip';
 
 const formatLabel = (label: number) => `#${label}`;
-
-const CHIP_LAYOUTS: Record<ChipType, { grid: number; spot: number; gap: number }> = {
-  '50um': { grid: 64, spot: 50, gap: 50 },
-  '15um': { grid: 96, spot: 25, gap: 15 },
-};
-
-type RawChipConfig = {
-  chip?: string | null;
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-};
-
-const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-
-const parseChipType = (value: unknown): ChipType | null => {
-  if (!value) return null;
-  const normalized = String(value).toLowerCase();
-  if (normalized === '50um' || normalized === '50μm' || normalized === '50') return '50um';
-  if (normalized === '15um' || normalized === '15μm' || normalized === '15') return '15um';
-  return null;
-};
-
-const normalizeChipRect = (
-  raw: RawChipConfig,
-  imageWidth?: number,
-  imageHeight?: number,
-) => {
-  if (!imageWidth || !imageHeight) return null;
-  const parsedWidth = Number(raw.width);
-  const width = Number.isFinite(parsedWidth) ? parsedWidth : undefined;
-  const parsedHeight = Number(raw.height);
-  const height = Number.isFinite(parsedHeight) && parsedHeight > 0 ? parsedHeight : width;
-  const parsedX = Number(raw.x);
-  const parsedY = Number(raw.y);
-  const x = Number.isFinite(parsedX) ? parsedX : undefined;
-  const y = Number.isFinite(parsedY) ? parsedY : undefined;
-  if (x === undefined || y === undefined || width === undefined || !height || width <= 0 || height <= 0) {
-    return null;
-  }
-
-  const normX = clamp01(x / imageWidth);
-  const normY = clamp01(y / imageHeight);
-  const normW = Math.min(width / imageWidth, 1 - normX);
-  const normH = Math.min(height / imageHeight, 1 - normY);
-
-  if (normW <= 0 || normH <= 0) return null;
-
-  return {
-    x: normX,
-    y: normY,
-    width: normW,
-    height: normH,
-  } as const;
-};
-
-const buildSpotMatrix = (
-  rect: { x: number; y: number; width: number; height: number },
-  chipType: ChipType,
-  imageWidth?: number,
-  imageHeight?: number,
-): Spot[][] => {
-  if (!imageWidth || !imageHeight) return [];
-  const layout = CHIP_LAYOUTS[chipType];
-  const cols = layout.grid;
-  const rows = layout.grid;
-  const rectWidthPx = rect.width * imageWidth;
-  const rectHeightPx = rect.height * imageHeight;
-  const scale = Math.min(
-    rectWidthPx / (cols * layout.spot + (cols + 1) * layout.gap),
-    rectHeightPx / (rows * layout.spot + (rows + 1) * layout.gap),
-  );
-
-  if (!Number.isFinite(scale) || scale <= 0) return [];
-
-  const spotPx = layout.spot * scale;
-  const gapPx = layout.gap * scale;
-  const usedWidth = cols * spotPx + (cols + 1) * gapPx;
-  const usedHeight = rows * spotPx + (rows + 1) * gapPx;
-  const offsetX = rect.x * imageWidth + (rectWidthPx - usedWidth) / 2 + gapPx;
-  const offsetY = rect.y * imageHeight + (rectHeightPx - usedHeight) / 2 + gapPx;
-
-  const matrix: Spot[][] = [];
-  for (let row = 0; row < rows; row += 1) {
-    const rowSpots: Spot[] = [];
-    const yPx = offsetY + row * (spotPx + gapPx);
-    for (let col = 0; col < cols; col += 1) {
-      const xPx = offsetX + col * (spotPx + gapPx);
-      rowSpots.push({
-        x: xPx / imageWidth,
-        y: yPx / imageHeight,
-        sizeX: spotPx / imageWidth,
-        sizeY: spotPx / imageHeight,
-      });
-    }
-    matrix.push(rowSpots);
-  }
-
-  return matrix;
-};
 
 function SpatialContent() {
   const searchParams = useSearchParams();
@@ -147,14 +48,13 @@ function SpatialContent() {
   const [selectedRegionIds, setSelectedRegionIds] = useState<string[]>([]);
   const [undoStack, setUndoStack] = useState<Project[]>([]);
   const [redoStack, setRedoStack] = useState<Project[]>([]);
-  const [tool, setTool] = useState<'draw' | 'edit'>('draw');
+  const [tool, setTool] = useState<'draw' | 'edit' | 'erase'>('draw');
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [highlightedLabel, setHighlightedLabel] = useState<number | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
   const [showHatching, setShowHatching] = useState(true);
-  const [configName, setConfigName] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -235,8 +135,31 @@ function SpatialContent() {
     persist({ ...project, regions: nextRegions });
   };
 
+  const moveRegion = useCallback((regionId: string, direction: 'up' | 'down') => {
+    if (!project) return;
+    const index = project.regions.findIndex((r) => r.id === regionId);
+    if (index === -1) return;
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= project.regions.length) return;
+
+    const nextRegions = [...project.regions];
+    const [moved] = nextRegions.splice(index, 1);
+    nextRegions.splice(targetIndex, 0, moved);
+
+    persist({ ...project, regions: nextRegions });
+
+    setSelectionAnchor((prev) => {
+      if (prev === null) return null;
+      if (prev === index) return targetIndex;
+      if (direction === 'up' && prev >= targetIndex && prev < index) return prev + 1;
+      if (direction === 'down' && prev > index && prev <= targetIndex) return prev - 1;
+      return prev;
+    });
+  }, [persist, project]);
+
   const applyChipType = useCallback((nextType: ChipType | null, pushHistory = true) => {
     if (!project) return;
+    if (project.chipFromBundle && project.chipType) return;
     const rect = project.chipRect ?? null;
     let spotMatrix: Spot[][] | undefined;
     if (rect && nextType && project.imageWidth && project.imageHeight) {
@@ -244,41 +167,6 @@ function SpatialContent() {
     }
     persist({ ...project, chipType: nextType, chipRect: rect, spotMatrix }, pushHistory);
   }, [persist, project]);
-
-  const handleConfigUpload = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0 || !project) return;
-    const file = fileList[0];
-    try {
-      const rawText = await file.text();
-      const parsed = JSON.parse(rawText) as RawChipConfig;
-      const rect = normalizeChipRect(parsed, project.imageWidth, project.imageHeight);
-
-      if (!rect) {
-        toast({
-          title: 'Invalid config file',
-          description: 'Missing or invalid x/y/width/height values.',
-          status: 'error',
-        });
-        return;
-      }
-
-      const parsedType = parseChipType(parsed.chip);
-      const spotMatrix = parsedType && project.imageWidth && project.imageHeight
-        ? buildSpotMatrix(rect, parsedType, project.imageWidth, project.imageHeight)
-        : undefined;
-
-      persist({ ...project, chipRect: rect, chipType: parsedType, spotMatrix });
-      setConfigName(file.name);
-      toast({ title: 'Config loaded', status: 'success', duration: 1800 });
-    } catch (error) {
-      console.error(error);
-      toast({
-        title: 'Failed to read config',
-        description: 'Ensure the file is valid JSON with chip/x/y/width/height.',
-        status: 'error',
-      });
-    }
-  };
 
   const onPointerPos = useCallback((event: React.PointerEvent<HTMLCanvasElement>): Point | null => {
     const rect = hostRect;
@@ -333,13 +221,15 @@ function SpatialContent() {
     return relativeToImage(relative);
   }, [onPointerPos, relativeToImage]);
 
-  const pointInPolygon = useCallback((point: Point, polygon: Point[]) => {
+  const getRegionPaths = useCallback((region: Region) => region.paths ?? [region.points], []);
+
+  const pointInRing = useCallback((point: Point, ring: Point[]) => {
     let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-      const xi = polygon[i].x;
-      const yi = polygon[i].y;
-      const xj = polygon[j].x;
-      const yj = polygon[j].y;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const xi = ring[i].x;
+      const yi = ring[i].y;
+      const xj = ring[j].x;
+      const yj = ring[j].y;
       const intersect = yi > point.y !== yj > point.y
         && point.x < ((xj - xi) * (point.y - yi)) / (yj - yi) + xi;
       if (intersect) inside = !inside;
@@ -347,13 +237,21 @@ function SpatialContent() {
     return inside;
   }, []);
 
-  const polygonIntersectsRect = useCallback((
-    polygon: Point[],
+  const pointInRegion = useCallback((point: Point, region: Region) => {
+    const paths = getRegionPaths(region);
+    if (paths.length === 0) return false;
+    const insideOuter = pointInRing(point, paths[0]);
+    if (!insideOuter) return false;
+    return !paths.slice(1).some((hole) => pointInRing(point, hole));
+  }, [getRegionPaths, pointInRing]);
+
+  const ringIntersectsRect = useCallback((
+    ring: Point[],
     rect: { x: number; y: number; width: number; height: number },
   ) => {
-    const pointInRect = (point: Point) =>
-      point.x >= rect.x && point.x <= rect.x + rect.width
-      && point.y >= rect.y && point.y <= rect.y + rect.height;
+    const pointInRect = (pt: Point) =>
+      pt.x >= rect.x && pt.x <= rect.x + rect.width
+      && pt.y >= rect.y && pt.y <= rect.y + rect.height;
 
     const segmentsIntersect = (p1: Point, p2: Point, q1: Point, q2: Point) => {
       const cross = (a: Point, b: Point, c: Point) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
@@ -375,41 +273,59 @@ function SpatialContent() {
       );
     };
 
-    if (polygon.length === 0) return false;
-    // Any polygon vertex inside rect
-    if (polygon.some((pt) => pointInRect(pt))) return true;
+    if (ring.length === 0) return false;
+    if (ring.some((pt) => pointInRect(pt))) return true;
 
-    // Any rect corner inside polygon
     const corners: Point[] = [
       { x: rect.x, y: rect.y },
       { x: rect.x + rect.width, y: rect.y },
       { x: rect.x + rect.width, y: rect.y + rect.height },
       { x: rect.x, y: rect.y + rect.height },
     ];
-    if (corners.some((c) => pointInPolygon(c, polygon))) return true;
+    if (corners.some((c) => pointInRing(c, ring))) return true;
 
-    // Edge intersection
     const rectEdges: [Point, Point][] = [
       [corners[0], corners[1]],
       [corners[1], corners[2]],
       [corners[2], corners[3]],
       [corners[3], corners[0]],
     ];
-    for (let i = 0; i < polygon.length; i += 1) {
-      const a = polygon[i];
-      const b = polygon[(i + 1) % polygon.length];
+    for (let i = 0; i < ring.length; i += 1) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
       for (const [r1, r2] of rectEdges) {
         if (segmentsIntersect(a, b, r1, r2)) return true;
       }
     }
     return false;
-  }, [pointInPolygon]);
+  }, [pointInRing]);
+
+  const regionIntersectsRect = useCallback((
+    region: Region,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => {
+    const paths = getRegionPaths(region);
+    if (paths.length === 0) return false;
+    if (!ringIntersectsRect(paths[0], rect)) return false;
+
+    // If rect is entirely inside any hole, treat as non-intersecting
+    const corners: Point[] = [
+      { x: rect.x, y: rect.y },
+      { x: rect.x + rect.width, y: rect.y },
+      { x: rect.x + rect.width, y: rect.y + rect.height },
+      { x: rect.x, y: rect.y + rect.height },
+    ];
+    const insideHole = paths
+      .slice(1)
+      .some((hole) => corners.every((c) => pointInRing(c, hole)));
+    return !insideHole;
+  }, [getRegionPaths, ringIntersectsRect, pointInRing]);
 
   const findRegionAtPoint = (point: Point): Region | null => {
     if (!project) return null;
-    for (let i = project.regions.length - 1; i >= 0; i -= 1) {
+    for (let i = 0; i < project.regions.length; i += 1) {
       const region = project.regions[i];
-      if (pointInPolygon(point, region.points)) return region;
+      if (pointInRegion(point, region)) return region;
     }
     return null;
   };
@@ -488,6 +404,17 @@ function SpatialContent() {
       return;
     }
 
+    if (tool === 'erase') {
+      if (selectedRegionIds.length === 0) {
+        toast({ title: 'Select a region first', status: 'info', duration: 1400 });
+        return;
+      }
+      pathRef.current = [point];
+      setCurrentPoints([point]);
+      setIsDrawing(true);
+      return;
+    }
+
     pathRef.current = [point];
     setCurrentPoints([point]);
     setIsDrawing(true);
@@ -503,7 +430,7 @@ function SpatialContent() {
       return;
     }
     const point = screenToImage(event);
-    if (!isDrawing || tool !== 'draw' || !point) return;
+    if (!isDrawing || (tool !== 'draw' && tool !== 'erase') || !point) return;
     pathRef.current = [...pathRef.current, point];
     setCurrentPoints([...pathRef.current]);
   };
@@ -516,6 +443,7 @@ function SpatialContent() {
       label: currentLabel,
       color: colorForLabel(currentLabel),
       points,
+      paths: [points],
     };
     persist({ ...project, regions: [...project.regions, region] });
     setSelectedRegionIds([region.id]);
@@ -524,15 +452,61 @@ function SpatialContent() {
   [currentLabel, persist, project],
 );
 
+  const punchOut = useCallback((erasePath: Point[]) => {
+    if (!project || erasePath.length < 3 || selectedRegionIds.length === 0) return;
+    const eraserPolygon = [erasePath.map((p) => [p.x, p.y] as [number, number])];
+
+    const nextRegions: Region[] = [];
+    const nextSelected: string[] = [];
+
+    project.regions.forEach((region) => {
+      if (!selectedRegionIds.includes(region.id)) {
+        nextRegions.push(region);
+        return;
+      }
+
+      const sourceMulti: [number, number][][][] = [
+        getRegionPaths(region).map((ring) => ring.map((p) => [p.x, p.y] as [number, number])),
+      ];
+
+      const diff = polygonClipping.difference(sourceMulti, [eraserPolygon]);
+
+      if (!diff || diff.length === 0) {
+        return; // Fully removed
+      }
+
+      diff.forEach((poly, idx) => {
+        if (!poly || poly.length === 0) return;
+        const outer = poly[0];
+        if (!outer || outer.length < 3) return;
+        const holes = poly.slice(1);
+
+        const toPoints = (ring: [number, number][]) => ring.map(([x, y]) => ({ x, y }));
+        const paths = [toPoints(outer), ...holes.map(toPoints)];
+        const id = idx === 0 ? region.id : `${region.id}-${idx}`;
+        nextRegions.push({ ...region, id, points: paths[0], paths });
+        nextSelected.push(id);
+      });
+    });
+
+    persist({ ...project, regions: nextRegions });
+    setSelectedRegionIds(nextSelected);
+    setSelectionAnchor(null);
+  }, [getRegionPaths, persist, project, selectedRegionIds]);
+
   const handlePointerUp = () => {
     if (isPanning) {
       setIsPanning(false);
       panStartRef.current = null;
       return;
     }
-    if (!isDrawing || tool !== 'draw') return;
+    if (!isDrawing || (tool !== 'draw' && tool !== 'erase')) return;
     setIsDrawing(false);
-    commitRegion(pathRef.current);
+    if (tool === 'erase') {
+      punchOut(pathRef.current);
+    } else {
+      commitRegion(pathRef.current);
+    }
     pathRef.current = [];
     setCurrentPoints([]);
   };
@@ -601,19 +575,59 @@ function SpatialContent() {
     setPan({ x: 0, y: 0 });
   }, [applyZoom]);
 
+  const selectedRegions = useMemo(
+    () => project?.regions.filter((r) => selectedRegionIds.includes(r.id)) ?? [],
+    [project?.regions, selectedRegionIds],
+  );
+
+  const matrixMask = useMemo(() => {
+    if (!project?.matrixData || !project.matrixShape || project.matrixShape.length === 0 || !project.matrixDtype) {
+      return null;
+    }
+    const shape = project.matrixShape;
+    const rows = shape[shape.length - 2] ?? 0;
+    const cols = shape[shape.length - 1] ?? 1;
+    if (rows <= 0 || cols <= 0) return null;
+    const ctorMap = {
+      float32: Float32Array,
+      float64: Float64Array,
+      int32: Int32Array,
+      int16: Int16Array,
+      int8: Int8Array,
+      uint8: Uint8Array,
+      uint16: Uint16Array,
+      uint32: Uint32Array,
+    } as const;
+    const Ctor = ctorMap[project.matrixDtype];
+    if (!Ctor) return null;
+    const array = new Ctor(project.matrixData);
+    if (array.length < rows * cols) return null;
+    return { rows, cols, array };
+  }, [project?.matrixData, project?.matrixShape, project?.matrixDtype]);
+
   const spotAssignments = useMemo(() => {
     if (!project?.spotMatrix || project.spotMatrix.length === 0) return null;
-    return project.spotMatrix.map((row) => row.map((spot) => {
+    return project.spotMatrix.map((row, rIdx) => row.map((spot, cIdx) => {
       const rect = { x: spot.x, y: spot.y, width: spot.sizeX, height: spot.sizeY };
-      for (let i = project.regions.length - 1; i >= 0; i -= 1) {
+
+      const maskedOut = (() => {
+        if (!matrixMask) return false;
+        if (rIdx >= matrixMask.rows || cIdx >= matrixMask.cols) return false;
+        const value = matrixMask.array[rIdx * matrixMask.cols + cIdx];
+        return value === 0;
+      })();
+
+      if (maskedOut) return null;
+
+      for (let i = 0; i < project.regions.length; i += 1) {
         const region = project.regions[i];
-        if (polygonIntersectsRect(region.points, rect)) {
+        if (regionIntersectsRect(region, rect)) {
           return { regionId: region.id, color: region.color };
         }
       }
       return null;
     }));
-  }, [polygonIntersectsRect, project?.spotMatrix, project?.regions]);
+  }, [matrixMask, regionIntersectsRect, project?.spotMatrix, project?.regions]);
 
   // Canvas draw loop
   useEffect(() => {
@@ -661,16 +675,27 @@ function SpatialContent() {
         ctx.lineWidth = 0.8;
         project.spotMatrix.forEach((row, rIdx) => {
           row.forEach((spot, cIdx) => {
+            const maskedOut = (() => {
+              if (!matrixMask) return false;
+              if (rIdx >= matrixMask.rows || cIdx >= matrixMask.cols) return false;
+              const value = matrixMask.array[rIdx * matrixMask.cols + cIdx];
+              return value === 0;
+            })();
+            if (maskedOut) return;
+
             const spotOrigin = projectToScreen({ x: spot.x, y: spot.y });
             const w = spot.sizeX * transform.width;
             const h = spot.sizeY * transform.height;
             const assignment = spotAssignments?.[rIdx]?.[cIdx];
             const fillColor = assignment?.color ?? '#e5e5e5';
             const strokeColor = assignment ? '#1a202c' : '#a0a0a0';
-            ctx.globalAlpha = assignment ? 0.85 : 0.9;
+            const fillAlpha = assignment ? 0.35 : 0.2;
+            const strokeAlpha = assignment ? 0.55 : 0.35;
             ctx.fillStyle = fillColor;
             ctx.strokeStyle = strokeColor;
+            ctx.globalAlpha = fillAlpha;
             ctx.fillRect(spotOrigin.x, spotOrigin.y, w, h);
+            ctx.globalAlpha = strokeAlpha;
             ctx.strokeRect(spotOrigin.x, spotOrigin.y, w, h);
           });
         });
@@ -684,31 +709,37 @@ function SpatialContent() {
       ctx.restore();
     };
 
-    const drawPath = (pts: Point[], color: string, isSelected: boolean) => {
-      if (pts.length < 2) return;
-      const mapped = pts.map(projectToScreen);
+    const buildPath = (paths: Point[][]) => {
       ctx.beginPath();
-      ctx.moveTo(mapped[0].x, mapped[0].y);
-      for (let i = 1; i < mapped.length; i += 1) {
-        ctx.lineTo(mapped[i].x, mapped[i].y);
-      }
-      ctx.closePath();
+      paths.forEach((ring) => {
+        if (ring.length < 2) return;
+        const mapped = ring.map(projectToScreen);
+        ctx.moveTo(mapped[0].x, mapped[0].y);
+        for (let i = 1; i < mapped.length; i += 1) {
+          ctx.lineTo(mapped[i].x, mapped[i].y);
+        }
+        ctx.closePath();
+      });
+    };
 
-      // Outline
+    const drawRegion = (region: Region, isSelected: boolean) => {
+      const paths = getRegionPaths(region);
+      if (paths.length === 0) return;
+      buildPath(paths);
+
       ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.strokeStyle = isSelected ? '#1a202c' : color;
+      ctx.strokeStyle = isSelected ? '#1a202c' : region.color;
       ctx.globalAlpha = isSelected ? 1 : 0.85;
       ctx.stroke();
 
-      // Soft base fill
-      ctx.fillStyle = color;
+      ctx.fillStyle = region.color;
       ctx.globalAlpha = isSelected ? 0.18 : 0.1;
-      ctx.fill();
+      ctx.fill('evenodd');
 
       if (showHatching) {
-        // Hatched highlight with same color
-        const xs = mapped.map((p) => p.x);
-        const ys = mapped.map((p) => p.y);
+        const outer = paths[0].map(projectToScreen);
+        const xs = outer.map((p) => p.x);
+        const ys = outer.map((p) => p.y);
         const minX = Math.min(...xs);
         const maxX = Math.max(...xs);
         const minY = Math.min(...ys);
@@ -716,12 +747,12 @@ function SpatialContent() {
         const height = maxY - minY;
 
         ctx.save();
-        ctx.clip();
+        buildPath(paths);
+        ctx.clip('evenodd');
         ctx.globalAlpha = isSelected ? 0.5 : 0.35;
-        ctx.strokeStyle = color;
+        ctx.strokeStyle = region.color;
         ctx.lineWidth = 1.5;
 
-        // Draw 45° stripes spaced every 10px
         for (let x = minX - height; x <= maxX + height; x += 10) {
           ctx.beginPath();
           ctx.moveTo(x, minY);
@@ -734,19 +765,42 @@ function SpatialContent() {
       ctx.globalAlpha = 1;
     };
 
+    const drawPathPreview = (pts: Point[], color: string) => {
+      if (pts.length < 2) return;
+      const mapped = pts.map(projectToScreen);
+      ctx.beginPath();
+      ctx.moveTo(mapped[0].x, mapped[0].y);
+      for (let i = 1; i < mapped.length; i += 1) {
+        ctx.lineTo(mapped[i].x, mapped[i].y);
+      }
+      ctx.closePath();
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.9;
+      ctx.setLineDash(tool === 'erase' ? [8, 6] : []);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = color;
+      ctx.globalAlpha = tool === 'erase' ? 0.08 : 0.12;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    };
+
     drawChipOverlay();
 
-    project.regions.forEach((region) =>
-      drawPath(
-        region.points,
-        region.color,
+    [...project.regions].reverse().forEach((region) =>
+      drawRegion(
+        region,
         selectedRegionIds.includes(region.id)
           || (highlightedLabel !== null && region.label === highlightedLabel),
       ));
     if (currentPoints.length > 1) {
-      drawPath(currentPoints, colorForLabel(currentLabel), false);
+      const previewColor = tool === 'erase' ? '#2d3748' : colorForLabel(currentLabel);
+      drawPathPreview(currentPoints, previewColor);
     }
-  }, [project, project?.imageData, currentPoints, currentLabel, canvasRefresh, selectedRegionIds, highlightedLabel, showHatching, getTransform, spotAssignments]);
+  }, [project, project?.imageData, currentPoints, currentLabel, canvasRefresh, selectedRegionIds, highlightedLabel, showHatching, getTransform, spotAssignments, tool, getRegionPaths, matrixMask]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -833,11 +887,6 @@ function SpatialContent() {
     return candidate;
   }, [existingLabels]);
 
-  const selectedRegions = useMemo(
-    () => project?.regions.filter((r) => selectedRegionIds.includes(r.id)) ?? [],
-    [project?.regions, selectedRegionIds],
-  );
-
   const chipRectInfo = useMemo(() => {
     if (!project?.chipRect || !project.imageWidth || !project.imageHeight) return null;
     return {
@@ -873,6 +922,47 @@ function SpatialContent() {
     }
   };
 
+  const buildLabeledMatrixCsv = () => {
+    if (!project || !project.spotMatrix || project.spotMatrix.length === 0) return null;
+    const rows = project.spotMatrix.length;
+    const cols = project.spotMatrix[0]?.length ?? 0;
+    const lines: string[] = [];
+
+    for (let r = 0; r < rows; r += 1) {
+      const row = project.spotMatrix[r];
+      const values: (number | '')[] = [];
+      for (let c = 0; c < cols; c += 1) {
+        const spot = row[c];
+
+        // mask: 0 -> always empty
+        const maskedOut = (() => {
+          if (!matrixMask) return false;
+          if (r >= matrixMask.rows || c >= matrixMask.cols) return false;
+          const value = matrixMask.array[r * matrixMask.cols + c];
+          return value === 0;
+        })();
+        if (maskedOut) {
+          values.push(0);
+          continue;
+        }
+
+        const rect = { x: spot.x, y: spot.y, width: spot.sizeX, height: spot.sizeY };
+        let label: number | '' = '';
+        for (let i = 0; i < project.regions.length; i += 1) {
+          const region = project.regions[i];
+          if (regionIntersectsRect(region, rect)) {
+            label = region.label;
+            break;
+          }
+        }
+        values.push(label === '' ? 0 : label);
+      }
+      lines.push(values.map((v) => String(v)).join(','));
+    }
+
+    return lines.join('\n');
+  };
+
   const handleExportProject = () => {
     if (!project) return;
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
@@ -882,6 +972,17 @@ function SpatialContent() {
     link.download = `${project.name || 'project'}.json`;
     link.click();
     URL.revokeObjectURL(url);
+
+    const csv = buildLabeledMatrixCsv();
+    if (csv) {
+      const csvBlob = new Blob([csv], { type: 'text/csv' });
+      const csvUrl = URL.createObjectURL(csvBlob);
+      const csvLink = document.createElement('a');
+      csvLink.href = csvUrl;
+      csvLink.download = `${project.name || 'project'}-labels.csv`;
+      csvLink.click();
+      URL.revokeObjectURL(csvUrl);
+    }
   };
 
   const handleExitProject = () => router.push('/');
@@ -944,37 +1045,26 @@ function SpatialContent() {
           <Stack spacing={3}>
             <Heading size="sm">Chip config</Heading>
             <Stack spacing={2}>
-              <Text fontWeight="semibold" fontSize="sm">Upload config (JSON)</Text>
-              <Button as="label" variant="outline" colorScheme="brand" cursor="pointer" size="sm" width="fit-content">
-                Upload
-                <Input
-                  type="file"
-                  accept="application/json"
-                  display="none"
-                  onChange={(e) => handleConfigUpload(e.target.files)}
-                />
-              </Button>
-              <Text fontSize="xs" color="gray.500">
-                {configName ? `Loaded: ${configName}` : 'Fields: chip, x, y, width, height (image pixel coords).'}
-              </Text>
-            </Stack>
-
-            <Stack spacing={2}>
               <Text fontWeight="semibold" fontSize="sm">Chip type</Text>
               <Select
                 size="sm"
                 value={project.chipType ?? ''}
                 onChange={(e) => applyChipType(parseChipType(e.target.value))}
+                isDisabled={Boolean(project.chipFromBundle && project.chipType)}
               >
                 <option value="">None</option>
                 <option value="50um">50 µm</option>
                 <option value="15um">15 µm</option>
               </Select>
-              <Text fontSize="xs" color="gray.500">
-                {project.chipType
-                  ? 'Change to regenerate spot layout instantly.'
-                  : 'When type is empty, spots stay hidden until you pick one.'}
-              </Text>
+              {!(
+                project.chipFromBundle && project.chipType
+              ) && (
+                <Text fontSize="xs" color="gray.500">
+                  {project.chipType
+                    ? 'Change to regenerate spot layout instantly.'
+                    : 'When type is empty, spots stay hidden until you pick one.'}
+                </Text>
+              )}
             </Stack>
 
             {chipRectInfo ? (
@@ -1035,6 +1125,26 @@ function SpatialContent() {
                     <option value={String(nextLabelValue)}>+ New ({formatLabel(nextLabelValue)})</option>
                   )}
                 </Select>
+                <ButtonGroup size="xs" variant="ghost" spacing={1}>
+                  <Button
+                    isDisabled={idx === 0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      moveRegion(region.id, 'up');
+                    }}
+                  >
+                    Up
+                  </Button>
+                  <Button
+                    isDisabled={idx === project.regions.length - 1}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      moveRegion(region.id, 'down');
+                    }}
+                  >
+                    Down
+                  </Button>
+                </ButtonGroup>
                 <Button
                   size="xs"
                   colorScheme="red"
@@ -1124,6 +1234,14 @@ function SpatialContent() {
                   onClick={() => setTool('draw')}
                 >
                   Draw
+                </Button>
+                <Button
+                  variant={tool === 'erase' ? 'solid' : 'outline'}
+                  colorScheme="red"
+                  isDisabled={selectedRegionIds.length === 0}
+                  onClick={() => setTool('erase')}
+                >
+                  Punch Out
                 </Button>
               </ButtonGroup>
               <Badge variant="subtle" colorScheme="gray">Zoom {zoom.toFixed(1)}×</Badge>
