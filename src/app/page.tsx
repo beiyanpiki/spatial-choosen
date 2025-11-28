@@ -87,10 +87,18 @@ export default function HomePage() {
       const spotMatrix = chipType && chipRect
         ? buildSpotMatrix(chipRect, chipType, width, height)
         : undefined;
-      const matrixBuffer = decoded.matrix.data.buffer.slice(
-        decoded.matrix.data.byteOffset,
-        decoded.matrix.data.byteOffset + decoded.matrix.data.byteLength,
-      );
+      // Copy into a plain ArrayBuffer; typed arrays from npyjs may be backed by SharedArrayBuffer
+      // which is not assignable to the Project matrix type nor storable in IndexedDB.
+      const matrixBuffer = (() => {
+        const out = new ArrayBuffer(decoded.matrix.data.byteLength);
+        const view = new Uint8Array(out);
+        view.set(new Uint8Array(
+          decoded.matrix.data.buffer,
+          decoded.matrix.data.byteOffset,
+          decoded.matrix.data.byteLength,
+        ));
+        return out;
+      })();
 
       startTransition(() => {
         setPendingBundle({

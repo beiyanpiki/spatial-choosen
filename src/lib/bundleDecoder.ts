@@ -108,7 +108,8 @@ export function base64ToUint8Array(b64: string): Uint8Array {
 
 export function base64ToBlob(b64: string, mime: string): Blob {
   const bytes = base64ToUint8Array(b64);
-  return new Blob([bytes], { type: mime });
+  const buffer = new Uint8Array(bytes).buffer; // force plain ArrayBuffer (avoid SharedArrayBuffer union)
+  return new Blob([buffer], { type: mime });
 }
 
 export async function base64ToText(b64: string, mime = 'application/json'): Promise<string> {
@@ -118,7 +119,8 @@ export async function base64ToText(b64: string, mime = 'application/json'): Prom
 
 export async function parseNpyBase64(b64: string): Promise<NpyResult> {
   const bytes = base64ToUint8Array(b64);
-  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
   const npy = new NpyJs();
   const parsed = await npy.load(buffer);
   const matrixDtype = dtypeCodeToMatrixDtype(parsed.dtype);
