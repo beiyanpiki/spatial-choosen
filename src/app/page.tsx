@@ -28,6 +28,7 @@ import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { flushSync } from 'react-dom';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import type { FocusableElement } from '@chakra-ui/utils';
 import { deleteProject, readProjects, upsertProject } from '@/lib/projects';
 import { decodeBundleFromFile, Coord } from '@/lib/bundleDecoder';
 import { deserializeProject } from '@/lib/projectPackage';
@@ -95,9 +96,9 @@ function HomePage() {
     storageDialog.onClose();
   };
 
-  const capacityCancelRef = useRef<HTMLButtonElement | null>(null);
-  const deleteCancelRef = useRef<HTMLButtonElement | null>(null);
-  const storageCancelRef = useRef<HTMLButtonElement | null>(null);
+  const capacityCancelRef = useRef<HTMLButtonElement>(null);
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
+  const storageCancelRef = useRef<HTMLButtonElement>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -559,7 +560,7 @@ function HomePage() {
 
       <AlertDialog
         isOpen={capacityDialog.isOpen}
-        leastDestructiveRef={capacityCancelRef}
+        leastDestructiveRef={capacityCancelRef as React.RefObject<FocusableElement>}
         onClose={closeCapacityDialog}
         isCentered
       >
@@ -593,7 +594,7 @@ function HomePage() {
 
       <AlertDialog
         isOpen={deleteDialog.isOpen}
-        leastDestructiveRef={deleteCancelRef}
+        leastDestructiveRef={deleteCancelRef as React.RefObject<FocusableElement>}
         onClose={() => {
           setProjectToDelete(null);
           deleteDialog.onClose();
@@ -631,7 +632,7 @@ function HomePage() {
 
       <AlertDialog
         isOpen={storageDialog.isOpen}
-        leastDestructiveRef={storageCancelRef}
+        leastDestructiveRef={storageCancelRef as React.RefObject<FocusableElement>}
         onClose={closeStorageDialog}
         isCentered
       >

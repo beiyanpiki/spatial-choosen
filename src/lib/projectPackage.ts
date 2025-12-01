@@ -79,6 +79,7 @@ export async function deserializeProject(file: File | Blob): Promise<Project> {
   const matrixBytes = requireBase64(pkg.matrixDataBase64);
   return {
     ...project,
-    matrixData: matrixBytes ? matrixBytes.buffer : undefined,
+    // Create a fresh ArrayBuffer to satisfy consumers that expect a non-shared buffer
+    matrixData: matrixBytes ? matrixBytes.slice().buffer : undefined,
   };
 }

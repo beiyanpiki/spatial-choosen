@@ -10,7 +10,7 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Spatial Web | Tissue Region Picker",
+  title: "Spatial Tissue Region Annotator | M20 Genomics",
   description: "Client-only tool for marking tissue regions on spatial transcriptomics slides.",
 };
 
