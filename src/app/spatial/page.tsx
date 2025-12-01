@@ -9,6 +9,7 @@ import {
   Heading,
   HStack,
   Input,
+  Link,
   Stack,
   Select,
   Text,
@@ -21,6 +22,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import polygonClipping from 'polygon-clipping';
 import { colorForLabel } from '@/lib/colors';
 import { getProject, upsertProject } from '@/lib/projects';
+import { serializeProject } from '@/lib/projectPackage';
 import {
   ChipType,
   Point,
@@ -55,6 +57,8 @@ function SpatialContent() {
   const [highlightedLabel, setHighlightedLabel] = useState<number | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
   const [showHatching, setShowHatching] = useState(true);
+  const [isExportingProject, setIsExportingProject] = useState(false);
+  const [isExportingResults, setIsExportingResults] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -963,18 +967,58 @@ function SpatialContent() {
     return lines.join('\n');
   };
 
-  const handleExportProject = () => {
+  const handleExportProject = async () => {
     if (!project) return;
-    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${project.name || 'project'}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    setIsExportingProject(true);
+    try {
+      let exportSource = project;
+      if (!project.matrixData) {
+        const hydrated = await getProject(project.id);
+        if (hydrated?.matrixData) {
+          exportSource = { ...project, matrixData: hydrated.matrixData };
+        }
+      }
+      const blob = await serializeProject(exportSource);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${project.name || 'project'}.spatialproj`;
+      link.click();
+      URL.revokeObjectURL(url);
 
+      const sizeKb = Math.max(1, Math.round(blob.size / 1024));
+      toast({
+        title: 'Project exported',
+        description: `${sizeKb} KB saved locally as .spatialproj`,
+        status: 'success',
+        duration: 2000,
+      });
+    } catch (error) {
+      console.error(error);
+      toast({
+        title: 'Export failed',
+        description: error instanceof Error ? error.message : 'Could not export project',
+        status: 'error',
+      });
+    } finally {
+      setIsExportingProject(false);
+    }
+  };
+
+  const handleExportResults = async () => {
+    if (!project) return;
     const csv = buildLabeledMatrixCsv();
-    if (csv) {
+    if (!csv) {
+      toast({
+        title: 'No results to export',
+        description: 'Generate a labeled matrix before exporting results.',
+        status: 'info',
+      });
+      return;
+    }
+
+    setIsExportingResults(true);
+    try {
       const csvBlob = new Blob([csv], { type: 'text/csv' });
       const csvUrl = URL.createObjectURL(csvBlob);
       const csvLink = document.createElement('a');
@@ -982,6 +1026,22 @@ function SpatialContent() {
       csvLink.download = `${project.name || 'project'}-labels.csv`;
       csvLink.click();
       URL.revokeObjectURL(csvUrl);
+
+      toast({
+        title: 'Results exported',
+        description: 'Labeled matrix saved as CSV.',
+        status: 'success',
+        duration: 2000,
+      });
+    } catch (error) {
+      console.error(error);
+      toast({
+        title: 'Export failed',
+        description: error instanceof Error ? error.message : 'Could not export results',
+        status: 'error',
+      });
+    } finally {
+      setIsExportingResults(false);
     }
   };
 
@@ -1021,9 +1081,11 @@ function SpatialContent() {
         p={6}
         borderRight="1px solid"
         borderColor="gray.100"
-        overflowY="auto"
+        display="flex"
+        flexDirection="column"
+        minH="0"
       >
-        <Stack spacing={5}>
+        <Stack spacing={5} flex="1" overflowY="auto" pr={1}>
           <Box>
             <Heading size="md" mb={1}>Project</Heading>
             <Text fontSize="sm" color="gray.500">Edit metadata and keep everything local.</Text>
@@ -1160,6 +1222,10 @@ function SpatialContent() {
             ))}
           </Stack>
         </Stack>
+
+        <Text textAlign="center" fontSize="sm" color="gray.600" mt="auto" py={1}>
+          @M20 Genomics
+        </Text>
       </Box>
 
       <Box flex="1" p={{ base: 4, md: 6 }} display="flex" flexDirection="column" minH="0" minW="0" overflow="hidden">
@@ -1168,7 +1234,22 @@ function SpatialContent() {
             <Heading size="md">Annotate</Heading>
             <HStack spacing={2}>
               <Button size="sm" variant="outline" onClick={handleSaveProject}>Save project</Button>
-              <Button size="sm" variant="outline" onClick={handleExportProject}>Export</Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportResults}
+                isLoading={isExportingResults}
+              >
+                Export results
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportProject}
+                isLoading={isExportingProject}
+              >
+                Export project
+              </Button>
               <Button size="sm" colorScheme="red" variant="outline" onClick={handleExitProject}>Exit</Button>
             </HStack>
           </Flex>

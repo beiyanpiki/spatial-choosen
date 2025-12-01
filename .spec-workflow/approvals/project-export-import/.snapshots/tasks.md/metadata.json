@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/specs/project-export-import/tasks.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-12-01T05:36:01.964Z",
+      "trigger": "initial",
+      "approvalId": "approval_1764567361960_03b35wggn",
+      "approvalTitle": "Tasks for project-export-import"
+    }
+  ]
+}
