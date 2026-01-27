@@ -14,7 +14,7 @@
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "framer-motion": "^12.23.24",
-    "next": "16.0.4",
+    "next": "16.0.10",
     "npyjs": "^1.0.4",
     "polygon-clipping": "^0.15.7",
     "react": "19.2.0",
