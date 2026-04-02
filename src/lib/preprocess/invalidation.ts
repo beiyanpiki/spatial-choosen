@@ -1,0 +1,121 @@
+import type {
+  AlignmentSlice,
+  ChipConfigSlice,
+  CropQcSlice,
+  ExportStateSlice,
+  PreprocessProject,
+  PreprocessSliceBase,
+  PreprocessStepId,
+  TissueSelectionSlice,
+} from "../../types/preprocess";
+
+export const PREPROCESS_INVALIDATION_GRAPH: Record<PreprocessStepId, readonly PreprocessStepId[]> = {
+  sourceAssets: ["localization", "alignment", "cropQc", "chipConfig", "tissueSelection", "exportState"],
+  localization: ["alignment", "cropQc", "chipConfig", "tissueSelection", "exportState"],
+  alignment: ["cropQc", "chipConfig", "tissueSelection", "exportState"],
+  cropQc: ["chipConfig", "tissueSelection", "exportState"],
+  chipConfig: ["tissueSelection", "exportState"],
+  tissueSelection: ["exportState"],
+  exportState: [],
+};
+
+const markStale = <T extends PreprocessSliceBase>(slice: T): T => ({
+  ...slice,
+  status: "stale",
+  isStale: true,
+  error: null,
+});
+
+const invalidateAlignmentSlice = (slice: AlignmentSlice): AlignmentSlice => ({
+  ...markStale(slice),
+  previewDataUrl: null,
+});
+
+const invalidateCropQcSlice = (slice: CropQcSlice): CropQcSlice => ({
+  ...markStale(slice),
+  eosinPreviewDataUrl: null,
+  previewDataUrl: null,
+  checkerboardPreviewDataUrl: null,
+  qcAccepted: false,
+});
+
+const invalidateChipConfigSlice = (slice: ChipConfigSlice): ChipConfigSlice => ({
+  ...markStale(slice),
+  projectedSpots: null,
+});
+
+const invalidateTissueSelectionSlice = (slice: TissueSelectionSlice): TissueSelectionSlice => ({
+  ...markStale(slice),
+  previewDataUrl: null,
+  autoSelectedSpotIds: [],
+  selectedSpotIds: null,
+  forcedInSpotIds: [],
+  forcedOutSpotIds: [],
+  regions: [],
+  selectedRegionId: null,
+  overrideNotice: slice.forcedInSpotIds.length > 0 || slice.forcedOutSpotIds.length > 0 || slice.regions.length > 0
+    ? 'Overrides cleared due to geometry change.'
+    : null,
+});
+
+const invalidateExportStateSlice = (slice: ExportStateSlice): ExportStateSlice => ({
+  ...markStale(slice),
+  artifacts: [],
+  lastExportedAt: null,
+});
+
+const invalidateStep = (project: PreprocessProject, stepId: PreprocessStepId): PreprocessProject => {
+  switch (stepId) {
+    case "sourceAssets":
+      return { ...project, sourceAssets: markStale(project.sourceAssets) };
+    case "localization":
+      return { ...project, localization: markStale(project.localization) };
+    case "alignment":
+      return { ...project, alignment: invalidateAlignmentSlice(project.alignment) };
+    case "cropQc":
+      return { ...project, cropQc: invalidateCropQcSlice(project.cropQc) };
+    case "chipConfig":
+      return { ...project, chipConfig: invalidateChipConfigSlice(project.chipConfig) };
+    case "tissueSelection":
+      return { ...project, tissueSelection: invalidateTissueSelectionSlice(project.tissueSelection) };
+    case "exportState":
+      return { ...project, exportState: invalidateExportStateSlice(project.exportState) };
+    default:
+      return project;
+  }
+};
+
+export function getInvalidatedSteps(stepId: PreprocessStepId): readonly PreprocessStepId[] {
+  return PREPROCESS_INVALIDATION_GRAPH[stepId];
+}
+
+export function invalidateFromStep(project: PreprocessProject, stepId: PreprocessStepId): PreprocessProject {
+  return PREPROCESS_INVALIDATION_GRAPH[stepId].reduce(
+    (nextProject, downstreamStepId) => invalidateStep(nextProject, downstreamStepId),
+    project,
+  );
+}
+
+export function invalidateOnSourceAssetsChange(project: PreprocessProject): PreprocessProject {
+  return invalidateFromStep(project, "sourceAssets");
+}
+
+export function invalidateOnLocalizationChange(project: PreprocessProject): PreprocessProject {
+  return invalidateFromStep(project, "localization");
+}
+
+export function invalidateOnAlignmentChange(project: PreprocessProject): PreprocessProject {
+  return invalidateFromStep(project, "alignment");
+}
+
+export function invalidateOnCropQcChange(project: PreprocessProject): PreprocessProject {
+  return invalidateFromStep(project, "cropQc");
+}
+
+export function invalidateOnChipConfigChange(project: PreprocessProject): PreprocessProject {
+  return invalidateFromStep(project, "chipConfig");
+}
+
+export function invalidateOnTissueSelectionChange(project: PreprocessProject): PreprocessProject {
+  return invalidateFromStep(project, "tissueSelection");
+}

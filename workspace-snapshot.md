@@ -1,0 +1,81 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e85]:
+    - generic [ref=e86]:
+      - generic [ref=e87]:
+        - generic [ref=e88]:
+          - button "← Back to preprocess projects" [ref=e89] [cursor=pointer]
+          - generic [ref=e90]:
+            - heading "Preprocess workspace" [level=2] [ref=e91]
+            - paragraph [ref=e92]: The preprocess shell now includes an interactive localization stage with autosaved image transforms and normalized chip bounds.
+        - generic [ref=e93]:
+          - paragraph [ref=e94]: Autosave
+          - generic [ref=e95]: saved
+          - paragraph [ref=e96]: last saved at 6:59:38 PM
+      - generic [ref=e97]:
+        - generic [ref=e98]:
+          - paragraph [ref=e99]: Workflow
+          - button "Source Upload Eosin + H&E inputs ready" [ref=e100] [cursor=pointer]:
+            - generic [ref=e101]:
+              - paragraph [ref=e102]: Source
+              - paragraph [ref=e103]: Upload Eosin + H&E inputs
+            - generic [ref=e104]: ready
+          - button "Localize Place the chip footprint idle" [ref=e105] [cursor=pointer]:
+            - generic [ref=e106]:
+              - paragraph [ref=e107]: Localize
+              - paragraph [ref=e108]: Place the chip footprint
+            - generic [ref=e109]: idle
+          - button "Align Register both source images idle" [disabled] [ref=e110]:
+            - generic [ref=e111]:
+              - paragraph [ref=e112]: Align
+              - paragraph [ref=e113]: Register both source images
+            - generic [ref=e114]: idle
+          - button "Crop Inspect crop + QC bounds idle" [disabled] [ref=e115]:
+            - generic [ref=e116]:
+              - paragraph [ref=e117]: Crop
+              - paragraph [ref=e118]: Inspect crop + QC bounds
+            - generic [ref=e119]: idle
+          - button "Chip Preview spot grid settings idle" [disabled] [ref=e120]:
+            - generic [ref=e121]:
+              - paragraph [ref=e122]: Chip
+              - paragraph [ref=e123]: Preview spot grid settings
+            - generic [ref=e124]: idle
+          - button "Tissue Select capture regions idle" [disabled] [ref=e125]:
+            - generic [ref=e126]:
+              - paragraph [ref=e127]: Tissue
+              - paragraph [ref=e128]: Select capture regions
+            - generic [ref=e129]: idle
+          - button "Export Package outputs for handoff idle" [disabled] [ref=e130]:
+            - generic [ref=e131]:
+              - paragraph [ref=e132]: Export
+              - paragraph [ref=e133]: Package outputs for handoff
+            - generic [ref=e134]: idle
+        - generic [ref=e136]:
+          - generic [ref=e138]:
+            - generic [ref=e139]: Source
+            - heading "Source image intake" [level=2] [ref=e140]
+            - paragraph [ref=e141]: This shell is ready for later source-image upload work. Imported projects will still hydrate saved Eosin/H&E assets.
+          - generic [ref=e142]:
+            - paragraph [ref=e143]: Project name
+            - textbox [ref=e144]: manual-tiff-debug
+            - paragraph [ref=e145]: Draft changes save when you move to the next preprocess step.
+          - generic [ref=e147]:
+            - heading "Source image intake" [level=2] [ref=e148]
+            - paragraph [ref=e149]: This shell is ready for later source-image upload work. Imported projects will still hydrate saved Eosin/H&E assets.
+          - generic [ref=e151]:
+            - heading "Current saved context" [level=2] [ref=e152]
+            - paragraph [ref=e153]: Workflow version 1
+            - paragraph [ref=e154]: "Current step: sourceAssets"
+            - paragraph [ref=e155]: "Eosin: missing"
+            - paragraph [ref=e156]: "H&E: missing"
+            - paragraph [ref=e157]: Created 4/1/2026, 6:59:38 PM • Updated 4/1/2026, 6:59:38 PM
+    - paragraph [ref=e158]: "@M20 Genomics"
+  - button "Open Next.js Dev Tools" [ref=e40] [cursor=pointer]:
+    - img [ref=e41]
+  - alert [ref=e84]
+  - generic:
+    - region "Notifications-top"
+    - region "Notifications-top-left"
+    - region "Notifications-top-right"
+    - region "Notifications-bottom-left"
+    - region "Notifications-bottom"
+    - region "Notifications-bottom-right"

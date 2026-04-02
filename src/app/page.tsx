@@ -15,8 +15,8 @@ import {
   Grid,
   Heading,
   IconButton,
+  Image,
   Input,
-  Link,
   Select,
   SimpleGrid,
   Stack,
@@ -24,16 +24,16 @@ import {
   useDisclosure,
 } from '@chakra-ui/react';
 import { CloseIcon } from '@chakra-ui/icons';
+import type { FocusableElement } from '@chakra-ui/utils';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
-import { flushSync } from 'react-dom';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import type { FocusableElement } from '@chakra-ui/utils';
-import { deleteProject, readProjects, upsertProject } from '@/lib/projects';
-import { decodeBundleFromFile, Coord } from '@/lib/bundleDecoder';
-import { deserializeProject } from '@/lib/projectPackage';
+import { flushSync } from 'react-dom';
+import { decodeBundleFromFile, type Coord } from '@/lib/bundleDecoder';
 import { buildSpotMatrix, normalizeChipRect, parseChipType } from '@/lib/chip';
-import { ChipRect, ChipType, MatrixDtype, Project, Spot } from '@/types/project';
+import { deserializeProject } from '@/lib/projectPackage';
+import { deleteProject, readProjects, upsertProject } from '@/lib/projects';
+import type { ChipRect, ChipType, MatrixDtype, Project, Spot } from '@/types/project';
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
   year: 'numeric',
@@ -58,7 +58,7 @@ type PendingBundle = {
 const MAX_RECENT_PROJECTS = 5;
 
 async function measureImage(dataUrl: string): Promise<{ width: number; height: number }> {
-  const img = new Image();
+  const img = new window.Image();
   img.src = dataUrl;
   await img.decode();
   return { width: img.naturalWidth, height: img.naturalHeight };
@@ -270,21 +270,26 @@ function HomePage() {
   };
 
   const buildProject = (): Project => {
+    if (!pendingBundle) {
+      throw new Error('Cannot build a project without a loaded bundle');
+    }
+
+    const bundle = pendingBundle;
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `proj-${Date.now()}`;
     return {
       id,
       name: projectName.trim(),
       createdAt: new Date().toISOString(),
-      imageData: pendingBundle!.imageDataUrl,
-      imageWidth: pendingBundle!.width,
-      imageHeight: pendingBundle!.height,
-      chipType: pendingBundle!.chipType,
-      chipRect: pendingBundle!.chipRect,
-      spotMatrix: pendingBundle!.spotMatrix,
-      chipFromBundle: Boolean(pendingBundle!.chipType),
-      matrixShape: pendingBundle!.matrixShape,
-      matrixDtype: pendingBundle!.matrixDtype,
-      matrixData: pendingBundle!.matrixBuffer,
+      imageData: bundle.imageDataUrl,
+      imageWidth: bundle.width,
+      imageHeight: bundle.height,
+      chipType: bundle.chipType,
+      chipRect: bundle.chipRect,
+      spotMatrix: bundle.spotMatrix,
+      chipFromBundle: Boolean(bundle.chipType),
+      matrixShape: bundle.matrixShape,
+      matrixDtype: bundle.matrixDtype,
+      matrixData: bundle.matrixBuffer,
       regions: [],
     };
   };
@@ -361,6 +366,9 @@ function HomePage() {
         <Stack spacing={4} mb={6} align="flex-start" textAlign="left">
           <Heading size="lg">Spatial Tissue Region Annotator</Heading>
           <Text color="gray.600">Create a project to load your H&E slide and interactively annotate spatial tissue regions for downstream spatial transcriptomics analysis.</Text>
+          <Button variant="outline" colorScheme="brand" onClick={() => router.push('/preprocess')}>
+            Open preprocess workflow
+          </Button>
         </Stack>
 
         <Grid templateColumns={{ base: '1fr', lg: '1.1fr 1fr' }} gap={8} alignItems="stretch">
@@ -409,12 +417,11 @@ function HomePage() {
                       )}
                     </Flex>
                     {pendingBundle && (
-                      <Box borderRadius="md" overflow="hidden" border="1px solid" borderColor="gray.100">
-                        <AspectRatio ratio={pendingBundle.width / pendingBundle.height}>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={pendingBundle.imageDataUrl} alt="Selected preview" style={{ objectFit: 'cover' }} />
-                        </AspectRatio>
-                      </Box>
+                        <Box borderRadius="md" overflow="hidden" border="1px solid" borderColor="gray.100">
+                          <AspectRatio ratio={pendingBundle.width / pendingBundle.height}>
+                            <Image src={pendingBundle.imageDataUrl} alt="Selected preview" objectFit="cover" />
+                          </AspectRatio>
+                        </Box>
                     )}
                     {pendingBundle && (
                       <Stack spacing={1} fontSize="sm" color="gray.600">
@@ -543,8 +550,7 @@ function HomePage() {
                       }}
                     />
                     <AspectRatio ratio={(project.imageWidth || 4) / (project.imageHeight || 3)}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={project.imageData} alt={project.name} style={{ objectFit: 'cover' }} />
+                      <Image src={project.imageData} alt={project.name} objectFit="cover" />
                     </AspectRatio>
                     <Box p={4}>
                       <Heading size="sm" mb={1} noOfLines={1}>{project.name}</Heading>
