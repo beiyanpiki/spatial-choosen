@@ -1,4 +1,4 @@
-import { Badge, Button, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, Button, Heading, Stack, Text } from '@chakra-ui/react';
 import type { PreprocessProject, PreprocessStepId } from '@/types/preprocess';
 
 type StepItem = {
@@ -113,19 +113,26 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
 export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarProps) {
   return (
     <Stack
-      spacing={3}
-      w={{ base: '100%', lg: '280px' }}
-      bg='white'
-      border='1px solid'
-      borderColor='gray.100'
-      borderRadius='lg'
-      boxShadow='sm'
-      p={4}
+      spacing={4}
+      w={{ base: '100%', xl: '272px' }}
+      minW={{ base: '100%', xl: '272px' }}
       alignSelf='stretch'
+      data-testid='preprocess-workflow-rail'
     >
-      <Text fontSize='sm' fontWeight='semibold' color='gray.500'>
-        Workflow
-      </Text>
+      <Box
+        bg='white'
+        border='1px solid'
+        borderColor='gray.200'
+        borderRadius='2xl'
+        boxShadow='sm'
+        px={4}
+        py={4}
+      >
+        <Stack spacing={1}>
+          <Heading size='sm'>Workflow</Heading>
+          <Text fontSize='sm' color='gray.500'>Move step-by-step and keep downstream stages valid.</Text>
+        </Stack>
+      </Box>
       {PREPROCESS_STEP_ITEMS.map((step) => {
         const stepState = stepStateFor(project, step.id);
         const isActive = step.id === currentStep;
@@ -136,16 +143,32 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
             data-testid={step.testId}
             justifyContent='space-between'
             alignItems='flex-start'
-            minH='72px'
+            minH='88px'
             h='auto'
             px={4}
-            py={3}
-            variant={isActive ? 'solid' : 'outline'}
-            colorScheme={isActive ? 'brand' : 'gray'}
+            py={4}
+            borderRadius='2xl'
+            borderWidth='1px'
+            borderColor={isActive ? 'brand.200' : 'gray.200'}
+            bg={isActive ? 'brand.500' : 'white'}
+            color={isActive ? 'white' : 'gray.800'}
+            _hover={{
+              bg: isActive ? 'brand.600' : 'gray.50',
+              borderColor: isActive ? 'brand.300' : 'gray.300',
+            }}
+            _disabled={{
+              opacity: 0.58,
+              cursor: 'not-allowed',
+              bg: 'gray.100',
+              color: 'gray.500',
+            }}
             isDisabled={!enabled}
             onClick={() => onStepSelect(step.id)}
           >
             <Stack spacing={1} textAlign='left' flex='1'>
+              <Text fontSize='xs' fontWeight='semibold' letterSpacing='0.12em' textTransform='uppercase' color={isActive ? 'whiteAlpha.800' : 'gray.400'}>
+                {step.id}
+              </Text>
               <Text fontWeight='semibold'>{step.label}</Text>
               <Text fontSize='xs' whiteSpace='normal' color={isActive ? 'whiteAlpha.900' : 'gray.500'}>
                 {step.description}
@@ -155,6 +178,11 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
               ml={3}
               colorScheme={statusToneByStep[stepState.status] ?? 'gray'}
               textTransform='capitalize'
+              borderRadius='full'
+              px={2}
+              py={0.5}
+              bg={isActive ? 'whiteAlpha.200' : undefined}
+              color={isActive ? 'white' : undefined}
             >
               {stepState.status}
             </Badge>

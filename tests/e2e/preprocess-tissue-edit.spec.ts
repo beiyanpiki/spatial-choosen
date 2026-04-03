@@ -363,7 +363,6 @@ test('localization geometry change clears overrides in persisted snapshot', asyn
   await expect(page.getByTestId('tissue-region-row')).toHaveCount(1);
 
   await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('tab', { name: 'Transform' }).click();
   await page.getByTestId('localize-flip-horizontal').click();
   await page.getByTestId('preprocess-step-source-assets').click();
 

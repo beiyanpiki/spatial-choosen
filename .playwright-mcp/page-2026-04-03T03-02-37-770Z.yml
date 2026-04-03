@@ -1,0 +1,8 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e5]: Unavailable
+    - heading "Unable to open preprocess workspace" [level=2] [ref=e6]
+    - paragraph [ref=e7]: Project not found in this browser.
+    - button "Back to preprocess projects" [ref=e8] [cursor=pointer]
+  - button "Open Next.js Dev Tools" [ref=e14] [cursor=pointer]:
+    - img [ref=e15]

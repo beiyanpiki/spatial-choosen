@@ -696,7 +696,7 @@ export function AlignmentPanel({
     <Stack spacing={5}>
       <Stack spacing={2}>
         <Text fontSize='sm' color='gray.600'>
-          Pair corresponding eosin and H&E landmarks. Solve runs only when at least {ALIGNMENT_MIN_PAIRS} pairs exist.
+          Pair corresponding eosin and H&amp;E landmarks. Solve runs only when at least {ALIGNMENT_MIN_PAIRS} pairs exist.
         </Text>
         <HStack spacing={3} wrap='wrap'>
           <Badge

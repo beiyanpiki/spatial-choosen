@@ -78,7 +78,7 @@ export type LocalizationHandle = {
 
 export type LocalizationBoxColor = "green" | "white";
 
-export type LocalizationResizeHandle = "nw" | "ne" | "se" | "sw";
+export type LocalizationResizeHandle = "nw" | "ne" | "se" | "sw" | "n" | "e" | "s" | "w";
 
 export type LocalizationImageTransform = {
   rotationDegrees: number;

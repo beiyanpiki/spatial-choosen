@@ -159,7 +159,7 @@ export function resizeChipBounds(
 ): PreprocessRect {
   const aspectRatio = Math.max(imageAspectRatio, Number.EPSILON);
   const edges = toEdges(rect);
-  const oppositeByHandle: Record<LocalizationResizeHandle, PreprocessPoint> = {
+  const oppositeByHandle: Partial<Record<LocalizationResizeHandle, PreprocessPoint>> = {
     nw: { x: edges.right, y: edges.bottom },
     ne: { x: edges.left, y: edges.bottom },
     se: { x: edges.left, y: edges.top },
@@ -167,25 +167,64 @@ export function resizeChipBounds(
   };
 
   const opposite = oppositeByHandle[handle];
-  const deltaX = point.x - opposite.x;
-  const deltaY = point.y - opposite.y;
-  const signX = deltaX >= 0 ? 1 : -1;
-  const signY = deltaY >= 0 ? 1 : -1;
+  if (opposite) {
+    const deltaX = point.x - opposite.x;
+    const deltaY = point.y - opposite.y;
+    const signX = deltaX >= 0 ? 1 : -1;
+    const signY = deltaY >= 0 ? 1 : -1;
 
-  const maxSizeByX = signX > 0 ? 1 - opposite.x : opposite.x;
-  const maxSizeByY = signY > 0 ? (1 - opposite.y) / aspectRatio : opposite.y / aspectRatio;
-  const proposedSize = Math.max(Math.abs(deltaX), Math.abs(deltaY) / aspectRatio, minSize);
-  const size = Math.min(proposedSize, maxSizeByX, maxSizeByY);
+    const maxSizeByX = signX > 0 ? 1 - opposite.x : opposite.x;
+    const maxSizeByY = signY > 0 ? (1 - opposite.y) / aspectRatio : opposite.y / aspectRatio;
+    const proposedSize = Math.max(Math.abs(deltaX), Math.abs(deltaY) / aspectRatio, minSize);
+    const size = Math.min(proposedSize, maxSizeByX, maxSizeByY);
 
-  const movedCorner = {
-    x: opposite.x + signX * size,
-    y: opposite.y + signY * size * aspectRatio,
+    const movedCorner = {
+      x: opposite.x + signX * size,
+      y: opposite.y + signY * size * aspectRatio,
+    };
+
+    return clampNormalizedSquareRect({
+      x: Math.min(opposite.x, movedCorner.x),
+      y: Math.min(opposite.y, movedCorner.y),
+      width: Math.abs(movedCorner.x - opposite.x),
+      height: Math.abs(movedCorner.y - opposite.y),
+    }, aspectRatio, minSize);
+  }
+
+  const center = {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
   };
 
+  if (handle === 'e' || handle === 'w') {
+    const anchorX = handle === 'e' ? edges.left : edges.right;
+    const maxSizeByX = handle === 'e' ? 1 - anchorX : anchorX;
+    const maxSizeByCenterY = Math.min((2 * center.y) / aspectRatio, (2 * (1 - center.y)) / aspectRatio);
+    const proposedSize = handle === 'e'
+      ? point.x - anchorX
+      : anchorX - point.x;
+    const size = clamp(Math.min(proposedSize, maxSizeByX, maxSizeByCenterY), minSize, 1);
+    const nextX = handle === 'e' ? anchorX : anchorX - size;
+    return clampNormalizedSquareRect({
+      x: nextX,
+      y: center.y - (size * aspectRatio) / 2,
+      width: size,
+      height: size * aspectRatio,
+    }, aspectRatio, minSize);
+  }
+
+  const anchorY = handle === 's' ? edges.top : edges.bottom;
+  const maxSizeByY = handle === 's' ? (1 - anchorY) / aspectRatio : anchorY / aspectRatio;
+  const maxSizeByCenterX = Math.min(2 * center.x, 2 * (1 - center.x));
+  const proposedSize = (handle === 's'
+    ? point.y - anchorY
+    : anchorY - point.y) / aspectRatio;
+  const size = clamp(Math.min(proposedSize, maxSizeByY, maxSizeByCenterX), minSize, 1);
+  const nextY = handle === 's' ? anchorY : anchorY - size * aspectRatio;
   return clampNormalizedSquareRect({
-    x: Math.min(opposite.x, movedCorner.x),
-    y: Math.min(opposite.y, movedCorner.y),
-    width: Math.abs(movedCorner.x - opposite.x),
-    height: Math.abs(movedCorner.y - opposite.y),
+    x: center.x - size / 2,
+    y: nextY,
+    width: size,
+    height: size * aspectRatio,
   }, aspectRatio, minSize);
 }

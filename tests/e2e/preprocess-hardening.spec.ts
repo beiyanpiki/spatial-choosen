@@ -148,7 +148,6 @@ test('workspace edits persist only after step transition save', async ({ page })
 test('localize transform exposes zoom control', async ({ page }) => {
   await createProject(page, `task12-localize-zoom-${Date.now()}`);
   await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('tab', { name: 'Transform' }).click();
   await expect(page.getByTestId('localize-scale-slider')).toBeVisible();
 });
 

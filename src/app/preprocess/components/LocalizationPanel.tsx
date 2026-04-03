@@ -1,222 +1,473 @@
-'use client';
+"use client";
 
 import {
-  Badge,
-  Box,
-  Button,
-  ButtonGroup,
-  Divider,
-  Input,
-  Stack,
-  Tab,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Tabs,
-  Text,
-} from '@chakra-ui/react';
-import { useRef } from 'react';
-import { LOCALIZATION_BOX_COLOR_SWATCHS } from '@/lib/preprocess/localization';
+	Badge,
+	Box,
+	Button,
+	ButtonGroup,
+	Divider,
+	Flex,
+	Heading,
+	Input,
+	Stack,
+	Text,
+} from "@chakra-ui/react";
+import {
+	type PointerEvent as ReactPointerEvent,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
+import { LOCALIZATION_BOX_COLOR_SWATCHS } from "@/lib/preprocess/localization";
 import type {
-  LocalizationBoxColor,
-  LocalizationImageTransform,
-  PreprocessRect,
-  PreprocessSourceImage,
-} from '@/types/preprocess';
+	LocalizationBoxColor,
+	LocalizationImageTransform,
+	PreprocessSourceImage,
+} from "@/types/preprocess";
 
 type LocalizationPanelProps = {
-  boxColor: LocalizationBoxColor;
-  chipBounds: PreprocessRect | null;
-  image: PreprocessSourceImage | null;
-  imageTransform: LocalizationImageTransform;
-  onBoxColorChange: (value: LocalizationBoxColor) => void;
-  onFlipHorizontal: () => void;
-  onFlipVertical: () => void;
-  onResetTransform: () => void;
-  onRotationChange: (value: number) => void;
-  onScaleChange: (value: number) => void;
-  onUploadEosin: (fileList: FileList | null) => void;
-  summaryJson: string;
-};
-
-const formatBounds = (chipBounds: PreprocessRect | null) => {
-  if (!chipBounds) return 'No chip box yet';
-
-  return `x ${chipBounds.x.toFixed(3)} • y ${chipBounds.y.toFixed(3)} • w ${chipBounds.width.toFixed(3)} • h ${chipBounds.height.toFixed(3)}`;
+	boxColor: LocalizationBoxColor;
+	image: PreprocessSourceImage | null;
+	imageTransform: LocalizationImageTransform;
+	onBoxColorChange: (value: LocalizationBoxColor) => void;
+	onFlipHorizontal: () => void;
+	onFlipVertical: () => void;
+	onResetTransform: () => void;
+	onRotationChange: (value: number) => void;
+	onRotationDelta: (delta: number) => void;
+	onScaleChange: (value: number) => void;
+	onScaleDelta: (delta: number) => void;
+	onUploadEosin: (fileList: FileList | null) => void;
 };
 
 export function LocalizationPanel({
-  boxColor,
-  chipBounds,
-  image,
-  imageTransform,
-  onBoxColorChange,
-  onFlipHorizontal,
-  onFlipVertical,
-  onResetTransform,
-  onRotationChange,
-  onScaleChange,
-  onUploadEosin,
-  summaryJson,
+	boxColor,
+	image,
+	imageTransform,
+	onBoxColorChange,
+	onFlipHorizontal,
+	onFlipVertical,
+	onResetTransform,
+	onRotationChange,
+	onRotationDelta,
+	onScaleChange,
+	onScaleDelta,
+	onUploadEosin,
 }: LocalizationPanelProps) {
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+	const uploadInputRef = useRef<HTMLInputElement | null>(null);
+	const holdTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const holdIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+	const suppressClickRef = useRef(false);
+	const [rotationDraft, setRotationDraft] = useState<string | null>(null);
+	const [scaleDraft, setScaleDraft] = useState<string | null>(null);
+	const rotationInputValue =
+		rotationDraft ?? imageTransform.rotationDegrees.toFixed(1);
+	const scaleInputValue = scaleDraft ?? (imageTransform.scale * 100).toFixed(0);
 
-  return (
-    <Stack
-      spacing={4}
-      w={{ base: '100%', xl: '340px' }}
-      bg='white'
-      border='1px solid'
-      borderColor='gray.100'
-      borderRadius='lg'
-      boxShadow='sm'
-      p={5}
-      alignSelf='stretch'
-    >
-      <Stack spacing={1}>
-        <Text fontSize='sm' fontWeight='semibold' color='gray.500'>Localization controls</Text>
-        <Text fontSize='sm' color='gray.600'>
-          Rotate and flip the displayed eosin image while keeping the saved chip box axis-aligned in image coordinates.
-        </Text>
-      </Stack>
+	const stopHoldAction = useCallback(() => {
+		if (holdTimeoutRef.current) {
+			clearTimeout(holdTimeoutRef.current);
+			holdTimeoutRef.current = null;
+		}
+		if (holdIntervalRef.current) {
+			clearInterval(holdIntervalRef.current);
+			holdIntervalRef.current = null;
+		}
+	}, []);
 
-      <Tabs size='sm' variant='enclosed' isLazy>
-        <TabList>
-          <Tab>Image</Tab>
-          <Tab>Transform</Tab>
-          <Tab>Box + Data</Tab>
-        </TabList>
+	useEffect(
+		() => () => {
+			stopHoldAction();
+		},
+		[stopHoldAction],
+	);
 
-        <TabPanels>
-          <TabPanel px={0} pt={4}>
-            <Stack spacing={3}>
-              <Stack spacing={1}>
-                <Text fontSize='sm' fontWeight='semibold'>Eosin source</Text>
-                <Text fontSize='sm' color='gray.600'>
-                  {image
-                    ? `${image.fileName} • ${image.width ?? '?'}×${image.height ?? '?'} px`
-                    : 'Upload an eosin image to start localization.'}
-                </Text>
-              </Stack>
+	const commitRotationDraft = () => {
+		if (rotationDraft == null) {
+			return;
+		}
 
-              <Badge colorScheme={image ? 'green' : 'orange'} alignSelf='flex-start'>
-                {image ? 'Image ready' : 'Image missing'}
-              </Badge>
+		const next = Number(rotationDraft);
+		if (!Number.isFinite(next)) {
+			setRotationDraft(null);
+			return;
+		}
 
-              <Button colorScheme='brand' variant={image ? 'outline' : 'solid'} onClick={() => uploadInputRef.current?.click()}>
-                {image ? 'Replace eosin image' : 'Upload eosin image'}
-              </Button>
-              <Input
-                ref={uploadInputRef}
-                type='file'
-                accept='image/*,.tif,.tiff'
-                display='none'
-                onChange={(event) => {
-                  onUploadEosin(event.target.files);
-                  event.target.value = '';
-                }}
-              />
-            </Stack>
-          </TabPanel>
+		onRotationChange(next);
+		setRotationDraft(null);
+	};
 
-          <TabPanel px={0} pt={4}>
-            <Stack spacing={3}>
-              <Stack spacing={1}>
-                <Text fontSize='sm' fontWeight='semibold'>Rotation</Text>
-                <Text fontSize='sm' color='gray.600'>Display transform only</Text>
-              </Stack>
+	const commitScaleDraft = () => {
+		if (scaleDraft == null) {
+			return;
+		}
 
-              <Input
-                type='range'
-                min={-180}
-                max={180}
-                step={0.1}
-                value={imageTransform.rotationDegrees}
-                onChange={(event) => onRotationChange(Number(event.target.value))}
-                data-testid='localize-rotation-slider'
-                px={0}
-              />
-              <Text fontSize='sm' color='gray.600'>
-                {imageTransform.rotationDegrees.toFixed(1)}°
-              </Text>
+		const percent = Number(scaleDraft);
+		if (!Number.isFinite(percent)) {
+			setScaleDraft(null);
+			return;
+		}
 
-              <Stack spacing={1} pt={2}>
-                <Text fontSize='sm' fontWeight='semibold'>Zoom</Text>
-                <Text fontSize='sm' color='gray.600'>Display scale only</Text>
-              </Stack>
+		onScaleChange(percent / 100);
+		setScaleDraft(null);
+	};
 
-              <Input
-                type='range'
-                min={0.5}
-                max={4}
-                step={0.05}
-                value={imageTransform.scale}
-                onChange={(event) => onScaleChange(Number(event.target.value))}
-                data-testid='localize-scale-slider'
-                px={0}
-              />
-              <Text fontSize='sm' color='gray.600'>
-                {(imageTransform.scale * 100).toFixed(0)}%
-              </Text>
+	const createFineAdjustHandlers = (applyDelta: () => void) => ({
+		onClick: () => {
+			if (suppressClickRef.current) {
+				suppressClickRef.current = false;
+				return;
+			}
+			applyDelta();
+		},
+		onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+			if (event.button !== 0) {
+				return;
+			}
 
-              <ButtonGroup size='sm' isAttached variant='outline'>
-                <Button onClick={onFlipHorizontal} data-testid='localize-flip-horizontal'>
-                  Flip horizontal
-                </Button>
-                <Button onClick={onFlipVertical}>Flip vertical</Button>
-              </ButtonGroup>
+			suppressClickRef.current = true;
+			stopHoldAction();
+			event.currentTarget.setPointerCapture(event.pointerId);
+			applyDelta();
+			holdTimeoutRef.current = setTimeout(() => {
+				holdIntervalRef.current = setInterval(() => {
+					applyDelta();
+				}, 75);
+			}, 300);
+		},
+		onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+			stopHoldAction();
+			if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			}
+		},
+		onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => {
+			stopHoldAction();
+			if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			}
+		},
+	});
 
-              <Button size='sm' variant='ghost' onClick={onResetTransform}>
-                Reset transform
-              </Button>
-            </Stack>
-          </TabPanel>
+	const rotateFineMinusHandlers = createFineAdjustHandlers(() =>
+		onRotationDelta(-0.1),
+	);
+	const rotateFinePlusHandlers = createFineAdjustHandlers(() =>
+		onRotationDelta(0.1),
+	);
+	const scaleFineMinusHandlers = createFineAdjustHandlers(() =>
+		onScaleDelta(-0.01),
+	);
+	const scaleFinePlusHandlers = createFineAdjustHandlers(() =>
+		onScaleDelta(0.01),
+	);
 
-          <TabPanel px={0} pt={4}>
-            <Stack spacing={4}>
-              <Stack spacing={3}>
-                <Stack spacing={1}>
-                  <Text fontSize='sm' fontWeight='semibold'>Chip box color</Text>
-                  <Text fontSize='sm' color='gray.600'>Default green, optional white.</Text>
-                </Stack>
-                <ButtonGroup size='sm' isAttached>
-                  {(['green', 'white'] as const).map((value) => (
-                    <Button
-                      key={value}
-                      variant={boxColor === value ? 'solid' : 'outline'}
-                      colorScheme={boxColor === value ? 'brand' : 'gray'}
-                      onClick={() => onBoxColorChange(value)}
-                    >
-                      {LOCALIZATION_BOX_COLOR_SWATCHS[value].label}
-                    </Button>
-                  ))}
-                </ButtonGroup>
-              </Stack>
+	return (
+		<Stack
+			spacing={4}
+			w={{ base: "100%", xl: "320px" }}
+			minW={{ base: "100%", xl: "320px" }}
+			alignSelf="stretch"
+			data-testid="preprocess-localization-properties-rail"
+		>
+			<Box
+				bg="white"
+				border="1px solid"
+				borderColor="gray.200"
+				borderRadius="2xl"
+				boxShadow="sm"
+				px={4}
+				py={4}
+			>
+				<Stack spacing={4}>
+					<Stack spacing={1}>
+						<Heading size="sm">Properties</Heading>
+						<Text fontSize="sm" color="gray.500">
+							Compact controls for image state, chip box styling, and precise
+							transform edits.
+						</Text>
+					</Stack>
 
-              <Divider />
+					<Box
+						border="1px solid"
+						borderColor="gray.200"
+						borderRadius="xl"
+						px={3}
+						py={3}
+					>
+						<Stack spacing={3}>
+							<Flex justify="space-between" align="flex-start" gap={3}>
+								<Stack spacing={1}>
+									<Heading size="sm">Image details</Heading>
+									<Text fontSize="sm" color="gray.500">
+										Load or replace the eosin image used for localization.
+									</Text>
+								</Stack>
+								<Badge
+									colorScheme={image ? "green" : "orange"}
+									alignSelf="flex-start"
+									borderRadius="full"
+								>
+									{image ? "Ready" : "Missing"}
+								</Badge>
+							</Flex>
+							<Text fontSize="sm" color="gray.600">
+								{image
+									? `${image.fileName} • ${image.width ?? "?"}×${image.height ?? "?"} px`
+									: "Upload an eosin image to start localization."}
+							</Text>
+							<Button
+								colorScheme="brand"
+								variant={image ? "outline" : "solid"}
+								size="sm"
+								onClick={() => uploadInputRef.current?.click()}
+							>
+								{image ? "Replace eosin image" : "Upload eosin image"}
+							</Button>
+							<Input
+								ref={uploadInputRef}
+								type="file"
+								accept="image/*,.tif,.tiff"
+								display="none"
+								onChange={(event) => {
+									onUploadEosin(event.target.files);
+									event.target.value = "";
+								}}
+							/>
+						</Stack>
+					</Box>
 
-              <Stack spacing={2}>
-                <Text fontSize='sm' fontWeight='semibold'>Saved chip rectangle</Text>
-                <Text fontSize='sm' color='gray.600'>{formatBounds(chipBounds)}</Text>
-              </Stack>
+					<Box
+						border="1px solid"
+						borderColor="gray.200"
+						borderRadius="xl"
+						px={3}
+						py={3}
+					>
+						<Stack spacing={3}>
+							<Stack spacing={1}>
+								<Heading size="sm">Chip box</Heading>
+								<Text fontSize="sm" color="gray.500">
+									Choose the overlay tone without changing saved geometry.
+								</Text>
+							</Stack>
+							<ButtonGroup size="sm" isAttached>
+								{(["green", "white"] as const).map((value) => (
+									<Button
+										key={value}
+										variant={boxColor === value ? "solid" : "outline"}
+										colorScheme={boxColor === value ? "brand" : "gray"}
+										onClick={() => onBoxColorChange(value)}
+									>
+										{LOCALIZATION_BOX_COLOR_SWATCHS[value].label}
+									</Button>
+								))}
+							</ButtonGroup>
+						</Stack>
+					</Box>
 
-              <Box
-                as='pre'
-                fontSize='xs'
-                lineHeight='tall'
-                bg='gray.900'
-                color='whiteAlpha.900'
-                borderRadius='md'
-                p={3}
-                overflowX='auto'
-                data-testid='localization-summary-json'
-              >
-                {summaryJson}
-              </Box>
-            </Stack>
-          </TabPanel>
-        </TabPanels>
-      </Tabs>
-    </Stack>
-  );
+					<Box
+						border="1px solid"
+						borderColor="gray.200"
+						borderRadius="xl"
+						px={3}
+						py={3}
+					>
+						<Stack spacing={3}>
+							<Stack spacing={1}>
+								<Heading size="sm">Canvas controls</Heading>
+								<Text fontSize="sm" color="gray.500">
+									Wheel to zoom, drag the box edges to resize, drag the outer
+									handle to rotate.
+								</Text>
+							</Stack>
+							<Divider />
+							<Text fontSize="sm" color="gray.600">
+								Use the floating stage widget for quick zoom and quarter-turn
+								rotation. Use the controls below when you need exact values.
+							</Text>
+						</Stack>
+					</Box>
+
+					<Box
+						border="1px solid"
+						borderColor="gray.200"
+						borderRadius="xl"
+						px={3}
+						py={3}
+					>
+						<Stack spacing={4}>
+							<Stack spacing={1}>
+								<Heading size="sm">Precise transform</Heading>
+								<Text fontSize="sm" color="gray.500">
+									Display-only edits; chip coordinates remain normalized in
+									image space.
+								</Text>
+							</Stack>
+
+							<Stack spacing={3}>
+								<Flex justify="space-between" align="center" gap={3}>
+									<Heading
+										size="xs"
+										textTransform="uppercase"
+										letterSpacing="0.08em"
+										color="gray.500"
+									>
+										Rotation
+									</Heading>
+									<Text fontSize="sm" color="gray.600">
+										{imageTransform.rotationDegrees.toFixed(1)}°
+									</Text>
+								</Flex>
+								<Flex gap={2} align="center">
+									<Input
+										type="number"
+										inputMode="decimal"
+										min={-180}
+										max={180}
+										step={0.1}
+										value={rotationInputValue}
+										onChange={(event) => setRotationDraft(event.target.value)}
+										onBlur={commitRotationDraft}
+										onKeyDown={(event) => {
+											if (event.key === "Enter") {
+												event.currentTarget.blur();
+											}
+										}}
+										data-testid="localize-rotation-input"
+										size="sm"
+										w="84px"
+									/>
+									<Text fontSize="sm" color="gray.500">
+										degrees
+									</Text>
+								</Flex>
+								<Flex wrap="wrap" gap={2}>
+									<ButtonGroup size="sm" isAttached variant="outline">
+										<Button
+											onClick={() => onRotationDelta(-90)}
+											data-testid="localize-rotate-minus-90"
+										>
+											-90°
+										</Button>
+										<Button
+											onClick={() => onRotationDelta(90)}
+											data-testid="localize-rotate-plus-90"
+										>
+											+90°
+										</Button>
+									</ButtonGroup>
+									<ButtonGroup size="sm" isAttached variant="outline">
+										<Button
+											{...rotateFineMinusHandlers}
+											data-testid="localize-rotate-fine-minus"
+											aria-label="Decrease rotation"
+										>
+											-0.1°
+										</Button>
+										<Button
+											{...rotateFinePlusHandlers}
+											data-testid="localize-rotate-fine-plus"
+											aria-label="Increase rotation"
+										>
+											+0.1°
+										</Button>
+									</ButtonGroup>
+								</Flex>
+							</Stack>
+
+							<Stack spacing={3}>
+								<Flex justify="space-between" align="center" gap={3}>
+									<Heading
+										size="xs"
+										textTransform="uppercase"
+										letterSpacing="0.08em"
+										color="gray.500"
+									>
+										Scale
+									</Heading>
+									<Text fontSize="sm" color="gray.600">
+										{(imageTransform.scale * 100).toFixed(0)}%
+									</Text>
+								</Flex>
+								<Flex gap={2} align="center">
+									<Input
+										type="number"
+										inputMode="decimal"
+										min={50}
+										max={400}
+										step={1}
+										value={scaleInputValue}
+										onChange={(event) => setScaleDraft(event.target.value)}
+										onBlur={commitScaleDraft}
+										onKeyDown={(event) => {
+											if (event.key === "Enter") {
+												event.currentTarget.blur();
+											}
+										}}
+										data-testid="localize-scale-input"
+										size="sm"
+										w="84px"
+									/>
+									<Text fontSize="sm" color="gray.500">
+										percent
+									</Text>
+								</Flex>
+								<ButtonGroup
+									size="sm"
+									isAttached
+									variant="outline"
+									w="fit-content"
+								>
+									<Button
+										{...scaleFineMinusHandlers}
+										data-testid="localize-scale-fine-minus"
+										aria-label="Decrease zoom"
+									>
+										-1%
+									</Button>
+									<Button
+										{...scaleFinePlusHandlers}
+										data-testid="localize-scale-fine-plus"
+										aria-label="Increase zoom"
+									>
+										+1%
+									</Button>
+								</ButtonGroup>
+							</Stack>
+
+							<Flex direction="column" gap={2}>
+								<Button
+									onClick={onFlipHorizontal}
+									data-testid="localize-flip-horizontal"
+									variant="outline"
+									size="sm"
+								>
+									Flip horizontal
+								</Button>
+								<Button
+									onClick={onFlipVertical}
+									data-testid="localize-flip-vertical"
+									variant="outline"
+									size="sm"
+								>
+									Flip vertical
+								</Button>
+								<Button
+									size="sm"
+									colorScheme="brand"
+									variant="ghost"
+									onClick={onResetTransform}
+									data-testid="localize-reset-transform"
+								>
+									Reset transform
+								</Button>
+							</Flex>
+						</Stack>
+					</Box>
+				</Stack>
+			</Box>
+		</Stack>
+	);
 }
