@@ -1,17 +1,35 @@
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
+const uploadFileWithButton = async (
+  page: import('@playwright/test').Page,
+  buttonName: RegExp,
+  filePath: string,
+) => {
+  const uploadButton = page.getByRole('button', { name: buttonName });
+  await uploadButton.click();
+  await uploadButton.locator('xpath=following-sibling::input[@type="file"][1]').setInputFiles(filePath);
+};
+
 const setupLocalizationProject = async (page: import('@playwright/test').Page, projectName: string) => {
   const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.png');
+  const hePath = path.join(process.cwd(), 'tests/fixtures/preprocess/he.png');
 
   await page.goto('/preprocess');
   await page.getByPlaceholder('Tumor preprocess set A').fill(projectName);
   await page.getByTestId('preprocess-create-project').click();
   await expect(page).toHaveURL(/preprocess_id=/);
 
+  await page.getByTestId('preprocess-step-source-assets').click();
+  await uploadFileWithButton(page, /Upload eosin image/i, eosinPath);
+  await uploadFileWithButton(page, /Upload H&E image/i, hePath);
+
+  await expect(page.getByTestId('preprocess-step-localize')).toBeEnabled();
   await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
-  await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
+  await expect(page.getByRole('button', { name: /Upload eosin image/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Replace eosin image/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Upload H&E image/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Replace H&E image/i })).toHaveCount(0);
 };
 
 test('localize workspace uses three-column shell with floating stage controls', async ({ page }) => {

@@ -38,7 +38,6 @@ type LocalizationPanelProps = {
 	onRotationDelta: (delta: number) => void;
 	onScaleChange: (value: number) => void;
 	onScaleDelta: (delta: number) => void;
-	onUploadEosin: (fileList: FileList | null) => void;
 };
 
 export function LocalizationPanel({
@@ -53,9 +52,7 @@ export function LocalizationPanel({
 	onRotationDelta,
 	onScaleChange,
 	onScaleDelta,
-	onUploadEosin,
 }: LocalizationPanelProps) {
-	const uploadInputRef = useRef<HTMLInputElement | null>(null);
 	const holdTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const holdIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const suppressClickRef = useRef(false);
@@ -201,7 +198,7 @@ export function LocalizationPanel({
 								<Stack spacing={1}>
 									<Heading size="sm">Image details</Heading>
 									<Text fontSize="sm" color="gray.500">
-										Load or replace the eosin image used for localization.
+										Localization uses the saved eosin intake asset from Source Assets.
 									</Text>
 								</Stack>
 								<Badge
@@ -215,26 +212,8 @@ export function LocalizationPanel({
 							<Text fontSize="sm" color="gray.600">
 								{image
 									? `${image.fileName} • ${image.width ?? "?"}×${image.height ?? "?"} px`
-									: "Upload an eosin image to start localization."}
+									: "Upload an eosin image in Source Assets to start localization."}
 							</Text>
-							<Button
-								colorScheme="brand"
-								variant={image ? "outline" : "solid"}
-								size="sm"
-								onClick={() => uploadInputRef.current?.click()}
-							>
-								{image ? "Replace eosin image" : "Upload eosin image"}
-							</Button>
-							<Input
-								ref={uploadInputRef}
-								type="file"
-								accept="image/*,.tif,.tiff"
-								display="none"
-								onChange={(event) => {
-									onUploadEosin(event.target.files);
-									event.target.value = "";
-								}}
-							/>
 						</Stack>
 					</Box>
 

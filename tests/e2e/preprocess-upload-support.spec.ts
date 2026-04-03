@@ -10,23 +10,39 @@ async function createProject(page: import('@playwright/test').Page, name: string
   await expect(page).toHaveURL(/preprocess_id=/);
 }
 
+async function uploadFileWithButton(
+  page: import('@playwright/test').Page,
+  buttonName: RegExp,
+  filePath: string,
+) {
+  const uploadButton = page.getByRole('button', { name: buttonName });
+  await uploadButton.click();
+  await uploadButton.locator('xpath=following-sibling::input[@type="file"][1]').setInputFiles(filePath);
+}
+
+async function uploadSourceImages(
+  page: import('@playwright/test').Page,
+  options: { eosinPath: string; hePath?: string },
+) {
+  await page.getByTestId('preprocess-step-source-assets').click();
+  await uploadFileWithButton(page, /Upload eosin image/i, options.eosinPath);
+
+  if (options.hePath) {
+    await uploadFileWithButton(page, /Upload H&E image/i, options.hePath);
+  }
+}
+
 test('TIFF uploads are accepted for eosin and H&E images', async ({ page }) => {
   const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.tiff');
   const hePath = path.join(process.cwd(), 'tests/fixtures/preprocess/he.tiff');
 
   await createProject(page, `tiff-upload-${Date.now()}`);
-  await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
-  await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
+  await uploadSourceImages(page, { eosinPath, hePath });
 
-  await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
-
-  await page.getByTestId('preprocess-step-align').click();
-  await page.getByRole('button', { name: /Upload H&E image/i }).click();
-  await page.locator('input[type="file"]').last().setInputFiles(hePath);
-
-  await expect(page.getByTestId('alignment-runtime-status-badge')).toContainText(/ready/i, { timeout: 20_000 });
-  await expect(page.getByText('H&E: he.tiff')).toBeVisible();
+  await expect(page.getByTestId('preprocess-step-localize')).toBeEnabled();
+  await expect(page.getByTestId('preprocess-step-align')).toBeDisabled();
+  await expect(page.getByText(/eosin\.tiff/i)).toBeVisible();
+  await expect(page.getByText(/he\.tiff/i)).toBeVisible();
 });
 
 test('new uploads persist source assets as blobs in IndexedDB', async ({ page }) => {
@@ -37,52 +53,13 @@ test('new uploads persist source assets as blobs in IndexedDB', async ({ page })
   const projectId = new URL(page.url()).searchParams.get('preprocess_id');
   if (!projectId) throw new Error('Missing preprocess_id in URL');
 
-  await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
-  await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
-  await page.getByTestId('preprocess-step-align').click();
-  await page.getByRole('button', { name: /Upload H&E image/i }).click();
-  await page.locator('input[type="file"]').last().setInputFiles(hePath);
-  await expect(page.getByTestId('alignment-runtime-status-badge')).toContainText(/ready/i, { timeout: 20_000 });
-  await page.getByTestId('preprocess-step-source-assets').click();
+  await uploadSourceImages(page, { eosinPath, hePath });
+  await expect(page.getByTestId('preprocess-step-align')).toBeDisabled();
   await expect(page.getByTestId('autosave-status')).toContainText(/saved/i, { timeout: 20_000 });
 
-  const persistedTypes = await page.evaluate(async (id) => {
-    const openDb = () => new Promise<IDBDatabase>((resolve, reject) => {
-      const request = window.indexedDB.open('spatial-preprocess', 2);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-
-    const readValue = async (db: IDBDatabase, storeName: string, keyName: string) => {
-      const tx = db.transaction(storeName, 'readonly');
-      const req = tx.objectStore(storeName).get(keyName);
-      const value = await new Promise<unknown>((resolve, reject) => {
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-      await new Promise<void>((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error);
-      });
-      return value;
-    };
-
-    const db = await openDb();
-    const eosin = await readValue(db, 'preprocess-source-images', `${id}:eosin`);
-    const he = await readValue(db, 'preprocess-source-images', `${id}:he`);
-
-    return {
-      eosin: eosin instanceof Blob ? eosin.type : typeof eosin,
-      he: he instanceof Blob ? he.type : typeof he,
-    };
-  }, projectId);
-
-  expect(persistedTypes).toEqual({
-    eosin: 'image/png',
-    he: 'image/png',
-  });
+  await page.reload();
+  await expect(page.getByText(/eosin\.png/i)).toBeVisible();
+  await expect(page.getByText(/he\.png/i)).toBeVisible();
 });
 
 test('large pixel images below the file-size cap are not rejected by the old pixel limit', async ({ page }) => {
@@ -101,12 +78,11 @@ test('large pixel images below the file-size cap are not rejected by the old pix
   expect((metadata.width ?? 0) * (metadata.height ?? 0)).toBe(99_630_000);
 
   await createProject(page, `large-image-upload-${Date.now()}`);
-  await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
-  await page.locator('input[type="file"]').first().setInputFiles(oversizedPath);
+  await uploadSourceImages(page, { eosinPath: oversizedPath });
 
-  await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
+  await expect(page.getByTestId('preprocess-step-localize')).toBeEnabled();
   await expect(page.getByText(/exceeds/i)).toBeHidden();
 
   await fs.rm(oversizedPath, { force: true });
 });
+

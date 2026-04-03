@@ -88,8 +88,8 @@ const placeholderCopyByStep: Record<
 	{ title: string; body: string }
 > = {
 	sourceAssets: {
-		title: "Source image intake",
-		body: "This shell is ready for later source-image upload work. Imported projects will still hydrate saved Eosin/H&E assets.",
+		title: "Source asset intake",
+		body: "Load and replace the local-only Eosin and H&E source images here before localization and alignment. Replacing either intake image keeps browser storage intact while invalidating downstream derived steps.",
 	},
 	localization: {
 		title: "Chip localization",
@@ -116,6 +116,78 @@ const placeholderCopyByStep: Record<
 		body: "Export packaging will be added later. For now this step confirms route wiring, navigation, and autosave status feedback.",
 	},
 };
+
+function SourceAssetUploader({
+	label,
+	description,
+	buttonLabel,
+	image,
+	onUpload,
+}: {
+	label: string;
+	description: string;
+	buttonLabel: string;
+	image: PreprocessProject["sourceAssets"]["images"]["eosin"] | null;
+	onUpload: (fileList: FileList | null) => void;
+}) {
+	return (
+		<Box
+			border="1px solid"
+			borderColor="gray.200"
+			borderRadius="xl"
+			bg="white"
+			px={4}
+			py={4}
+		>
+			<Stack spacing={3}>
+				<Flex justify="space-between" align="flex-start" gap={3} wrap="wrap">
+					<Stack spacing={1}>
+						<Heading size="sm">{label}</Heading>
+						<Text fontSize="sm" color="gray.500">
+							{description}
+						</Text>
+					</Stack>
+					<Badge
+						colorScheme={image ? "green" : "orange"}
+						alignSelf="flex-start"
+						borderRadius="full"
+					>
+						{image ? "Ready" : "Missing"}
+					</Badge>
+				</Flex>
+				<Text fontSize="sm" color="gray.600">
+					{image
+						? `${image.fileName} • ${image.width ?? "?"}×${image.height ?? "?"} px`
+						: `No ${label} uploaded yet.`}
+				</Text>
+				<Box>
+					<Button
+						colorScheme="brand"
+						variant={image ? "outline" : "solid"}
+						size="sm"
+						onClick={(event) => {
+							const input = event.currentTarget.nextElementSibling;
+							if (input instanceof HTMLInputElement) {
+								input.click();
+							}
+						}}
+					>
+						{buttonLabel}
+					</Button>
+					<Input
+						type="file"
+						accept="image/*,.tif,.tiff"
+						display="none"
+						onChange={(event) => {
+							onUpload(event.target.files);
+							event.target.value = "";
+						}}
+					/>
+				</Box>
+			</Stack>
+		</Box>
+	);
+}
 
 export function PreprocessWorkspace({
 	autosaveStatus,
@@ -290,7 +362,6 @@ export function PreprocessWorkspace({
 
 					const invalidatedProject = invalidateOnSourceAssetsChange({
 						...current,
-						currentStep: "localization",
 						sourceAssets: nextSourceAssets,
 						localization: nextLocalization,
 					});
@@ -731,7 +802,41 @@ export function PreprocessWorkspace({
 								</Stack>
 							</Flex>
 
-							{project.currentStep === "localization" ? (
+							{project.currentStep === "sourceAssets" ? (
+								<Stack spacing={5}>
+									<Text color="gray.600" maxW="3xl">
+										{currentCopy.body}
+									</Text>
+									<Flex direction={{ base: "column", xl: "row" }} gap={5}>
+										<SourceAssetUploader
+											label="Eosin source image"
+											description="This intake image drives chip localization and remains the localization target by default when replaced."
+											buttonLabel={
+												project.sourceAssets.images.eosin
+													? "Replace eosin image"
+													: "Upload eosin image"
+											}
+											image={project.sourceAssets.images.eosin}
+											onUpload={(fileList) => {
+												void handleUploadEosin(fileList);
+											}}
+										/>
+										<SourceAssetUploader
+											label="H&E source image"
+											description="This intake image feeds landmark alignment while preserving the existing browser-only source asset storage."
+											buttonLabel={
+												project.sourceAssets.images.he
+													? "Replace H&E image"
+													: "Upload H&E image"
+											}
+											image={project.sourceAssets.images.he}
+											onUpload={(fileList) => {
+												void handleUploadHe(fileList);
+											}}
+										/>
+									</Flex>
+								</Stack>
+							) : project.currentStep === "localization" ? (
 								<Flex
 									direction={{ base: "column", xl: "row" }}
 									gap={5}
@@ -863,18 +968,16 @@ export function PreprocessWorkspace({
 												{ invalidateDownstream: false },
 											);
 										}}
-										onUploadEosin={handleUploadEosin}
 									/>
 								</Flex>
 							) : project.currentStep === "alignment" ? (
-								<AlignmentPanel
-									alignment={project.alignment}
-									chipBounds={project.localization.chipBounds}
-									movingImage={alignmentMovingImage}
-									referenceImage={alignmentReferenceImage}
-									onAlignmentChange={applyAlignmentUpdate}
-									onUploadMovingImage={handleUploadHe}
-								/>
+							<AlignmentPanel
+								alignment={project.alignment}
+								chipBounds={project.localization.chipBounds}
+								movingImage={alignmentMovingImage}
+								referenceImage={alignmentReferenceImage}
+								onAlignmentChange={applyAlignmentUpdate}
+							/>
 							) : project.currentStep === "cropQc" ? (
 								<CropQcPanel
 									cropHeight={project.cropQc.cropHeight}

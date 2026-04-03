@@ -403,13 +403,14 @@ function PreprocessContent() {
   ) => {
     setProject((current) => {
       if (!current) return current;
-      const next = updater(current);
-      return {
-        ...next,
+      const nextSnapshot: PreprocessProject = {
+        ...updater(current),
         updatedAt: new Date().toISOString(),
       };
+      void persistProjectSnapshot(cloneProject(nextSnapshot));
+      return nextSnapshot;
     });
-  }, []);
+  }, [persistProjectSnapshot]);
 
   const handleStepChange = useCallback((stepId: PreprocessStepId) => {
     if (!project) return;

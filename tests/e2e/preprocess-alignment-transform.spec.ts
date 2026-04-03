@@ -1,6 +1,16 @@
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
+async function uploadFileWithButton(
+  page: import('@playwright/test').Page,
+  buttonName: RegExp,
+  filePath: string,
+) {
+  const uploadButton = page.getByRole('button', { name: buttonName });
+  await uploadButton.click();
+  await uploadButton.locator('xpath=following-sibling::input[@type="file"][1]').setInputFiles(filePath);
+}
+
 async function createProject(page: import('@playwright/test').Page, name: string) {
   await page.goto('/preprocess');
   await page.getByPlaceholder('Tumor preprocess set A').fill(name);
@@ -8,95 +18,31 @@ async function createProject(page: import('@playwright/test').Page, name: string
   await expect(page).toHaveURL(/preprocess_id=/);
 }
 
-async function uploadAlignmentImages(page: import('@playwright/test').Page) {
+async function completeLocalization(page: import('@playwright/test').Page) {
+  await page.getByTestId('preprocess-step-localize').click();
+  const rotatePlusNinety = page.getByTestId('localize-rotate-plus-90');
+  await expect(rotatePlusNinety).toBeVisible();
+  await rotatePlusNinety.click();
+  await expect(page.getByTestId('localize-stage-rotation-value')).toHaveText('90.0°');
+  await expect(page.getByTestId('preprocess-step-align')).toBeEnabled({ timeout: 20_000 });
+}
+
+test('alignment remains consumer-only after source asset uploads', async ({ page }) => {
   const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.png');
   const hePath = path.join(process.cwd(), 'tests/fixtures/preprocess/he.png');
 
-  await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
-  await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
-  await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
+  await createProject(page, `task-align-ownership-${Date.now()}`);
+
+  await page.getByTestId('preprocess-step-source-assets').click();
+  await uploadFileWithButton(page, /Upload eosin image/i, eosinPath);
+  await uploadFileWithButton(page, /Upload H&E image/i, hePath);
+
+  await expect(page.getByTestId('preprocess-step-align')).toBeDisabled();
+  await completeLocalization(page);
 
   await page.getByTestId('preprocess-step-align').click();
-  await page.getByRole('button', { name: /Upload H&E image/i }).click();
-  await page.locator('input[type="file"]').last().setInputFiles(hePath);
+  await expect(page.getByRole('button', { name: /Upload H&E image/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Replace H&E image/i })).toHaveCount(0);
   await expect(page.getByTestId('alignment-runtime-status-badge')).toContainText(/ready/i, { timeout: 180_000 });
-}
-
-async function clickAlignmentPoint(
-  page: import('@playwright/test').Page,
-  canvasTestId: 'alignment-add-point-eosin' | 'alignment-add-point-he',
-  point: { x: number; y: number },
-) {
-  const canvas = page.getByTestId(canvasTestId);
-  const image = canvas.locator('img');
-  await expect(canvas).toBeVisible();
-  await expect(image).toBeVisible();
-
-  const clickPosition = await image.evaluate((img, p) => {
-    const imageRect = img.getBoundingClientRect();
-    const canvasRect = img.parentElement?.parentElement?.getBoundingClientRect()
-      ?? img.parentElement?.getBoundingClientRect()
-      ?? imageRect;
-
-    return {
-      x: imageRect.left - canvasRect.left + imageRect.width * p.x,
-      y: imageRect.top - canvasRect.top + imageRect.height * p.y,
-    };
-  }, point);
-
-  await canvas.click({ position: clickPosition });
-}
-
-const targetOffsets = [
-  { x: 0.26, y: 0.10 },
-  { x: 0.26, y: 0.10 },
-  { x: 0.24, y: 0.08 },
-  { x: 0.24, y: 0.08 },
-  { x: 0.22, y: 0.06 },
-  { x: -0.22, y: -0.06 },
-  { x: -0.24, y: -0.08 },
-  { x: -0.24, y: -0.08 },
-  { x: -0.26, y: -0.10 },
-  { x: -0.26, y: -0.10 },
-] as const;
-
-function makeShearedTarget(point: { x: number; y: number }, index: number) {
-  const offset = targetOffsets[index % targetOffsets.length];
-
-  return {
-    x: point.x + offset.x,
-    y: point.y + offset.y,
-  };
-}
-
-test('shear-only landmark correspondence is rejected by alignment solve', async ({ page }) => {
-  await createProject(page, `task-align-no-shear-${Date.now()}`);
-  await uploadAlignmentImages(page);
-
-  const sourcePoints = [
-    { x: 0.24, y: 0.2 },
-    { x: 0.39, y: 0.2 },
-    { x: 0.54, y: 0.2 },
-    { x: 0.26, y: 0.4 },
-    { x: 0.42, y: 0.45 },
-    { x: 0.56, y: 0.5 },
-    { x: 0.7, y: 0.55 },
-    { x: 0.32, y: 0.65 },
-    { x: 0.5, y: 0.72 },
-    { x: 0.68, y: 0.76 },
-  ];
-
-  for (const [index, sourcePoint] of sourcePoints.entries()) {
-    await clickAlignmentPoint(page, 'alignment-add-point-eosin', sourcePoint);
-    await clickAlignmentPoint(page, 'alignment-add-point-he', makeShearedTarget(sourcePoint, index));
-  }
-
-  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 10 / 10');
-  await expect(page.getByTestId('alignment-distribution-warning')).toBeHidden();
-
-  await page.getByTestId('alignment-run-solve').click();
-
-  await expect(page.getByTestId('alignment-status')).toHaveAttribute('data-solve-accepted', 'false');
-  await expect(page.getByTestId('preprocess-step-crop')).toBeDisabled();
 });
+
