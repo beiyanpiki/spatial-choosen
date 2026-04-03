@@ -1,0 +1,582 @@
+'use client';
+
+import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@chakra-ui/react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { computeBaseView, getTransform, relativeToImage } from '@/lib/canvasViewport';
+import {
+  invertImageDisplayTransform,
+} from '@/lib/preprocess/imageTransforms';
+import {
+  clampNormalizedSquareRect,
+  LOCALIZATION_BOX_COLOR_SWATCHS,
+  resizeChipBounds,
+  translateChipBounds,
+} from '@/lib/preprocess/localization';
+import type {
+  LocalizationBoxColor,
+  LocalizationImageTransform,
+  LocalizationResizeHandle,
+  PreprocessPoint,
+  PreprocessRect,
+  PreprocessSourceImage,
+} from '@/types/preprocess';
+
+type CanvasStageProps = {
+  boxColor: LocalizationBoxColor;
+  chipBounds: PreprocessRect | null;
+  image: PreprocessSourceImage | null;
+  imageTransform: LocalizationImageTransform;
+  onChipBoundsChange: (chipBounds: PreprocessRect) => void;
+  onRotationChange: (rotationDegrees: number) => void;
+  onRotationDelta: (delta: number) => void;
+  onScaleChange: (scale: number) => void;
+  onScaleDelta: (delta: number) => void;
+};
+
+type ViewportSize = {
+  width: number;
+  height: number;
+};
+
+type DragState =
+  | {
+      kind: 'move';
+      startPoint: PreprocessPoint;
+      startRect: PreprocessRect;
+    }
+  | {
+      kind: 'resize';
+      handle: LocalizationResizeHandle;
+      startRect: PreprocessRect;
+    }
+  | {
+      kind: 'rotate';
+    };
+
+type RotationOverlay = {
+  centerPoint: { x: number; y: number };
+  guidePoint: { x: number; y: number };
+  handlePoint: { x: number; y: number };
+};
+
+const CORNER_HANDLE_ORDER: readonly LocalizationResizeHandle[] = ['nw', 'ne', 'se', 'sw'];
+const EDGE_HANDLE_ORDER: readonly LocalizationResizeHandle[] = ['n', 'e', 's', 'w'];
+const ALL_HANDLE_ORDER: readonly LocalizationResizeHandle[] = [
+  ...CORNER_HANDLE_ORDER,
+  ...EDGE_HANDLE_ORDER,
+];
+
+const clampScale = (scale: number) => Math.min(4, Math.max(0.5, scale));
+const normalizeDegrees = (value: number) => {
+  const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
+  return Object.is(wrapped, -0) ? 0 : wrapped;
+};
+
+const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+  const image = new window.Image();
+  image.onload = () => resolve(image);
+  image.onerror = () => reject(new Error('Unable to load image preview'));
+  image.src = src;
+});
+
+export function CanvasStage({
+  boxColor,
+  chipBounds,
+  image,
+  imageTransform,
+  onChipBoundsChange,
+  onRotationChange,
+  onRotationDelta,
+  onScaleChange,
+  onScaleDelta,
+}: CanvasStageProps) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
+  const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null);
+  const [viewportSize, setViewportSize] = useState<ViewportSize | null>(null);
+  const imageDataUrl = image?.dataUrl ?? null;
+
+  useEffect(() => {
+    if (!imageDataUrl) return;
+
+    let cancelled = false;
+
+    loadImageElement(imageDataUrl)
+      .then((loadedImage) => {
+        if (!cancelled) setImageElement(loadedImage);
+      })
+      .catch(() => {
+        if (!cancelled) setImageElement(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [imageDataUrl]);
+
+  const activeImageElement = imageDataUrl && imageElement?.src === imageDataUrl
+    ? imageElement
+    : null;
+
+  useEffect(() => {
+    const node = hostElement;
+    if (!node) return;
+
+    const updateSize = () => {
+      setViewportSize({
+        width: node.clientWidth,
+        height: node.clientHeight,
+      });
+    };
+
+    updateSize();
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(node);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [hostElement]);
+
+  const baseView = useMemo(() => {
+    const ratio = image?.width && image.height
+      ? image.width / image.height
+      : activeImageElement?.naturalWidth && activeImageElement?.naturalHeight
+        ? activeImageElement.naturalWidth / activeImageElement.naturalHeight
+        : 4 / 3;
+
+    return computeBaseView(viewportSize, ratio);
+  }, [activeImageElement?.naturalHeight, activeImageElement?.naturalWidth, image?.height, image?.width, viewportSize]);
+
+  const imageAspectRatio = image?.width && image.height
+    ? image.width / image.height
+    : activeImageElement?.naturalWidth && activeImageElement?.naturalHeight
+      ? activeImageElement.naturalWidth / activeImageElement.naturalHeight
+      : 1;
+
+  const displayTransform = useMemo(
+    () => getTransform(baseView, imageTransform.scale, { x: 0, y: 0 }),
+    [baseView, imageTransform.scale],
+  );
+
+  const normalizedChipBounds = useMemo(
+    () => (chipBounds ? clampNormalizedSquareRect(chipBounds, imageAspectRatio) : null),
+    [chipBounds, imageAspectRatio],
+  );
+
+  const rotationOverlay = useMemo<RotationOverlay | null>(() => {
+    if (!displayTransform) return null;
+
+    const centerPoint = {
+      x: displayTransform.originX + displayTransform.width / 2,
+      y: displayTransform.originY + displayTransform.height / 2,
+    };
+    const baseDistance = Math.min(displayTransform.width, displayTransform.height) / 2;
+    const handleDistance = baseDistance + 36;
+    const rotationRadians = ((imageTransform.rotationDegrees - 90) * Math.PI) / 180;
+
+    return {
+      centerPoint,
+      guidePoint: {
+        x: centerPoint.x + Math.cos(rotationRadians) * Math.max(baseDistance, 24),
+        y: centerPoint.y + Math.sin(rotationRadians) * Math.max(baseDistance, 24),
+      },
+      handlePoint: {
+        x: centerPoint.x + Math.cos(rotationRadians) * handleDistance,
+        y: centerPoint.y + Math.sin(rotationRadians) * handleDistance,
+      },
+    };
+  }, [displayTransform, imageTransform.rotationDegrees]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !viewportSize) return;
+
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(viewportSize.width * devicePixelRatio));
+    canvas.height = Math.max(1, Math.round(viewportSize.height * devicePixelRatio));
+    canvas.style.width = `${viewportSize.width}px`;
+    canvas.style.height = `${viewportSize.height}px`;
+
+    context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    context.clearRect(0, 0, viewportSize.width, viewportSize.height);
+
+    if (!activeImageElement || !displayTransform) return;
+
+    context.save();
+    context.translate(
+      displayTransform.originX + displayTransform.width / 2,
+      displayTransform.originY + displayTransform.height / 2,
+    );
+    context.rotate((imageTransform.rotationDegrees * Math.PI) / 180);
+    context.scale(imageTransform.flipHorizontal ? -1 : 1, imageTransform.flipVertical ? -1 : 1);
+    context.drawImage(
+      activeImageElement,
+      -displayTransform.width / 2,
+      -displayTransform.height / 2,
+      displayTransform.width,
+      displayTransform.height,
+    );
+    context.restore();
+  }, [activeImageElement, displayTransform, imageTransform, viewportSize]);
+
+  const getRelativePoint = useCallback((clientX: number, clientY: number) => {
+    const host = hostRef.current;
+    if (!host) return null;
+
+    const rect = host.getBoundingClientRect();
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    };
+  }, []);
+
+  const getImagePoint = useCallback((clientX: number, clientY: number) => {
+    const relativePoint = getRelativePoint(clientX, clientY);
+    if (!relativePoint || !displayTransform) return null;
+
+    const normalized = relativeToImage(relativePoint, displayTransform);
+    if (!normalized) return null;
+
+    return invertImageDisplayTransform(normalized, imageTransform);
+  }, [displayTransform, getRelativePoint, imageTransform]);
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (dragState.kind === 'rotate') {
+        if (!rotationOverlay) return;
+        const relativePoint = getRelativePoint(event.clientX, event.clientY);
+        if (!relativePoint) return;
+        const centerX = rotationOverlay.centerPoint.x;
+        const centerY = rotationOverlay.centerPoint.y;
+        const angleRadians = Math.atan2(relativePoint.y - centerY, relativePoint.x - centerX);
+        onRotationChange(normalizeDegrees((angleRadians * 180) / Math.PI + 90));
+        return;
+      }
+
+      const imagePoint = getImagePoint(event.clientX, event.clientY);
+      if (!imagePoint) return;
+
+      const nextBounds = dragState.kind === 'move'
+        ? translateChipBounds(dragState.startRect, {
+            x: imagePoint.x - dragState.startPoint.x,
+            y: imagePoint.y - dragState.startPoint.y,
+          }, imageAspectRatio)
+        : resizeChipBounds(dragState.startRect, dragState.handle, imagePoint, imageAspectRatio);
+
+      onChipBoundsChange(nextBounds);
+    };
+
+    const handlePointerUp = () => {
+      setDragState(null);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [dragState, getImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsChange, onRotationChange, rotationOverlay]);
+
+  useEffect(() => {
+    const host = hostElement;
+    if (!host || !image) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      onScaleChange(clampScale(imageTransform.scale + (event.deltaY > 0 ? -0.01 : 0.01)));
+    };
+
+    host.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      host.removeEventListener('wheel', handleWheel);
+    };
+  }, [hostElement, image, imageTransform.scale, onScaleChange]);
+
+  const toScreenPoint = useCallback((point: PreprocessPoint) => {
+    if (!displayTransform) return null;
+
+    return {
+      x: displayTransform.originX + point.x * displayTransform.width,
+      y: displayTransform.originY + point.y * displayTransform.height,
+    };
+  }, [displayTransform]);
+
+  const overlay = useMemo(() => {
+    if (!displayTransform || !normalizedChipBounds) return null;
+
+    const polygonPoints = [
+      { x: normalizedChipBounds.x, y: normalizedChipBounds.y },
+      { x: normalizedChipBounds.x + normalizedChipBounds.width, y: normalizedChipBounds.y },
+      { x: normalizedChipBounds.x + normalizedChipBounds.width, y: normalizedChipBounds.y + normalizedChipBounds.height },
+      { x: normalizedChipBounds.x, y: normalizedChipBounds.y + normalizedChipBounds.height },
+    ]
+      .map((point) => toScreenPoint(point))
+      .filter((point): point is NonNullable<typeof point> => Boolean(point));
+
+    if (polygonPoints.length !== 4) return null;
+
+    const markerSize = Math.max(0.04, Math.min(normalizedChipBounds.width, normalizedChipBounds.height) * 0.18);
+    const markerPoints = [
+      { x: normalizedChipBounds.x, y: normalizedChipBounds.y + normalizedChipBounds.height - markerSize },
+      { x: normalizedChipBounds.x, y: normalizedChipBounds.y + normalizedChipBounds.height },
+      { x: normalizedChipBounds.x + markerSize, y: normalizedChipBounds.y + normalizedChipBounds.height },
+    ]
+      .map((point) => toScreenPoint(point))
+      .filter((point): point is NonNullable<typeof point> => Boolean(point));
+
+    if (markerPoints.length !== 3) return null;
+
+    const cornerPoints = {
+      nw: polygonPoints[0],
+      ne: polygonPoints[1],
+      se: polygonPoints[2],
+      sw: polygonPoints[3],
+    };
+
+    const handlePoints: Record<LocalizationResizeHandle, { x: number; y: number }> = {
+      ...cornerPoints,
+      n: {
+        x: (cornerPoints.nw.x + cornerPoints.ne.x) / 2,
+        y: (cornerPoints.nw.y + cornerPoints.ne.y) / 2,
+      },
+      e: {
+        x: (cornerPoints.ne.x + cornerPoints.se.x) / 2,
+        y: (cornerPoints.ne.y + cornerPoints.se.y) / 2,
+      },
+      s: {
+        x: (cornerPoints.sw.x + cornerPoints.se.x) / 2,
+        y: (cornerPoints.sw.y + cornerPoints.se.y) / 2,
+      },
+      w: {
+        x: (cornerPoints.nw.x + cornerPoints.sw.x) / 2,
+        y: (cornerPoints.nw.y + cornerPoints.sw.y) / 2,
+      },
+    };
+
+    return {
+      polygonPoints,
+      markerPoints,
+      handlePoints,
+    };
+  }, [displayTransform, normalizedChipBounds, toScreenPoint]);
+
+  const swatch = LOCALIZATION_BOX_COLOR_SWATCHS[boxColor];
+
+  return (
+    <Stack flex='1' spacing={4} minW={0} data-testid='preprocess-localization-canvas-column'>
+      <Flex justify='space-between' align={{ base: 'flex-start', md: 'center' }} wrap='wrap' gap={3}>
+        <Stack spacing={1}>
+          <Heading size='sm'>Localization canvas</Heading>
+          <Text fontSize='sm' color='gray.500'>Directly manipulate the view and chip footprint with minimal framing around the stage.</Text>
+        </Stack>
+        <Badge colorScheme={image ? 'green' : 'orange'} borderRadius='full'>
+          {image ? 'Preview ready' : 'Awaiting eosin image'}
+        </Badge>
+      </Flex>
+
+      <Box
+        position='relative'
+        minH={{ base: '520px', lg: '760px' }}
+        h={{ base: '60vh', lg: '74vh' }}
+        maxH='900px'
+        borderRadius='2xl'
+        overflow='hidden'
+        bg='gray.900'
+        data-testid='localize-canvas-surface'
+      >
+        {image ? (
+          <>
+            <Box
+              ref={(node) => {
+                hostRef.current = node;
+                setHostElement(node);
+              }}
+              position='absolute'
+              inset={0}
+            >
+              <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+              {viewportSize && overlay ? (
+                <svg
+                  width='100%'
+                  height='100%'
+                  viewBox={`0 0 ${viewportSize.width} ${viewportSize.height}`}
+                  role='img'
+                  aria-label='Chip localization overlay'
+                  style={{ position: 'absolute', inset: 0, touchAction: 'none' }}
+                >
+                  <polygon
+                    points={overlay.polygonPoints.map((point) => `${point.x},${point.y}`).join(' ')}
+                    fill='none'
+                    stroke={swatch.stroke}
+                    strokeWidth={1}
+                    data-testid='localize-box-outline'
+                    pointerEvents='none'
+                  />
+                  <polygon
+                    points={overlay.polygonPoints.map((point) => `${point.x},${point.y}`).join(' ')}
+                    fill='transparent'
+                    stroke='transparent'
+                    strokeWidth={20}
+                    data-testid='localize-box-body'
+                    style={{ cursor: dragState ? 'grabbing' : 'move' }}
+                    onPointerDown={(event) => {
+                      if (!normalizedChipBounds) return;
+                      const point = getImagePoint(event.clientX, event.clientY);
+                      if (!point) return;
+                      event.preventDefault();
+                      setDragState({ kind: 'move', startPoint: point, startRect: normalizedChipBounds });
+                    }}
+                  />
+                  <polyline
+                    points={overlay.markerPoints.map((point) => `${point.x},${point.y}`).join(' ')}
+                    fill='none'
+                    stroke={swatch.stroke}
+                    strokeWidth={3}
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                  />
+                  <text
+                    x={overlay.markerPoints[1].x + 8}
+                    y={overlay.markerPoints[1].y - 8}
+                    fill={swatch.stroke}
+                    fontSize='12'
+                    fontWeight='700'
+                    pointerEvents='none'
+                  >
+                    LL
+                  </text>
+                  {ALL_HANDLE_ORDER.map((handle) => (
+                    <circle
+                      key={handle}
+                      cx={overlay.handlePoints[handle].x}
+                      cy={overlay.handlePoints[handle].y}
+                      r={13}
+                      fill='transparent'
+                      stroke='transparent'
+                      data-testid={`localize-box-handle-${handle}`}
+                      style={{
+                        cursor: handle === 'n' || handle === 's'
+                          ? 'ns-resize'
+                          : handle === 'e' || handle === 'w'
+                            ? 'ew-resize'
+                            : `${handle}-resize`,
+                      }}
+                      onPointerDown={(event) => {
+                        if (!normalizedChipBounds) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setDragState({ kind: 'resize', handle, startRect: normalizedChipBounds });
+                      }}
+                    />
+                  ))}
+                </svg>
+              ) : null}
+              {viewportSize && rotationOverlay ? (
+                <svg
+                  width='100%'
+                  height='100%'
+                  viewBox={`0 0 ${viewportSize.width} ${viewportSize.height}`}
+                  style={{ position: 'absolute', inset: 0, touchAction: 'none', pointerEvents: 'none' }}
+                  aria-hidden='true'
+                >
+                  <line
+                    x1={rotationOverlay.guidePoint.x}
+                    y1={rotationOverlay.guidePoint.y}
+                    x2={rotationOverlay.handlePoint.x}
+                    y2={rotationOverlay.handlePoint.y}
+                    stroke={swatch.stroke}
+                    strokeWidth={2}
+                    pointerEvents='none'
+                  />
+                  <circle
+                    cx={rotationOverlay.handlePoint.x}
+                    cy={rotationOverlay.handlePoint.y}
+                    r={11}
+                    fill='black'
+                    fillOpacity={0.75}
+                    stroke={swatch.stroke}
+                    strokeWidth={2}
+                    data-testid='localize-rotation-handle-visible'
+                    style={{ cursor: dragState?.kind === 'rotate' ? 'grabbing' : 'grab', pointerEvents: 'auto' }}
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setDragState({ kind: 'rotate' });
+                    }}
+                  />
+                </svg>
+              ) : null}
+            </Box>
+            <Box
+              position='absolute'
+              top={4}
+              right={4}
+              bg='blackAlpha.700'
+              color='whiteAlpha.950'
+              border='1px solid'
+              borderColor='whiteAlpha.300'
+              borderRadius='xl'
+              px={3}
+              py={3}
+              backdropFilter='blur(12px)'
+              data-testid='localize-stage-controls'
+            >
+              <Stack spacing={3}>
+                <Flex justify='space-between' align='center' gap={3}>
+                  <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Zoom</Text>
+                  <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-scale-value'>
+                    {(imageTransform.scale * 100).toFixed(0)}%
+                  </Text>
+                </Flex>
+                <ButtonGroup size='sm' isAttached variant='outline'>
+                  <Button data-testid='localize-stage-zoom-out' onClick={() => onScaleDelta(-0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    −
+                  </Button>
+                  <Button data-testid='localize-stage-zoom-in' onClick={() => onScaleDelta(0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    +
+                  </Button>
+                </ButtonGroup>
+                <Flex justify='space-between' align='center' gap={3}>
+                  <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Rotation</Text>
+                  <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-rotation-value'>
+                    {imageTransform.rotationDegrees.toFixed(1)}°
+                  </Text>
+                </Flex>
+                <ButtonGroup size='sm' isAttached variant='outline'>
+                  <Button data-testid='localize-stage-rotate-left' onClick={() => onRotationDelta(-90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    ↺
+                  </Button>
+                  <Button data-testid='localize-stage-rotate-right' onClick={() => onRotationDelta(90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    ↻
+                  </Button>
+                </ButtonGroup>
+              </Stack>
+            </Box>
+            <Box position='absolute' left={4} bottom={4} bg='blackAlpha.700' color='whiteAlpha.900' px={3} py={2} borderRadius='lg' maxW='320px'>
+              <Text fontSize='xs'>Saved chip coordinates stay axis-aligned in image space.</Text>
+            </Box>
+          </>
+        ) : (
+          <Flex align='center' justify='center' h='100%' px={6} textAlign='center'>
+            <Stack spacing={3} maxW='420px'>
+              <Text fontSize='lg' fontWeight='semibold' color='whiteAlpha.900'>No eosin image loaded</Text>
+              <Text color='whiteAlpha.700'>Upload the eosin source from the properties rail to preview and localize the chip footprint here.</Text>
+            </Stack>
+          </Flex>
+        )}
+      </Box>
+    </Stack>
+  );
+}

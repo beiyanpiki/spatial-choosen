@@ -1,0 +1,136 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e293]:
+    - generic [ref=e294]:
+      - generic [ref=e295]:
+        - generic [ref=e296]:
+          - button "← Back to preprocess projects" [ref=e297] [cursor=pointer]
+          - generic [ref=e298]:
+            - heading "Preprocess workspace" [level=2] [ref=e299]
+            - paragraph [ref=e300]: The preprocess shell now includes an interactive localization stage with autosaved image transforms and normalized chip bounds.
+        - generic [ref=e301]:
+          - paragraph [ref=e302]: Autosave
+          - generic [ref=e303]: saved
+          - paragraph [ref=e304]: last saved at 10:29:47 AM
+      - generic [ref=e305]:
+        - generic [ref=e306]:
+          - paragraph [ref=e307]: Workflow
+          - button "Source Upload Eosin + H&E inputs ready" [ref=e308] [cursor=pointer]:
+            - generic [ref=e309]:
+              - paragraph [ref=e310]: Source
+              - paragraph [ref=e311]: Upload Eosin + H&E inputs
+            - generic [ref=e312]: ready
+          - button "Localize Place the chip footprint idle" [ref=e313] [cursor=pointer]:
+            - generic [ref=e314]:
+              - paragraph [ref=e315]: Localize
+              - paragraph [ref=e316]: Place the chip footprint
+            - generic [ref=e317]: idle
+          - button "Align Register both source images idle" [disabled] [ref=e318]:
+            - generic [ref=e319]:
+              - paragraph [ref=e320]: Align
+              - paragraph [ref=e321]: Register both source images
+            - generic [ref=e322]: idle
+          - button "Crop Inspect crop + QC bounds idle" [disabled] [ref=e323]:
+            - generic [ref=e324]:
+              - paragraph [ref=e325]: Crop
+              - paragraph [ref=e326]: Inspect crop + QC bounds
+            - generic [ref=e327]: idle
+          - button "Chip Preview spot grid settings idle" [disabled] [ref=e328]:
+            - generic [ref=e329]:
+              - paragraph [ref=e330]: Chip
+              - paragraph [ref=e331]: Preview spot grid settings
+            - generic [ref=e332]: idle
+          - button "Tissue Select capture regions idle" [disabled] [ref=e333]:
+            - generic [ref=e334]:
+              - paragraph [ref=e335]: Tissue
+              - paragraph [ref=e336]: Select capture regions
+            - generic [ref=e337]: idle
+          - button "Export Package outputs for handoff idle" [disabled] [ref=e338]:
+            - generic [ref=e339]:
+              - paragraph [ref=e340]: Export
+              - paragraph [ref=e341]: Package outputs for handoff
+            - generic [ref=e342]: idle
+        - generic [ref=e344]:
+          - generic [ref=e346]:
+            - generic [ref=e347]: Localize
+            - heading "Chip localization" [level=2] [ref=e348]
+            - paragraph [ref=e349]: Rotate or flip the displayed eosin image, drag the chip box, and keep the saved rectangle normalized and axis-aligned in image coordinates.
+          - generic [ref=e350]:
+            - paragraph [ref=e351]: Project name
+            - textbox [ref=e352]: manual-transform-layout-qa
+            - paragraph [ref=e353]: Draft changes save when you move to the next preprocess step.
+          - generic [ref=e354]:
+            - generic [ref=e355]:
+              - generic [ref=e357]:
+                - heading "Image" [level=2] [ref=e358]
+                - paragraph [ref=e360]: Upload an eosin image to start localization.
+                - generic [ref=e361]: Image missing
+                - button "Upload eosin image" [ref=e362] [cursor=pointer]
+              - generic [ref=e364]:
+                - heading "Transform" [level=2] [ref=e365]
+                - generic [ref=e367]:
+                  - generic [ref=e368]:
+                    - heading "Rotation" [level=2] [ref=e369]
+                    - paragraph [ref=e370]: 0.0°
+                  - generic [ref=e371]:
+                    - slider [ref=e372]: "0"
+                    - generic [ref=e373]:
+                      - spinbutton [ref=e374]: "0.0"
+                      - paragraph [ref=e375]: degrees
+                  - generic [ref=e376]:
+                    - group [ref=e377]:
+                      - button "-90°" [ref=e378] [cursor=pointer]
+                      - button "+90°" [ref=e379] [cursor=pointer]
+                    - group [ref=e380]:
+                      - button "Decrease rotation" [ref=e381] [cursor=pointer]: "-0.1°"
+                      - button "Increase rotation" [ref=e382] [cursor=pointer]: +0.1°
+                - generic [ref=e384]:
+                  - generic [ref=e385]:
+                    - heading "Scale (Zoom)" [level=2] [ref=e386]
+                    - paragraph [ref=e387]: 100%
+                  - generic [ref=e388]:
+                    - slider [ref=e389]: "1"
+                    - generic [ref=e390]:
+                      - spinbutton [ref=e391]: "100"
+                      - paragraph [ref=e392]: percent
+                  - group [ref=e394]:
+                    - button "Decrease zoom" [ref=e395] [cursor=pointer]: "-1%"
+                    - button "Increase zoom" [ref=e396] [cursor=pointer]: +1%
+                - generic [ref=e397]:
+                  - button "Flip Horizontal" [ref=e398] [cursor=pointer]
+                  - button "Flip Vertical" [ref=e399] [cursor=pointer]
+                - button "↺ Reset Transform" [ref=e401] [cursor=pointer]
+              - generic [ref=e403]:
+                - heading "Box" [level=2] [ref=e404]
+                - generic [ref=e405]:
+                  - paragraph [ref=e406]: Chip box color
+                  - paragraph [ref=e407]: Default green, optional white.
+                - group [ref=e408]:
+                  - button "RGB(0,255,0)" [ref=e409] [cursor=pointer]
+                  - button "RGB(255,255,255)" [ref=e410] [cursor=pointer]
+            - generic [ref=e411]:
+              - generic [ref=e412]:
+                - generic [ref=e413]:
+                  - paragraph [ref=e414]: Canvas stage
+                  - paragraph [ref=e415]: Lower-left marker stays attached to the saved chip rectangle semantics.
+                - generic [ref=e416]: Awaiting eosin image
+              - generic [ref=e419]:
+                - paragraph [ref=e420]: No eosin image loaded
+                - paragraph [ref=e421]: Upload the eosin source from the panel to preview and localize the chip footprint here.
+          - generic [ref=e423]:
+            - heading "Current saved context" [level=2] [ref=e424]
+            - paragraph [ref=e425]: Workflow version 1
+            - paragraph [ref=e426]: "Current step: localization"
+            - paragraph [ref=e427]: "Eosin: missing"
+            - paragraph [ref=e428]: "H&E: missing"
+            - paragraph [ref=e429]: Created 4/3/2026, 10:29:27 AM • Updated 4/3/2026, 10:29:47 AM
+    - paragraph [ref=e430]: "@M20 Genomics"
+  - button "Open Next.js Dev Tools" [ref=e40] [cursor=pointer]:
+    - img [ref=e41]
+  - alert [ref=e44]
+  - generic:
+    - region "Notifications-top"
+    - region "Notifications-top-left"
+    - region "Notifications-top-right"
+    - region "Notifications-bottom-left"
+    - region "Notifications-bottom"
+    - region "Notifications-bottom-right"

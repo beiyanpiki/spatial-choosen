@@ -1,0 +1,61 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: Local only
+        - heading "Preprocess Workspace" [level=2] [ref=e7]
+        - paragraph [ref=e8]: Create a preprocess project to organize source images, move through the step-by-step shell, and keep every saved snapshot in this browser only.
+      - generic [ref=e9]:
+        - generic [ref=e10]:
+          - generic [ref=e12]:
+            - generic [ref=e13]:
+              - heading "New preprocess project" [level=2] [ref=e14]
+              - paragraph [ref=e15]: Start with an empty shell. Source image upload arrives inside the workflow.
+            - generic [ref=e16]:
+              - paragraph [ref=e17]: Project name
+              - textbox "Tumor preprocess set A" [ref=e18]
+            - button "Create preprocess project" [disabled] [ref=e19]
+          - generic [ref=e21]:
+            - generic [ref=e22]:
+              - heading "Import preprocess project" [level=2] [ref=e23]
+              - paragraph [ref=e24]: Restore a saved preprocess package without mixing it into annotation projects.
+            - button "Select file to import" [ref=e25] [cursor=pointer]
+            - paragraph [ref=e26]: Malformed imports are rejected before anything in local storage is replaced.
+        - generic [ref=e27]:
+          - generic [ref=e28]:
+            - heading "Saved preprocess projects" [level=2] [ref=e29]
+            - generic [ref=e30]: Stored locally
+          - paragraph [ref=e31]: Open an existing shell, delete old drafts, or continue from an imported package.
+          - generic [ref=e44]:
+            - generic [ref=e45]:
+              - button "Delete manual-qa-quota-1775039861375" [ref=e46] [cursor=pointer]:
+                - img [ref=e47]
+              - generic [ref=e49]:
+                - generic [ref=e50]
+                - generic [ref=e53]
+                - button "Open workspace" [ref=e57] [cursor=pointer]
+            - generic [ref=e58]:
+              - button "Delete manual-qa-quota-1775039796213" [ref=e59] [cursor=pointer]:
+                - img [ref=e60]
+              - generic [ref=e62]:
+                - generic [ref=e63]
+                - generic [ref=e66]
+                - button "Open workspace" [ref=e70] [cursor=pointer]
+            - generic [ref=e71]:
+              - button "Delete manual-qa-quota-1775039690933" [ref=e72] [cursor=pointer]:
+                - img [ref=e73]
+              - generic [ref=e75]:
+                - generic [ref=e76]
+                - generic [ref=e79]
+                - button "Open workspace" [ref=e83] [cursor=pointer]
+    - paragraph [ref=e34]: "@M20 Genomics"
+  - button "Open Next.js Dev Tools" [ref=e40] [cursor=pointer]:
+    - img [ref=e41]
+  - alert [ref=e84]
+  - generic:
+    - region "Notifications-top"
+    - region "Notifications-top-left"
+    - region "Notifications-top-right"
+    - region "Notifications-bottom-left"
+    - region "Notifications-bottom"
+    - region "Notifications-bottom-right"

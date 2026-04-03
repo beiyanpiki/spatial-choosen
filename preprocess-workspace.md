@@ -1,0 +1,67 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e137]:
+    - generic [ref=e138]:
+      - generic [ref=e139]:
+        - generic [ref=e140]:
+          - button "← Back to preprocess projects" [ref=e141] [cursor=pointer]
+          - generic [ref=e142]:
+            - heading "Preprocess workspace" [level=2] [ref=e143]
+            - paragraph [ref=e144]: The preprocess shell now includes an interactive localization stage with autosaved image transforms and normalized chip bounds.
+        - generic [ref=e145]:
+          - paragraph [ref=e146]: Autosave
+          - generic [ref=e147]: saved
+          - paragraph [ref=e148]: last saved at 11:52:27 PM
+      - generic [ref=e149]:
+        - generic [ref=e150]:
+          - paragraph [ref=e151]: Workflow
+          - button "Source Upload Eosin + H&E inputs ready" [ref=e152] [cursor=pointer]:
+            - generic [ref=e153]
+            - generic [ref=e156]: ready
+          - button "Localize Place the chip footprint idle" [ref=e157] [cursor=pointer]:
+            - generic [ref=e158]
+            - generic [ref=e161]: idle
+          - button "Align Register both source images idle" [disabled] [ref=e162]:
+            - generic [ref=e163]
+            - generic [ref=e166]: idle
+          - button "Crop Inspect crop + QC bounds idle" [disabled] [ref=e167]:
+            - generic [ref=e168]
+            - generic [ref=e171]: idle
+          - button "Chip Preview spot grid settings idle" [disabled] [ref=e172]:
+            - generic [ref=e173]
+            - generic [ref=e176]: idle
+          - button "Tissue Select capture regions idle" [disabled] [ref=e177]:
+            - generic [ref=e178]
+            - generic [ref=e181]: idle
+          - button "Export Package outputs for handoff idle" [disabled] [ref=e182]:
+            - generic [ref=e183]
+            - generic [ref=e186]: idle
+        - generic [ref=e188]:
+          - generic [ref=e190]:
+            - generic [ref=e191]: Source
+            - heading "Source image intake" [level=2] [ref=e192]
+            - paragraph [ref=e193]: This shell is ready for later source-image upload work. Imported projects will still hydrate saved Eosin/H&E assets.
+          - generic [ref=e194]:
+            - paragraph [ref=e195]: Project name
+            - textbox [ref=e196]: ulw-affine-regression
+            - paragraph [ref=e197]: Draft changes save when you move to the next preprocess step.
+          - generic [ref=e199]:
+            - heading "Source image intake" [level=2] [ref=e200]
+            - paragraph [ref=e201]: This shell is ready for later source-image upload work. Imported projects will still hydrate saved Eosin/H&E assets.
+          - generic [ref=e203]:
+            - heading "Current saved context" [level=2] [ref=e204]
+            - paragraph [ref=e205]: Workflow version 1
+            - paragraph [ref=e206]: "Current step: sourceAssets"
+            - paragraph [ref=e207]: "Eosin: missing"
+            - paragraph [ref=e208]: "H&E: missing"
+            - paragraph [ref=e209]: Created 4/1/2026, 11:52:27 PM • Updated 4/1/2026, 11:52:27 PM
+    - paragraph [ref=e210]: "@M20 Genomics"
+  - button "Open Next.js Dev Tools" [ref=e40] [cursor=pointer]:
+    - img [ref=e41]
+  - alert [ref=e136]
+  - generic:
+    - region "Notifications-top"
+    - region "Notifications-top-left"
+    - region "Notifications-top-right"
+    - region "Notifications-bottom-left"
+    - region "Notifications-bottom"
+    - region "Notifications-bottom-right"

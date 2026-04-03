@@ -1,0 +1,516 @@
+import type {
+  AlignmentAffineMatrix,
+  AlignmentControlPoint,
+  AlignmentFailureReason,
+  AlignmentQualityFlags,
+  AlignmentSlice,
+  AlignmentTransform,
+  LocalizationImageTransform,
+  PreprocessRect,
+  PreprocessStepStatus,
+} from '@/types/preprocess';
+import { normalizeLocalizationImageTransform } from './localization';
+import type { CvMat, OpenCvRuntime } from './loadOpenCv';
+
+export const ALIGNMENT_MIN_PAIRS = 7;
+export const ALIGNMENT_TARGET_PAIRS = 15;
+export const ALIGNMENT_MIN_INLIER_RATIO = 0.2;
+export const ALIGNMENT_COVERAGE_THRESHOLD = 0.6;
+export const ALIGNMENT_SCALE_MIN = 0.067;
+export const ALIGNMENT_SCALE_MAX = 15;
+export const ALIGNMENT_RANSAC_MAX_ITERS = 2000;
+export const ALIGNMENT_RANSAC_CONFIDENCE = 0.99;
+export const ALIGNMENT_RANSAC_REFINE_ITERS = 10;
+export const ALIGNMENT_RMSE_MULTIPLIER = 6;
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const defaultQualityFlags = (): AlignmentQualityFlags => ({
+  minPairs: false,
+  inlierRatio: false,
+  rmse: false,
+  finiteMatrix: false,
+  scaleRange: false,
+  accepted: false,
+});
+
+export type AlignmentCoverage = {
+  spanX: number;
+  spanY: number;
+  coverageRatioX: number;
+  coverageRatioY: number;
+  warning: boolean;
+};
+
+export function computeCoverageWarning(
+  points: readonly AlignmentControlPoint[],
+  chipBounds: PreprocessRect | null,
+): AlignmentCoverage {
+  if (points.length === 0) {
+    return {
+      spanX: 0,
+      spanY: 0,
+      coverageRatioX: 0,
+      coverageRatioY: 0,
+      warning: true,
+    };
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const point of points) {
+    minX = Math.min(minX, point.source.x);
+    minY = Math.min(minY, point.source.y);
+    maxX = Math.max(maxX, point.source.x);
+    maxY = Math.max(maxY, point.source.y);
+  }
+
+  const spanX = Math.max(0, maxX - minX);
+  const spanY = Math.max(0, maxY - minY);
+  const basisWidth = Math.max(1e-6, chipBounds?.width ?? 1);
+  const basisHeight = Math.max(1e-6, chipBounds?.height ?? 1);
+  const coverageRatioX = spanX / basisWidth;
+  const coverageRatioY = spanY / basisHeight;
+
+  return {
+    spanX,
+    spanY,
+    coverageRatioX,
+    coverageRatioY,
+    warning: coverageRatioX < ALIGNMENT_COVERAGE_THRESHOLD || coverageRatioY < ALIGNMENT_COVERAGE_THRESHOLD,
+  };
+}
+
+const safeNumber = (value: number, fallback = 0) => (Number.isFinite(value) ? value : fallback);
+
+const deriveTransform = (matrix: AlignmentAffineMatrix): AlignmentTransform => {
+  const [a, b, tx, c, d, ty] = matrix;
+  const scaleX = Math.hypot(a, c);
+  const scaleY = Math.hypot(b, d);
+  const rotationDegrees = Math.atan2(c, a) * (180 / Math.PI);
+
+  return {
+    translationX: tx,
+    translationY: ty,
+    rotationDegrees,
+    scaleX,
+    scaleY,
+  };
+};
+
+type PixelPoint = { x: number; y: number };
+
+type AffineFit = {
+  matrix: AlignmentAffineMatrix;
+  rmse: number;
+};
+
+const computeReprojectionRmse = (
+  fromPoints: readonly PixelPoint[],
+  toPoints: readonly PixelPoint[],
+  matrix: AlignmentAffineMatrix,
+) => {
+  const [m00, m01, tx, m10, m11, ty] = matrix;
+
+  let errorSum = 0;
+  for (let index = 0; index < fromPoints.length; index += 1) {
+    const from = fromPoints[index];
+    const to = toPoints[index];
+    const projectedX = m00 * from.x + m01 * from.y + tx;
+    const projectedY = m10 * from.x + m11 * from.y + ty;
+    const dx = projectedX - to.x;
+    const dy = projectedY - to.y;
+    errorSum += dx * dx + dy * dy;
+  }
+
+  return Math.sqrt(errorSum / Math.max(1, fromPoints.length));
+};
+
+const solveLinearSystem = (matrix: number[][], vector: number[]): number[] | null => {
+  const size = vector.length;
+  const augmented = matrix.map((row, index) => [...row, vector[index]]);
+
+  for (let pivot = 0; pivot < size; pivot += 1) {
+    let bestRow = pivot;
+    let bestValue = Math.abs(augmented[pivot][pivot]);
+
+    for (let row = pivot + 1; row < size; row += 1) {
+      const candidateValue = Math.abs(augmented[row][pivot]);
+      if (candidateValue > bestValue) {
+        bestRow = row;
+        bestValue = candidateValue;
+      }
+    }
+
+    if (bestValue <= Number.EPSILON) return null;
+
+    if (bestRow !== pivot) {
+      const temp = augmented[pivot];
+      augmented[pivot] = augmented[bestRow];
+      augmented[bestRow] = temp;
+    }
+
+    const pivotValue = augmented[pivot][pivot];
+    for (let column = pivot; column <= size; column += 1) {
+      augmented[pivot][column] /= pivotValue;
+    }
+
+    for (let row = 0; row < size; row += 1) {
+      if (row === pivot) continue;
+      const factor = augmented[row][pivot];
+      if (Math.abs(factor) <= Number.EPSILON) continue;
+      for (let column = pivot; column <= size; column += 1) {
+        augmented[row][column] -= factor * augmented[pivot][column];
+      }
+    }
+  }
+
+  return augmented.map((row) => row[size]);
+};
+
+const solveLeastSquaresAffineTransform = (
+  fromPoints: readonly PixelPoint[],
+  toPoints: readonly PixelPoint[],
+): AffineFit | null => {
+  if (fromPoints.length !== toPoints.length || fromPoints.length < 3) return null;
+
+  const ata = Array.from({ length: 6 }, () => Array.from({ length: 6 }, () => 0));
+  const atb = Array.from({ length: 6 }, () => 0);
+
+  const accumulate = (row: readonly number[], target: number) => {
+    for (let left = 0; left < 6; left += 1) {
+      atb[left] += row[left] * target;
+      for (let right = 0; right < 6; right += 1) {
+        ata[left][right] += row[left] * row[right];
+      }
+    }
+  };
+
+  for (let index = 0; index < fromPoints.length; index += 1) {
+    const from = fromPoints[index];
+    const to = toPoints[index];
+    accumulate([from.x, from.y, 1, 0, 0, 0], to.x);
+    accumulate([0, 0, 0, from.x, from.y, 1], to.y);
+  }
+
+  const solution = solveLinearSystem(ata, atb);
+  if (!solution) return null;
+
+  const matrix: AlignmentAffineMatrix = [
+    solution[0],
+    solution[1],
+    solution[2],
+    solution[3],
+    solution[4],
+    solution[5],
+  ];
+
+  return {
+    matrix,
+    rmse: computeReprojectionRmse(fromPoints, toPoints, matrix),
+  };
+};
+
+const getRansacThreshold = (width: number, height: number) => clamp(0.003 * Math.min(width, height), 3, 12);
+
+const readAffineData = (mat: CvMat): AlignmentAffineMatrix | null => {
+  const source = mat.data64F?.length >= 6
+    ? mat.data64F
+    : mat.data32F?.length >= 6
+      ? mat.data32F
+      : null;
+
+  if (!source) return null;
+
+  return [source[0], source[1], source[2], source[3], source[4], source[5]];
+};
+
+type NormalizationFrame = {
+  centerX: number;
+  centerY: number;
+  scale: number;
+};
+
+const toNormalizedFlatArray = (
+  points: readonly { x: number; y: number }[],
+  frame: NormalizationFrame,
+) => {
+  const out: number[] = [];
+
+  for (const point of points) {
+    out.push((point.x - frame.centerX) / frame.scale, (point.y - frame.centerY) / frame.scale);
+  }
+
+  return out;
+};
+
+const resolveFailureReason = (qualityFlags: AlignmentQualityFlags, solveFailed: boolean): AlignmentFailureReason | null => {
+  if (!qualityFlags.minPairs) return 'insufficient-pairs';
+  if (solveFailed) return 'solve-failed';
+  if (!qualityFlags.finiteMatrix || !qualityFlags.scaleRange) return 'invalid-matrix';
+  if (!qualityFlags.inlierRatio) return 'insufficient-inliers';
+  if (!qualityFlags.rmse) return 'rmse-too-high';
+  return null;
+};
+
+export type SolveAffineAlignmentInput = {
+  cv: OpenCvRuntime;
+  controlPoints: readonly AlignmentControlPoint[];
+  chipBounds: PreprocessRect | null;
+  referenceImageSize: { width: number; height: number };
+  movingImageSize: { width: number; height: number };
+  forceMode?: boolean;
+};
+
+export type SolveAffineAlignmentOutput = {
+  inlierMask: boolean[];
+  affineMatrix: AlignmentAffineMatrix | null;
+  reprojectionRmse: number | null;
+  inlierRatio: number;
+  ransacReprojThreshold: number;
+  transform: AlignmentTransform | null;
+  qualityFlags: AlignmentQualityFlags;
+  solveAccepted: boolean;
+  failureReason: AlignmentFailureReason | null;
+};
+
+export function solveAffineAlignment({
+  cv,
+  controlPoints,
+  chipBounds,
+  referenceImageSize,
+  movingImageSize,
+  forceMode = false,
+}: SolveAffineAlignmentInput): SolveAffineAlignmentOutput {
+  const pointCount = controlPoints.length;
+  const ransacReprojThreshold = getRansacThreshold(referenceImageSize.width, referenceImageSize.height);
+  const qualityFlags = defaultQualityFlags();
+  qualityFlags.minPairs = pointCount >= ALIGNMENT_MIN_PAIRS;
+
+  if (!qualityFlags.minPairs) {
+    return {
+      inlierMask: [],
+      affineMatrix: null,
+      reprojectionRmse: null,
+      inlierRatio: 0,
+      ransacReprojThreshold,
+      transform: null,
+      qualityFlags,
+      solveAccepted: false,
+      failureReason: 'insufficient-pairs',
+    };
+  }
+
+  const sourcePixels = controlPoints.map((pair) => ({
+    x: pair.source.x * referenceImageSize.width,
+    y: pair.source.y * referenceImageSize.height,
+  }));
+  const movingPixels = controlPoints.map((pair) => ({
+    x: pair.target.x * movingImageSize.width,
+    y: pair.target.y * movingImageSize.height,
+  }));
+
+  const referenceFrame: NormalizationFrame = {
+    centerX: referenceImageSize.width / 2,
+    centerY: referenceImageSize.height / 2,
+    scale: Math.max(1, Math.min(referenceImageSize.width, referenceImageSize.height)),
+  };
+  const movingFrame: NormalizationFrame = {
+    centerX: movingImageSize.width / 2,
+    centerY: movingImageSize.height / 2,
+    scale: Math.max(1, Math.min(movingImageSize.width, movingImageSize.height)),
+  };
+
+  const fromArray = toNormalizedFlatArray(movingPixels, movingFrame);
+  const toArray = toNormalizedFlatArray(sourcePixels, referenceFrame);
+  const normalizedThreshold = ransacReprojThreshold / referenceFrame.scale;
+
+  let fromMat: CvMat | null = null;
+  let toMat: CvMat | null = null;
+  let inlierMaskMat: CvMat | null = null;
+  let affineMat: CvMat | null = null;
+
+  let affineMatrix: AlignmentAffineMatrix | null = null;
+  let solveFailed = false;
+  let inlierMask: boolean[] = Array.from({ length: pointCount }, () => false);
+  let inlierIndices: number[] = [];
+
+  try {
+    if (typeof (cv as unknown as { setRNGSeed?: (seed: number) => void }).setRNGSeed === 'function') {
+      (cv as unknown as { setRNGSeed: (seed: number) => void }).setRNGSeed(1337);
+    }
+
+    fromMat = cv.matFromArray(pointCount, 2, cv.CV_64F, fromArray);
+    toMat = cv.matFromArray(pointCount, 2, cv.CV_64F, toArray);
+    inlierMaskMat = new cv.Mat();
+
+    if (forceMode) {
+      const fitted = solveLeastSquaresAffineTransform(movingPixels, sourcePixels);
+      if (fitted) {
+        affineMatrix = fitted.matrix;
+        inlierMask = Array.from({ length: pointCount }, () => true);
+        inlierIndices = sourcePixels.map((_, index) => index);
+      } else {
+        affineMatrix = null;
+        solveFailed = true;
+      }
+    } else {
+      affineMat = cv.estimateAffine2D(
+        fromMat,
+        toMat,
+        inlierMaskMat,
+        cv.RANSAC,
+        normalizedThreshold,
+        ALIGNMENT_RANSAC_MAX_ITERS,
+        ALIGNMENT_RANSAC_CONFIDENCE,
+        ALIGNMENT_RANSAC_REFINE_ITERS,
+      );
+
+      inlierMask = Array.from({ length: pointCount }, (_, index) => {
+        if (!inlierMaskMat) return false;
+        if (inlierMaskMat.data.length > index) return inlierMaskMat.data[index] > 0;
+        return false;
+      });
+
+      if (!affineMat || affineMat.empty() || !readAffineData(affineMat)) {
+        solveFailed = true;
+      }
+
+      inlierIndices = inlierMask
+        .map((isInlier, index) => (isInlier ? index : -1))
+        .filter((index) => index >= 0);
+
+      const estimatedAffineMatrix = affineMat ? readAffineData(affineMat) : null;
+      if (estimatedAffineMatrix) {
+        affineMatrix = estimatedAffineMatrix;
+        if (inlierIndices.length < 2) {
+          inlierMask = Array.from({ length: pointCount }, () => true);
+          inlierIndices = sourcePixels.map((_, index) => index);
+        }
+      } else {
+        affineMatrix = null;
+        solveFailed = true;
+      }
+    }
+
+    const inlierCount = inlierMask.filter(Boolean).length;
+    const inlierRatio = pointCount > 0 ? inlierCount / pointCount : 0;
+
+    let reprojectionRmse: number | null = null;
+    if (affineMatrix) {
+      const [a, b, tx, c, d, ty] = affineMatrix;
+      const indices = inlierIndices.length > 0 ? inlierIndices : sourcePixels.map((_, index) => index);
+
+      let errorSum = 0;
+      for (const index of indices) {
+        const moving = movingPixels[index];
+        const source = sourcePixels[index];
+        const projectedX = a * moving.x + b * moving.y + tx;
+        const projectedY = c * moving.x + d * moving.y + ty;
+        const dx = projectedX - source.x;
+        const dy = projectedY - source.y;
+        errorSum += dx * dx + dy * dy;
+      }
+
+      reprojectionRmse = Math.sqrt(errorSum / Math.max(1, indices.length));
+    }
+
+    const finiteMatrix = Boolean(affineMatrix?.every((value) => Number.isFinite(value)));
+    const scaleX = affineMatrix ? Math.hypot(affineMatrix[0], affineMatrix[3]) : Number.NaN;
+    const scaleY = affineMatrix ? Math.hypot(affineMatrix[1], affineMatrix[4]) : Number.NaN;
+    const scaleRange = Number.isFinite(scaleX)
+      && Number.isFinite(scaleY)
+      && scaleX >= ALIGNMENT_SCALE_MIN
+      && scaleX <= ALIGNMENT_SCALE_MAX
+      && scaleY >= ALIGNMENT_SCALE_MIN
+      && scaleY <= ALIGNMENT_SCALE_MAX;
+
+    qualityFlags.finiteMatrix = finiteMatrix;
+    qualityFlags.scaleRange = scaleRange;
+    qualityFlags.inlierRatio = inlierRatio >= ALIGNMENT_MIN_INLIER_RATIO;
+    qualityFlags.rmse = reprojectionRmse !== null && reprojectionRmse <= ALIGNMENT_RMSE_MULTIPLIER * ransacReprojThreshold;
+    const hasSufficientCoverage = !computeCoverageWarning(controlPoints, chipBounds).warning;
+    qualityFlags.accepted = qualityFlags.minPairs
+      && qualityFlags.inlierRatio
+      && qualityFlags.rmse
+      && qualityFlags.finiteMatrix
+      && qualityFlags.scaleRange
+      && hasSufficientCoverage;
+
+    const solveAccepted = forceMode
+      ? finiteMatrix && affineMatrix !== null
+      : qualityFlags.accepted;
+
+    const failureReason = forceMode
+      ? null
+      : (hasSufficientCoverage
+        ? resolveFailureReason(qualityFlags, solveFailed)
+        : 'insufficient-inliers');
+
+    return {
+      inlierMask,
+      affineMatrix: finiteMatrix ? affineMatrix : null,
+      reprojectionRmse,
+      inlierRatio,
+      ransacReprojThreshold,
+      transform: finiteMatrix && affineMatrix ? deriveTransform(affineMatrix) : null,
+      qualityFlags,
+      solveAccepted,
+      failureReason,
+    };
+  } finally {
+    affineMat?.delete();
+    inlierMaskMat?.delete();
+    fromMat?.delete();
+    toMat?.delete();
+  }
+}
+
+export function normalizeAlignmentSlice(slice: AlignmentSlice): AlignmentSlice {
+  return {
+    ...slice,
+    movingImageTransform: normalizeLocalizationImageTransform(
+      slice.movingImageTransform as Partial<LocalizationImageTransform> | null | undefined,
+    ),
+    inlierMask: Array.isArray(slice.inlierMask) ? slice.inlierMask.map(Boolean) : null,
+    affineMatrix: slice.affineMatrix && slice.affineMatrix.length === 6
+      ? [
+          safeNumber(slice.affineMatrix[0]),
+          safeNumber(slice.affineMatrix[1]),
+          safeNumber(slice.affineMatrix[2]),
+          safeNumber(slice.affineMatrix[3]),
+          safeNumber(slice.affineMatrix[4]),
+          safeNumber(slice.affineMatrix[5]),
+        ]
+      : null,
+    reprojectionRmse: typeof slice.reprojectionRmse === 'number' && Number.isFinite(slice.reprojectionRmse)
+      ? slice.reprojectionRmse
+      : null,
+    inlierRatio: typeof slice.inlierRatio === 'number' && Number.isFinite(slice.inlierRatio) ? slice.inlierRatio : null,
+    ransacReprojThreshold: typeof slice.ransacReprojThreshold === 'number' && Number.isFinite(slice.ransacReprojThreshold)
+      ? slice.ransacReprojThreshold
+      : null,
+    qualityFlags: {
+      ...defaultQualityFlags(),
+      ...(slice.qualityFlags ?? {}),
+      accepted: Boolean(slice.qualityFlags?.accepted),
+    },
+    solveAccepted: Boolean(slice.solveAccepted),
+    failureReason: slice.failureReason ?? null,
+  };
+}
+
+export function computeAlignmentStatus(args: {
+  hasReferenceImage: boolean;
+  hasMovingImage: boolean;
+  solveAccepted: boolean;
+  failureReason: AlignmentFailureReason | null;
+}): PreprocessStepStatus {
+  if (!args.hasReferenceImage || !args.hasMovingImage) return 'idle';
+  if (args.solveAccepted) return 'complete';
+  if (args.failureReason) return 'error';
+  return 'ready';
+}
