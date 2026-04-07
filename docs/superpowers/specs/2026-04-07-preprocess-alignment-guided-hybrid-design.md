@@ -94,7 +94,7 @@ This keeps editing available, but reduces accidental deletes and removes the nee
 
 ### Controls and status hierarchy
 
-The shared workflow panel should be visually compact and prioritized by decision importance.
+The shared workflow panel must be visually compact and prioritized by decision importance.
 
 1. Top section: pair count, solve readiness, OpenCV/runtime status, and current alignment status.
 2. Middle section: current instruction, pending half-pair state, and selected-pair contextual actions.
@@ -104,7 +104,7 @@ The shared workflow panel should be visually compact and prioritized by decision
 
 ### Canvas-local overlays
 
-Per-canvas overlays should only contain controls local to that canvas.
+Per-canvas overlays must only contain controls local to that canvas.
 
 1. Reference/Eosin overlay:
    - zoom controls
@@ -115,9 +115,87 @@ Per-canvas overlays should only contain controls local to that canvas.
    - scale controls
    - flip actions
    - reset transform
-3. Both overlays should follow the same visual treatment already used in `CanvasStage.tsx`: dark translucent panel, light border, rounded corners, blurred backdrop.
+3. Both overlays must follow the same visual treatment already used in `CanvasStage.tsx`: dark translucent panel, light border, rounded corners, blurred backdrop.
 
 This separates workflow controls from image-prep controls and prevents the moving-image transform block from visually overwhelming Pair points.
+
+### State ownership
+
+The redesign must keep a strict boundary between persisted alignment data and ephemeral UI state.
+
+**Persisted in `AlignmentSlice` (existing source of truth):**
+
+- `controlPoints`
+- `movingImageTransform`
+- `inlierMask`
+- `affineMatrix`
+- `reprojectionRmse`
+- `inlierRatio`
+- `ransacReprojThreshold`
+- `qualityFlags`
+- `solveAccepted`
+- `failureReason`
+- `transform`
+- step `status` / `error` / `updatedAt`
+
+**Local-only UI state inside the alignment UI:**
+
+- current guided action state (`idle-add`, `awaiting-source`, `awaiting-target`, `selected-pair`, `reposition-source`, `reposition-target`)
+- pending half-pair before a completed pair is committed to `controlPoints`
+- selected pair id
+- OpenCV runtime loading surface state (`runtimeStatus`, `runtimeError`)
+- per-canvas zoom and pan state
+- per-canvas drag state and pointer-tracking state
+- collapse/visibility state for diagnostic sections
+
+Rules:
+
+1. Pending half-pairs are **not persisted** to `AlignmentSlice`.
+2. Pair selection and reposition sub-state are **not persisted**.
+3. Per-canvas zoom/pan remain independent and **do not** sync between canvases.
+4. Only completed pair commits, moving-image transform changes, and solve/reset actions mutate `AlignmentSlice`.
+
+### Interaction contract
+
+The redesign must define one unambiguous behavior for each user action.
+
+#### Pair creation
+
+1. Default entry state is `awaiting-source`.
+2. Clicking the reference/Eosin canvas background records a local pending source point and advances to `awaiting-target`.
+3. Clicking the moving/H&E canvas background while in `awaiting-target` creates one new `AlignmentControlPoint`, clears the pending state, and returns to `awaiting-source`.
+4. Clicking the wrong canvas while a half-pair is pending does not create a second source or second target point; the UI must keep the current instruction and require the complementary click.
+5. A completed pair must continue to use one shared pair id across both visible landmarks.
+
+#### Pair selection
+
+1. Clicking either visible landmark circle selects the whole pair, not an individual side.
+2. Selecting a pair highlights both landmarks and opens contextual actions in the shared workflow panel.
+3. Only one pair is selected at a time.
+4. Clicking empty canvas space clears selection unless a reposition action is active.
+
+#### Reposition
+
+1. `Reposition Eosin point` enters `reposition-source` and keeps the pair selected.
+2. The next valid click on the Eosin/reference canvas rewrites only that pair’s `source` point, clears the reposition state, and resets solve-derived outputs.
+3. `Reposition H&E point` does the same for the moving canvas and only rewrites that pair’s `target` point.
+4. Reposition does not require or expose the old global `move` mode.
+
+#### Delete and reset
+
+1. `Delete pair` removes the whole selected `AlignmentControlPoint` by pair id.
+2. `Undo last pair` removes the most recently committed pair, not a pending half-pair.
+3. `Clear all pairs` removes all committed pairs and clears any local pending/selection/reposition state.
+
+#### Viewport behavior
+
+1. Background drag continues to pan only the canvas being dragged.
+2. Wheel zoom continues to affect only the hovered canvas and must not scroll the page.
+3. Switching guided action state, selecting a pair, solving, or expanding diagnostics must not reset zoom/pan.
+
+#### Legacy modes
+
+The old `Add`, `Move`, and `Delete` global toolbar buttons are removed from the primary UI. The redesign does not keep them as visible fallback controls.
 
 ## Component changes
 
@@ -142,7 +220,38 @@ This separates workflow controls from image-prep controls and prevents the movin
 - The main behavioral change is how editing intent is represented in UI state:
   - less dependence on global `add` / `move` / `delete`
   - more dependence on guided pair creation and selected-pair sub-actions.
-- If new UI state is introduced, it should stay component-local unless persistence is clearly required.
+- If new UI state is introduced, it must stay component-local unless persistence is clearly required.
+
+### Status and invalidation contract
+
+The redesign must preserve current preprocess workflow gating.
+
+1. Creating a completed pair updates `alignment.controlPoints` and must reset solve-derived outputs through the existing solve-reset behavior.
+2. Repositioning either side of an existing pair also resets solve-derived outputs.
+3. Deleting a pair, undoing the last pair, or clearing all pairs also resets solve-derived outputs.
+4. Updating `movingImageTransform` remains a display-only action and continues to call `onAlignmentChange(..., { invalidateDownstream: false })`.
+5. Local-only UI state changes — pending half-pair, pair selection, reposition sub-state, panel open/closed state, zoom/pan — must not invalidate downstream preprocess steps.
+6. `Solve alignment` and `Force continue` remain the only actions that may transition alignment into an accepted/rejected solved status.
+7. Crop/QC reachability must continue to depend on the persisted alignment step state reaching the same “complete” condition as today.
+
+### Testability contract
+
+The redesign must preserve or deliberately replace the current e2e-observable alignment hooks.
+
+1. The pair-count, runtime-status, solve-status, solve button, force-solve button, and distribution-warning test ids must remain stable unless there is a documented selector migration.
+2. If canvas host test ids change, the spec must require equivalent stable selectors for:
+   - reference canvas click target
+   - moving canvas click target
+   - pair count badge
+   - solve action
+   - reset/clear action
+3. Existing behavior currently covered by `tests/e2e/preprocess-hardening.spec.ts` must remain testable after the redesign:
+   - creating one pair across both canvases
+   - H&E transform controls visible on the alignment step
+   - wheel zoom not scrolling the page
+   - dragging one canvas panning independently
+   - repeated solve/reset stability
+   - clustered landmarks remaining blocked from enabling crop
 
 ## Acceptance criteria
 
@@ -153,6 +262,9 @@ This separates workflow controls from image-prep controls and prevents the movin
 5. Solve/status information remains visible and understandable during editing.
 6. Moving-image transform controls remain available, but are visually separated from Pair points workflow controls.
 7. Existing alignment solve behavior and persisted control-point structure remain intact.
+8. Pending half-pairs, selected pair state, and reposition mode do not persist after reload because they are local-only UI state.
+9. Per-canvas pan/zoom remain independent and survive selection/solve UI changes during the session.
+10. Display-only H&E transform changes do not invalidate downstream preprocess steps until solving changes persisted alignment results.
 
 ## Risk and mitigation
 
