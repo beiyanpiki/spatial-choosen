@@ -5,7 +5,6 @@ import {
 	Box,
 	Button,
 	ButtonGroup,
-	Divider,
 	Flex,
 	Heading,
 	HStack,
@@ -14,6 +13,7 @@ import {
 	Text,
 } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
 	computeBaseView,
 	computeZoomTransform,
@@ -56,17 +56,18 @@ type AlignmentPanelProps = {
 	) => void;
 };
 
-type EditorTool = "add" | "move" | "delete";
-
-type PendingPair = {
-	source: PreprocessPoint | null;
-	target: PreprocessPoint | null;
-};
+type InteractionMode =
+	| "awaiting-source"
+	| "awaiting-target"
+	| "selected-pair"
+	| "reposition-source"
+	| "reposition-target";
 
 type EditorPoint = {
 	id: string;
 	point: PreprocessPoint;
 	isInlier: boolean;
+	isSelected: boolean;
 };
 
 type LandmarkCanvasProps = {
@@ -75,14 +76,17 @@ type LandmarkCanvasProps = {
 	points: readonly EditorPoint[];
 	pendingPoint: PreprocessPoint | null;
 	title: string;
-	tool: EditorTool;
+	interactionMode: InteractionMode;
+	selectedPairId: string | null;
 	imageTransform: LocalizationImageTransform;
-	onCreatePoint: (
+	panelContent?: ReactNode;
+	onBackgroundPoint: (
 		imageKey: "source" | "target",
 		point: PreprocessPoint,
 	) => void;
-	onDeletePoint: (id: string) => void;
-	onMovePoint: (
+	onBackgroundFallback: () => void;
+	onSelectPoint: (id: string) => void;
+	onRepositionPoint: (
 		id: string,
 		imageKey: "source" | "target",
 		point: PreprocessPoint,
@@ -120,11 +124,13 @@ function LandmarkCanvas({
 	points,
 	pendingPoint,
 	title,
-	tool,
+	interactionMode,
 	imageTransform,
-	onCreatePoint,
-	onDeletePoint,
-	onMovePoint,
+	panelContent,
+	onBackgroundPoint,
+	onBackgroundFallback,
+	onSelectPoint,
+	onRepositionPoint,
 	testIdPrefix,
 }: LandmarkCanvasProps) {
 	const hostRef = useRef<HTMLDivElement | null>(null);
@@ -187,12 +193,17 @@ function LandmarkCanvas({
 	const panSessionRef = useRef<PanSession | null>(null);
 
 	useEffect(() => {
-		if (!dragPointId || tool !== "move") return;
+		if (
+			!dragPointId ||
+			(interactionMode !== "reposition-source" &&
+				interactionMode !== "reposition-target")
+		)
+			return;
 
 		const onPointerMove = (event: PointerEvent) => {
 			const point = toImagePoint(event.clientX, event.clientY);
 			if (!point) return;
-			onMovePoint(dragPointId, imageKey, point);
+			onRepositionPoint(dragPointId, imageKey, point);
 		};
 
 		const onPointerUp = () => setDragPointId(null);
@@ -204,7 +215,7 @@ function LandmarkCanvas({
 			window.removeEventListener("pointermove", onPointerMove);
 			window.removeEventListener("pointerup", onPointerUp);
 		};
-	}, [dragPointId, imageKey, onMovePoint, toImagePoint, tool]);
+	}, [dragPointId, imageKey, interactionMode, onRepositionPoint, toImagePoint]);
 
 	const beginPan = useCallback(
 		(clientX: number, clientY: number, pointerId: number) => {
@@ -243,14 +254,23 @@ function LandmarkCanvas({
 
 			panSessionRef.current = null;
 
-			if (!session.dragged && tool === "add") {
+			if (
+				!session.dragged &&
+				((imageKey === "source" && interactionMode === "awaiting-source") ||
+					(imageKey === "target" && interactionMode === "awaiting-target") ||
+					(imageKey === "source" && interactionMode === "reposition-source") ||
+					(imageKey === "target" && interactionMode === "reposition-target"))
+			) {
 				const point = toImagePoint(clientX, clientY);
 				if (point) {
-					onCreatePoint(imageKey, point);
+					onBackgroundPoint(imageKey, point);
+					return;
 				}
 			}
+
+			onBackgroundFallback();
 		},
-		[imageKey, onCreatePoint, toImagePoint, tool],
+		[imageKey, interactionMode, onBackgroundFallback, onBackgroundPoint, toImagePoint],
 	);
 
 	useEffect(() => {
@@ -340,29 +360,6 @@ function LandmarkCanvas({
 
 	return (
 		<Stack spacing={3} flex="1" minW={0}>
-			<HStack justify="space-between" align="center">
-				<Text fontSize="sm" fontWeight="semibold" color="gray.600">
-					{title}
-				</Text>
-				<HStack spacing={2} minW="190px">
-					<Text fontSize="xs" color="gray.500" whiteSpace="nowrap">
-						Zoom
-					</Text>
-					<Input
-						type="range"
-						min={ZOOM_MIN}
-						max={ZOOM_MAX}
-						step={0.05}
-						value={zoom}
-						onChange={(event) => setZoom(clampZoom(Number(event.target.value)))}
-						px={0}
-						h="24px"
-					/>
-					<Text fontSize="xs" color="gray.500" minW="40px" textAlign="right">
-						{Math.round(zoom * 100)}%
-					</Text>
-				</HStack>
-			</HStack>
 			<Box
 				border="1px solid"
 				borderColor="gray.100"
@@ -375,6 +372,41 @@ function LandmarkCanvas({
 				position="relative"
 				data-testid={`${testIdPrefix}-canvas-container`}
 			>
+				<Box
+					position="absolute"
+					top={4}
+					left={4}
+					zIndex={2}
+					bg="blackAlpha.700"
+					color="whiteAlpha.950"
+					border="1px solid"
+					borderColor="whiteAlpha.300"
+					borderRadius="xl"
+					px={3}
+					py={3}
+					backdropFilter="blur(12px)"
+					maxW="320px"
+				>
+					<Stack spacing={2}>
+						<Text
+							fontSize="xs"
+							textTransform="uppercase"
+							letterSpacing="0.12em"
+							color="whiteAlpha.700"
+						>
+							{title}
+						</Text>
+						<Text fontSize="xs" color="whiteAlpha.800">
+							Pan with drag, zoom with wheel, and use the guided workflow to
+							place or edit landmarks.
+						</Text>
+					</Stack>
+				</Box>
+				{panelContent ? (
+					<Box position="absolute" top={4} right={4} zIndex={2}>
+						{panelContent}
+					</Box>
+				) : null}
 				<Box
 					ref={(node) => {
 						hostRef.current = node;
@@ -434,32 +466,38 @@ function LandmarkCanvas({
 											<circle
 												cx={rendered.x}
 												cy={rendered.y}
-												r={8}
+												r={point.isSelected ? 9 : 8}
 												fill={
-													point.isInlier
-														? "rgba(56,161,105,0.92)"
-														: "rgba(229,62,62,0.92)"
+													point.isSelected
+														? "rgba(49,130,206,0.96)"
+														: point.isInlier
+															? "rgba(56,161,105,0.92)"
+															: "rgba(229,62,62,0.92)"
 												}
 												stroke="white"
-												strokeWidth={1.5}
+												strokeWidth={point.isSelected ? 2.5 : 1.5}
 												style={{
 													cursor:
-														tool === "move"
+														(imageKey === "source" &&
+															interactionMode === "reposition-source") ||
+														(imageKey === "target" &&
+															interactionMode === "reposition-target")
 															? "grab"
-															: tool === "delete"
-																? "not-allowed"
-																: "crosshair",
+															: "pointer",
 												}}
 												onPointerDown={(event) => {
 													event.preventDefault();
 													event.stopPropagation();
-													if (tool === "move") {
+													if (
+														(imageKey === "source" &&
+															interactionMode === "reposition-source") ||
+														(imageKey === "target" &&
+															interactionMode === "reposition-target")
+													) {
 														setDragPointId(point.id);
 														return;
 													}
-													if (tool === "delete") {
-														onDeletePoint(point.id);
-													}
+													onSelectPoint(point.id);
 												}}
 											/>
 											<text
@@ -506,12 +544,14 @@ export function AlignmentPanel({
 	referenceImage,
 	onAlignmentChange,
 }: AlignmentPanelProps) {
-	const [tool, setTool] = useState<EditorTool>("add");
-	const [pendingPair, setPendingPair] = useState<PendingPair>({
-		source: null,
-		target: null,
-	});
-	const pendingPairRef = useRef<PendingPair>({ source: null, target: null });
+	const [interactionMode, setInteractionMode] = useState<InteractionMode>(
+		"awaiting-source",
+	);
+	const [pendingSourcePoint, setPendingSourcePoint] =
+		useState<PreprocessPoint | null>(null);
+	const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
+	const [repositionPairId, setRepositionPairId] = useState<string | null>(null);
+	const [showDiagnostics, setShowDiagnostics] = useState(false);
 	const [runtimeStatus, setRuntimeStatus] = useState<
 		"idle" | "loading" | "ready" | "error"
 	>("idle");
@@ -586,31 +626,76 @@ export function AlignmentPanel({
 		[movingImage?.dataUrl, referenceImage?.dataUrl],
 	);
 
+	const clearLocalInteractionState = useCallback(() => {
+		setPendingSourcePoint(null);
+		setSelectedPairId(null);
+		setRepositionPairId(null);
+		setInteractionMode("awaiting-source");
+	}, []);
+
 	useEffect(() => {
-		pendingPairRef.current = pendingPair;
-	}, [pendingPair]);
+		if (
+			selectedPairId &&
+			!alignment.controlPoints.some((pair) => pair.id === selectedPairId)
+		) {
+			setSelectedPairId(null);
+			setRepositionPairId(null);
+			setInteractionMode("awaiting-source");
+		}
+	}, [alignment.controlPoints, selectedPairId]);
 
-	const addOrUpdatePendingPoint = useCallback(
+	const mutateControlPoints = useCallback(
+		(
+			mutator: (controlPoints: AlignmentControlPoint[]) => AlignmentControlPoint[],
+			options?: {
+				afterApply?: (nextControlPoints: AlignmentControlPoint[]) => void;
+				preserveSelection?: boolean;
+			},
+		) => {
+			onAlignmentChange((slice) => {
+				const nextControlPoints = mutator(slice.controlPoints);
+				if (nextControlPoints === slice.controlPoints) {
+					return slice;
+				}
+				const nextSlice: AlignmentSlice = {
+					...slice,
+					controlPoints: nextControlPoints,
+				};
+				return resetSolveState(nextSlice);
+			});
+			options?.afterApply?.(mutator(alignment.controlPoints));
+			if (!options?.preserveSelection) {
+				setSelectedPairId(null);
+			}
+		},
+		[alignment.controlPoints, onAlignmentChange, resetSolveState],
+	);
+
+	const handleBackgroundPoint = useCallback(
 		(imageKey: "source" | "target", point: PreprocessPoint) => {
-			const nextPendingPair = { ...pendingPairRef.current, [imageKey]: point };
-
-			if (!nextPendingPair.source || !nextPendingPair.target) {
-				pendingPairRef.current = nextPendingPair;
-				setPendingPair(nextPendingPair);
+			if (imageKey === "source" && interactionMode === "awaiting-source") {
+				setPendingSourcePoint(point);
+				setSelectedPairId(null);
+				setRepositionPairId(null);
+				setInteractionMode("awaiting-target");
 				return;
 			}
 
-			const nextControlPoint: AlignmentControlPoint = {
-				id: makePointId(),
-				source: nextPendingPair.source,
-				target: nextPendingPair.target,
-			};
+			if (imageKey === "target" && interactionMode === "awaiting-source") {
+				return;
+			}
 
-			pendingPairRef.current = { source: null, target: null };
-			setPendingPair({ source: null, target: null });
-
-			onAlignmentChange((slice) => {
-				const hasDuplicatePair = slice.controlPoints.some(
+			if (
+				imageKey === "target" &&
+				interactionMode === "awaiting-target" &&
+				pendingSourcePoint
+			) {
+				const nextControlPoint: AlignmentControlPoint = {
+					id: makePointId(),
+					source: pendingSourcePoint,
+					target: point,
+				};
+				const hasDuplicatePair = alignment.controlPoints.some(
 					(existingPoint) =>
 						existingPoint.source.x === nextControlPoint.source.x &&
 						existingPoint.source.y === nextControlPoint.source.y &&
@@ -619,51 +704,137 @@ export function AlignmentPanel({
 				);
 
 				if (hasDuplicatePair) {
-					return slice;
+					clearLocalInteractionState();
+					return;
 				}
 
-				const nextSlice: AlignmentSlice = {
-					...slice,
-					controlPoints: [...slice.controlPoints, nextControlPoint],
-				};
-				return resetSolveState(nextSlice);
-			});
+				mutateControlPoints(
+					(controlPoints) => [...controlPoints, nextControlPoint],
+					{
+						afterApply: clearLocalInteractionState,
+					},
+				);
+				return;
+			}
+
+			if (imageKey === "source" && interactionMode === "awaiting-target") {
+				return;
+			}
+
+			if (
+				imageKey === "source" &&
+				interactionMode === "reposition-source" &&
+				repositionPairId
+			) {
+				mutateControlPoints(
+					(controlPoints) =>
+						controlPoints.map((pair) =>
+							pair.id === repositionPairId ? { ...pair, source: point } : pair,
+						),
+					{ afterApply: clearLocalInteractionState },
+				);
+				return;
+			}
+
+			if (
+				imageKey === "target" &&
+				interactionMode === "reposition-target" &&
+				repositionPairId
+			) {
+				mutateControlPoints(
+					(controlPoints) =>
+						controlPoints.map((pair) =>
+							pair.id === repositionPairId ? { ...pair, target: point } : pair,
+						),
+					{ afterApply: clearLocalInteractionState },
+				);
+				return;
+			}
+
+			clearLocalInteractionState();
 		},
-		[onAlignmentChange, resetSolveState],
+		[
+			alignment.controlPoints,
+			clearLocalInteractionState,
+			interactionMode,
+			mutateControlPoints,
+			pendingSourcePoint,
+			repositionPairId,
+		],
 	);
 
-	const handleDeletePoint = useCallback(
-		(id: string) => {
-			onAlignmentChange((slice) => {
-				const nextSlice: AlignmentSlice = {
-					...slice,
-					controlPoints: slice.controlPoints.filter((point) => point.id !== id),
-				};
-				return resetSolveState(nextSlice);
-			});
-		},
-		[onAlignmentChange, resetSolveState],
-	);
-
-	const handleMovePoint = useCallback(
+	const handleRepositionPoint = useCallback(
 		(id: string, imageKey: "source" | "target", point: PreprocessPoint) => {
-			onAlignmentChange((slice) => {
-				const nextSlice: AlignmentSlice = {
-					...slice,
-					controlPoints: slice.controlPoints.map((pair) =>
-						pair.id === id
-							? {
-									...pair,
-									[imageKey]: point,
-								}
+			if (
+				(imageKey === "source" && interactionMode !== "reposition-source") ||
+				(imageKey === "target" && interactionMode !== "reposition-target")
+			) {
+				clearLocalInteractionState();
+				return;
+			}
+
+			if (!repositionPairId || repositionPairId !== id) {
+				return;
+			}
+
+			mutateControlPoints(
+				(controlPoints) =>
+					controlPoints.map((pair) =>
+						pair.id === repositionPairId
+							? imageKey === "source"
+								? { ...pair, source: point }
+								: { ...pair, target: point }
 							: pair,
 					),
-				};
-				return resetSolveState(nextSlice);
-			});
+				{
+					afterApply: clearLocalInteractionState,
+				},
+			);
 		},
-		[onAlignmentChange, resetSolveState],
+		[
+			clearLocalInteractionState,
+			interactionMode,
+			mutateControlPoints,
+			repositionPairId,
+		],
 	);
+
+	const handleSelectPair = useCallback(
+		(id: string) => {
+			setPendingSourcePoint(null);
+			setSelectedPairId(id);
+			setRepositionPairId(null);
+			setInteractionMode("selected-pair");
+		},
+		[],
+	);
+
+	const selectedPair = useMemo(
+		() =>
+			selectedPairId
+				? alignment.controlPoints.find((pair) => pair.id === selectedPairId) ?? null
+				: null,
+		[selectedPairId, alignment.controlPoints],
+	);
+
+	const workflowInstruction = useMemo(() => {
+		if (interactionMode === "awaiting-source") {
+			return "Click the eosin canvas to place the reference landmark for a new pair.";
+		}
+		if (interactionMode === "awaiting-target") {
+			return "Click the H&E canvas to complete the landmark pair.";
+		}
+		if (interactionMode === "reposition-source") {
+			return "Select the new eosin landmark position for the chosen pair.";
+		}
+		if (interactionMode === "reposition-target") {
+			return "Select the new H&E landmark position for the chosen pair.";
+		}
+		return selectedPair
+			? "Selected pair ready. Reposition either point, delete the pair, or continue solving."
+			: "Select an existing pair or start a new one from the eosin canvas.";
+	}, [interactionMode, selectedPair]);
+
 
 	const sourcePoints = useMemo<EditorPoint[]>(
 		() =>
@@ -671,8 +842,9 @@ export function AlignmentPanel({
 				id: pair.id,
 				point: pair.source,
 				isInlier: alignment.inlierMask?.[index] ?? true,
+				isSelected: pair.id === selectedPairId,
 			})),
-		[alignment.controlPoints, alignment.inlierMask],
+		[alignment.controlPoints, alignment.inlierMask, selectedPairId],
 	);
 
 	const targetPoints = useMemo<EditorPoint[]>(
@@ -681,8 +853,9 @@ export function AlignmentPanel({
 				id: pair.id,
 				point: pair.target,
 				isInlier: alignment.inlierMask?.[index] ?? true,
+				isSelected: pair.id === selectedPairId,
 			})),
-		[alignment.controlPoints, alignment.inlierMask],
+		[alignment.controlPoints, alignment.inlierMask, selectedPairId],
 	);
 
 	const coverage = useMemo(
@@ -805,191 +978,260 @@ export function AlignmentPanel({
 		);
 	}
 
-	return (
-		<Stack spacing={5}>
-			<Stack spacing={2}>
-				<Text fontSize="sm" color="gray.600">
-					Pair corresponding eosin and H&amp;E landmarks. Solve runs only when
-					at least {ALIGNMENT_MIN_PAIRS} pairs exist.
-				</Text>
-				<HStack spacing={3} wrap="wrap">
-					<Badge
-						colorScheme={
-							alignment.controlPoints.length >= ALIGNMENT_MIN_PAIRS
-								? "green"
-								: "orange"
-						}
-						data-testid="alignment-pair-count-badge"
-						data-pair-count={alignment.controlPoints.length}
-					>
-						Pairs {alignment.controlPoints.length} / {ALIGNMENT_TARGET_PAIRS}
-					</Badge>
-					<Badge
-						colorScheme={
-							runtimeStatus === "ready"
-								? "green"
-								: runtimeStatus === "error"
-									? "red"
-									: "orange"
-						}
-						data-testid="alignment-runtime-status-badge"
-						data-runtime-status={runtimeStatus}
-					>
-						OpenCV {runtimeStatus}
-					</Badge>
-					<Badge
-						colorScheme={
-							alignment.solveAccepted
-								? "green"
-								: alignment.failureReason
-									? "red"
-									: "gray"
-						}
-						data-testid="alignment-status"
-						data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
-						data-failure-reason={alignment.failureReason ?? ""}
-					>
-						{alignment.solveAccepted
-							? "Accepted"
-							: alignment.failureReason
-								? "Rejected"
-								: "Not solved"}
-					</Badge>
-				</HStack>
-				{coverage.warning ? (
-					<Text
-						fontSize="sm"
-						color="orange.600"
-						data-testid="alignment-distribution-warning"
-					>
-						Landmark spread is narrow. Coverage ratios are{" "}
-						{formatPercent(coverage.coverageRatioX)} width and{" "}
-						{formatPercent(coverage.coverageRatioY)} height, below the{" "}
-						{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
-					</Text>
-				) : null}
-				{runtimeError ? (
-					<Text fontSize="sm" color="red.600">
-						{runtimeError}
-					</Text>
-				) : null}
-			</Stack>
-
-			<HStack spacing={3} align="center" wrap="wrap">
-				<ButtonGroup isAttached size="sm" variant="outline">
-					<Button
-						onClick={() => setTool("add")}
-						colorScheme={tool === "add" ? "brand" : "gray"}
-						data-testid="alignment-tool-add"
-					>
-						Add
-					</Button>
-					<Button
-						onClick={() => setTool("move")}
-						colorScheme={tool === "move" ? "brand" : "gray"}
-						data-testid="alignment-tool-move"
-					>
-						Move
-					</Button>
-					<Button
-						onClick={() => setTool("delete")}
-						colorScheme={tool === "delete" ? "brand" : "gray"}
-						data-testid="alignment-tool-delete"
-					>
-						Delete
-					</Button>
-				</ButtonGroup>
-				<Button
-					size="sm"
-					variant="ghost"
-					onClick={() => {
-						setPendingPair({ source: null, target: null });
-						onAlignmentChange((slice) => {
-							const nextSlice: AlignmentSlice = {
-								...slice,
-								controlPoints: slice.controlPoints.slice(0, -1),
-							};
-							return resetSolveState(nextSlice);
-						});
-					}}
-					isDisabled={alignment.controlPoints.length === 0}
-					data-testid="alignment-undo-last-point"
-				>
-					Undo last point
-				</Button>
-				<Button
-					size="sm"
-					variant="ghost"
-					onClick={() => {
-						setPendingPair({ source: null, target: null });
-						onAlignmentChange((slice) =>
-							resetSolveState({
-								...slice,
-								controlPoints: [],
-								inlierMask: null,
-							}),
-						);
-					}}
-					isDisabled={alignment.controlPoints.length === 0}
-					data-testid="alignment-reset"
-				>
-					Reset
-				</Button>
-				<Button
-					colorScheme="brand"
-					onClick={() => void solveAlignment()}
-					isDisabled={!canSolve}
-					data-testid="alignment-run-solve"
-				>
-					Solve alignment
-				</Button>
-				{alignment.failureReason && !alignment.solveAccepted && (
-					<Button
-						colorScheme="red"
-						variant="outline"
-						onClick={() => void solveAlignment(true)}
-						isDisabled={!canSolve}
-						data-testid="alignment-force-solve"
-					>
-						Force continue (dangerous)
-					</Button>
-				)}
-			</HStack>
-
-			{alignment.failureReason && !alignment.solveAccepted && (
-				<Box
-					border="1px solid"
-					borderColor="red.200"
-					borderRadius="lg"
-					p={4}
-					bg="red.50"
-				>
-					<Stack spacing={2}>
-						<Text fontSize="sm" fontWeight="semibold" color="red.800">
-							Warning: Precision loss risk
+	const workflowOverlay = (
+		<Box
+			position="absolute"
+			top={4}
+			left={4}
+			right={4}
+			zIndex={3}
+			bg="blackAlpha.700"
+			color="whiteAlpha.950"
+			border="1px solid"
+			borderColor="whiteAlpha.300"
+			borderRadius="xl"
+			px={4}
+			py={4}
+			backdropFilter="blur(12px)"
+			data-testid="alignment-workflow-overlay"
+		>
+			<Stack spacing={3}>
+				<Flex justify="space-between" align={{ base: "flex-start", md: "center" }} gap={3} wrap="wrap">
+					<Stack spacing={1}>
+						<Text fontSize="xs" textTransform="uppercase" letterSpacing="0.12em" color="whiteAlpha.700">
+							Guided alignment workflow
 						</Text>
-						<Text fontSize="sm" color="red.700">
-							The alignment quality checks failed ({alignment.failureReason}).
-							Using &ldquo;Force continue&rdquo; will skip RANSAC outlier
-							detection and compute the transformation using all control points.
-							This may result in precision errors and inaccurate alignment. Only
-							use this if you understand the risks.
+						<Text fontSize="sm" fontWeight="semibold" data-testid="alignment-workflow-instruction">
+							{workflowInstruction}
 						</Text>
 					</Stack>
-				</Box>
-			)}
+					<HStack spacing={2} wrap="wrap">
+						<Badge
+							colorScheme={
+								alignment.controlPoints.length >= ALIGNMENT_MIN_PAIRS
+									? "green"
+									: "orange"
+							}
+							data-testid="alignment-pair-count-badge"
+							data-pair-count={alignment.controlPoints.length}
+						>
+							Pairs {alignment.controlPoints.length} / {ALIGNMENT_TARGET_PAIRS}
+						</Badge>
+						<Badge
+							colorScheme={
+								runtimeStatus === "ready"
+									? "green"
+									: runtimeStatus === "error"
+										? "red"
+										: "orange"
+							}
+							data-testid="alignment-runtime-status-badge"
+							data-runtime-status={runtimeStatus}
+						>
+							OpenCV {runtimeStatus}
+						</Badge>
+						<Badge
+							colorScheme={
+								alignment.solveAccepted
+									? "green"
+									: alignment.failureReason
+										? "red"
+										: "gray"
+							}
+							data-testid="alignment-status"
+							data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
+							data-failure-reason={alignment.failureReason ?? ""}
+						>
+							{alignment.solveAccepted
+								? "Accepted"
+								: alignment.failureReason
+									? "Rejected"
+									: "Not solved"}
+						</Badge>
+						{selectedPair ? (
+							<Badge colorScheme="purple" data-testid="alignment-selected-pair-badge">
+								Selected pair #{alignment.controlPoints.findIndex((pair) => pair.id === selectedPair.id) + 1}
+							</Badge>
+						) : null}
+					</HStack>
+				</Flex>
+				<Flex gap={3} wrap="wrap" align="center">
+					<Button
+						size="sm"
+						variant="outline"
+						color="white"
+						borderColor="whiteAlpha.400"
+						_hover={{ bg: "whiteAlpha.200" }}
+						onClick={() => {
+							if (!selectedPairId) return;
+							setPendingSourcePoint(null);
+							setRepositionPairId(selectedPairId);
+							setInteractionMode("reposition-source");
+						}}
+						isDisabled={!selectedPairId}
+						data-testid="alignment-select-reposition-source"
+					>
+						Move eosin point
+					</Button>
+					<Button
+						size="sm"
+						variant="outline"
+						color="white"
+						borderColor="whiteAlpha.400"
+						_hover={{ bg: "whiteAlpha.200" }}
+						onClick={() => {
+							if (!selectedPairId) return;
+							setPendingSourcePoint(null);
+							setRepositionPairId(selectedPairId);
+							setInteractionMode("reposition-target");
+						}}
+						isDisabled={!selectedPairId}
+						data-testid="alignment-select-reposition-target"
+					>
+						Move H&E point
+					</Button>
+					<Button
+						size="sm"
+						variant="outline"
+						colorScheme="red"
+						onClick={() => {
+							if (!selectedPairId) return;
+							setPendingSourcePoint(null);
+							setRepositionPairId(null);
+							mutateControlPoints(
+								(controlPoints) =>
+									controlPoints.filter((point) => point.id !== selectedPairId),
+								{ afterApply: clearLocalInteractionState },
+							);
+						}}
+						isDisabled={!selectedPairId}
+						data-testid="alignment-select-delete-pair"
+					>
+						Delete pair
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						color="white"
+						_hover={{ bg: "whiteAlpha.200" }}
+						onClick={clearLocalInteractionState}
+						isDisabled={interactionMode === "awaiting-source" && !pendingSourcePoint}
+						data-testid="alignment-select-cancel"
+					>
+						Cancel
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						color="white"
+						_hover={{ bg: "whiteAlpha.200" }}
+						onClick={() => setShowDiagnostics((current) => !current)}
+						data-testid="alignment-diagnostics-toggle"
+					>
+						{showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						color="white"
+						_hover={{ bg: "whiteAlpha.200" }}
+						onClick={() => {
+							setPendingSourcePoint(null);
+							setRepositionPairId(null);
+							mutateControlPoints(
+								(controlPoints) => controlPoints.slice(0, -1),
+								{ afterApply: clearLocalInteractionState },
+							);
+						}}
+						isDisabled={alignment.controlPoints.length === 0}
+						data-testid="alignment-undo-last-point"
+					>
+						Undo last point
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						color="white"
+						_hover={{ bg: "whiteAlpha.200" }}
+						onClick={() => {
+							setPendingSourcePoint(null);
+							setRepositionPairId(null);
+							mutateControlPoints(() => [], {
+								afterApply: clearLocalInteractionState,
+							});
+						}}
+						isDisabled={alignment.controlPoints.length === 0}
+						data-testid="alignment-reset"
+					>
+						Reset pairs
+					</Button>
+					<Button
+						size="sm"
+						colorScheme="brand"
+						onClick={() => void solveAlignment()}
+						isDisabled={!canSolve}
+						data-testid="alignment-run-solve"
+					>
+						Solve alignment
+					</Button>
+					{alignment.failureReason && !alignment.solveAccepted ? (
+						<Button
+							size="sm"
+							colorScheme="red"
+							variant="outline"
+							onClick={() => void solveAlignment(true)}
+							isDisabled={!canSolve}
+							data-testid="alignment-force-solve"
+						>
+							Force continue (dangerous)
+						</Button>
+					) : null}
+				</Flex>
+			</Stack>
+		</Box>
+	);
 
-			<Stack spacing={3} maxW="320px">
-				<Text fontSize="sm" fontWeight="semibold" color="gray.600">
-					H&amp;E transform
+	const referenceViewControls = (
+		<Box
+			bg="blackAlpha.700"
+			color="whiteAlpha.950"
+			border="1px solid"
+			borderColor="whiteAlpha.300"
+			borderRadius="xl"
+			px={3}
+			py={3}
+			backdropFilter="blur(12px)"
+			data-testid="alignment-reference-view-controls"
+		>
+			<Stack spacing={3} minW="220px">
+				<Text fontSize="xs" textTransform="uppercase" letterSpacing="0.12em" color="whiteAlpha.700">
+					Reference view
 				</Text>
-				<Text fontSize="sm" color="gray.500">
-					Display-only transform for the moving image.
+				<Text fontSize="xs" color="whiteAlpha.800">
+					Use wheel zoom and drag pan on the eosin canvas. Landmark placement stays guided by the shared workflow overlay.
+				</Text>
+			</Stack>
+		</Box>
+	);
+
+	const movingViewControls = (
+		<Box
+			bg="blackAlpha.700"
+			color="whiteAlpha.950"
+			border="1px solid"
+			borderColor="whiteAlpha.300"
+			borderRadius="xl"
+			px={3}
+			py={3}
+			backdropFilter="blur(12px)"
+			data-testid="alignment-moving-view-controls"
+		>
+			<Stack spacing={3} minW="260px">
+				<Text fontSize="xs" textTransform="uppercase" letterSpacing="0.12em" color="whiteAlpha.700">
+					Moving image view + transform
 				</Text>
 				<Stack spacing={1}>
-					<Text fontSize="xs" color="gray.500">
-						Rotation
-					</Text>
+					<Text fontSize="xs" color="whiteAlpha.700">Rotation</Text>
 					<Input
 						type="range"
 						min={-180}
@@ -1013,14 +1255,9 @@ export function AlignmentPanel({
 						}}
 						px={0}
 					/>
-					<Text fontSize="xs" color="gray.500">
-						{alignment.movingImageTransform.rotationDegrees.toFixed(1)}°
-					</Text>
 				</Stack>
 				<Stack spacing={1}>
-					<Text fontSize="xs" color="gray.500">
-						Scale
-					</Text>
+					<Text fontSize="xs" color="whiteAlpha.700">Scale</Text>
 					<Input
 						type="range"
 						min={0.5}
@@ -1044,12 +1281,12 @@ export function AlignmentPanel({
 						}}
 						px={0}
 					/>
-					<Text fontSize="xs" color="gray.500">
-						{(alignment.movingImageTransform.scale * 100).toFixed(0)}%
-					</Text>
 				</Stack>
 				<ButtonGroup size="sm" isAttached variant="outline">
 					<Button
+						color="white"
+						borderColor="whiteAlpha.400"
+						_hover={{ bg: "whiteAlpha.200" }}
 						data-testid="alignment-he-flip-horizontal"
 						onClick={() => {
 							onAlignmentChange(
@@ -1058,8 +1295,7 @@ export function AlignmentPanel({
 										...slice,
 										movingImageTransform: {
 											...slice.movingImageTransform,
-											flipHorizontal:
-												!slice.movingImageTransform.flipHorizontal,
+											flipHorizontal: !slice.movingImageTransform.flipHorizontal,
 										},
 									}),
 								{ invalidateDownstream: false },
@@ -1069,6 +1305,9 @@ export function AlignmentPanel({
 						Flip horizontal
 					</Button>
 					<Button
+						color="white"
+						borderColor="whiteAlpha.400"
+						_hover={{ bg: "whiteAlpha.200" }}
 						onClick={() => {
 							onAlignmentChange(
 								(slice) =>
@@ -1089,6 +1328,8 @@ export function AlignmentPanel({
 				<Button
 					size="sm"
 					variant="ghost"
+					color="white"
+					_hover={{ bg: "whiteAlpha.200" }}
 					onClick={() => {
 						onAlignmentChange(
 							(slice) =>
@@ -1100,81 +1341,133 @@ export function AlignmentPanel({
 						);
 					}}
 				>
-					Reset H&amp;E transform
+					Reset H&E transform
 				</Button>
 			</Stack>
+		</Box>
+	);
 
-			<Flex direction={{ base: "column", xl: "row" }} gap={4} align="stretch">
-				<LandmarkCanvas
-					image={referenceImage}
-					imageKey="source"
-					imageTransform={DEFAULT_LOCALIZATION_IMAGE_TRANSFORM}
-					points={sourcePoints}
-					pendingPoint={pendingPair.source}
-					title="Eosin landmarks (reference)"
-					tool={tool}
-					onCreatePoint={addOrUpdatePendingPoint}
-					onDeletePoint={handleDeletePoint}
-					onMovePoint={handleMovePoint}
-					testIdPrefix="alignment-source"
-				/>
-				<LandmarkCanvas
-					image={movingImage}
-					imageKey="target"
-					imageTransform={alignment.movingImageTransform}
-					points={targetPoints}
-					pendingPoint={pendingPair.target}
-					title="H&E landmarks (moving)"
-					tool={tool}
-					onCreatePoint={addOrUpdatePendingPoint}
-					onDeletePoint={handleDeletePoint}
-					onMovePoint={handleMovePoint}
-					testIdPrefix="alignment-target"
-				/>
-			</Flex>
-
-			<Divider />
-
-			<Stack spacing={2} fontSize="sm">
-				<HStack justify="space-between">
-					<Text color="gray.600">Inlier ratio</Text>
-					<Text fontWeight="semibold" data-testid="alignment-inlier-ratio">
-						{formatPercent(alignment.inlierRatio)}
+	return (
+		<Stack spacing={5}>
+			<Box position="relative" pt={{ base: 52, xl: 44 }}>
+				{workflowOverlay}
+				{coverage.warning ? (
+					<Text
+						fontSize="sm"
+						color="orange.600"
+						mb={3}
+						data-testid="alignment-distribution-warning"
+					>
+						Landmark spread is narrow. Coverage ratios are
+						 {formatPercent(coverage.coverageRatioX)} width and
+						 {formatPercent(coverage.coverageRatioY)} height, below the
+						 {Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
 					</Text>
-				</HStack>
-				<HStack justify="space-between">
-					<Text color="gray.600">Reprojection RMSE</Text>
-					<Text fontWeight="semibold" data-testid="alignment-rmse">
-						{formatMetric(alignment.reprojectionRmse)} px
-						{alignment.ransacReprojThreshold !== null
-							? ` (threshold ${formatMetric(ALIGNMENT_RMSE_MULTIPLIER * alignment.ransacReprojThreshold)} px)`
-							: ""}
+				) : null}
+				{runtimeError ? (
+					<Text fontSize="sm" color="red.600" mb={3}>
+						{runtimeError}
 					</Text>
-				</HStack>
-				<HStack justify="space-between">
-					<Text color="gray.600">Quality gates</Text>
-					<Text fontWeight="semibold">
-						minPairs:{alignment.qualityFlags.minPairs ? "✓" : "✗"} • inlier:
-						{alignment.qualityFlags.inlierRatio ? "✓" : "✗"} • rmse:
-						{alignment.qualityFlags.rmse ? "✓" : "✗"} • matrix:
-						{alignment.qualityFlags.finiteMatrix ? "✓" : "✗"} • scale:
-						{alignment.qualityFlags.scaleRange ? "✓" : "✗"}
-					</Text>
-				</HStack>
-				<Box
-					as="pre"
-					fontSize="xs"
-					color="gray.700"
-					bg="gray.50"
-					borderRadius="md"
-					p={2}
-					data-testid="alignment-matrix-json"
-				>
-					{alignment.affineMatrix
-						? JSON.stringify(alignment.affineMatrix)
-						: "null"}
-				</Box>
-			</Stack>
+				) : null}
+				{alignment.failureReason && !alignment.solveAccepted ? (
+					<Box
+						border="1px solid"
+						borderColor="red.200"
+						borderRadius="lg"
+						p={4}
+						bg="red.50"
+						mb={4}
+					>
+						<Stack spacing={2}>
+							<Text fontSize="sm" fontWeight="semibold" color="red.800">
+								Warning: Precision loss risk
+							</Text>
+							<Text fontSize="sm" color="red.700">
+								The alignment quality checks failed ({alignment.failureReason}). Using
+								 &ldquo;Force continue&rdquo; will skip RANSAC outlier detection and compute the
+								 transformation using all control points. This may result in precision
+								 errors and inaccurate alignment. Only use this if you understand the risks.
+							</Text>
+						</Stack>
+					</Box>
+				) : null}
+				<Flex direction={{ base: "column", xl: "row" }} gap={4} align="stretch">
+					<LandmarkCanvas
+						image={referenceImage}
+						imageKey="source"
+						imageTransform={DEFAULT_LOCALIZATION_IMAGE_TRANSFORM}
+						points={sourcePoints}
+						pendingPoint={pendingSourcePoint}
+						title="Eosin landmarks (reference)"
+						interactionMode={interactionMode}
+						selectedPairId={selectedPairId}
+						panelContent={referenceViewControls}
+						onBackgroundPoint={handleBackgroundPoint}
+						onBackgroundFallback={clearLocalInteractionState}
+						onSelectPoint={handleSelectPair}
+						onRepositionPoint={handleRepositionPoint}
+						testIdPrefix="alignment-source"
+					/>
+					<LandmarkCanvas
+						image={movingImage}
+						imageKey="target"
+						imageTransform={alignment.movingImageTransform}
+						points={targetPoints}
+						pendingPoint={null}
+						title="H&E landmarks (moving)"
+						interactionMode={interactionMode}
+						selectedPairId={selectedPairId}
+						panelContent={movingViewControls}
+						onBackgroundPoint={handleBackgroundPoint}
+						onBackgroundFallback={clearLocalInteractionState}
+						onSelectPoint={handleSelectPair}
+						onRepositionPoint={handleRepositionPoint}
+						testIdPrefix="alignment-target"
+					/>
+				</Flex>
+			</Box>
+			{showDiagnostics ? (
+				<Stack spacing={2} fontSize="sm">
+					<HStack justify="space-between">
+						<Text color="gray.600">Inlier ratio</Text>
+						<Text fontWeight="semibold" data-testid="alignment-inlier-ratio">
+							{formatPercent(alignment.inlierRatio)}
+						</Text>
+					</HStack>
+					<HStack justify="space-between">
+						<Text color="gray.600">Reprojection RMSE</Text>
+						<Text fontWeight="semibold" data-testid="alignment-rmse">
+							{formatMetric(alignment.reprojectionRmse)} px
+							{alignment.ransacReprojThreshold !== null
+								? ` (threshold ${formatMetric(ALIGNMENT_RMSE_MULTIPLIER * alignment.ransacReprojThreshold)} px)`
+								: ""}
+						</Text>
+					</HStack>
+					<HStack justify="space-between">
+						<Text color="gray.600">Quality gates</Text>
+						<Text fontWeight="semibold">
+							minPairs:{alignment.qualityFlags.minPairs ? "✓" : "✗"} • inlier:
+							{alignment.qualityFlags.inlierRatio ? "✓" : "✗"} • rmse:
+							{alignment.qualityFlags.rmse ? "✓" : "✗"} • matrix:
+							{alignment.qualityFlags.finiteMatrix ? "✓" : "✗"} • scale:
+							{alignment.qualityFlags.scaleRange ? "✓" : "✗"}
+						</Text>
+					</HStack>
+					<Box
+						as="pre"
+						fontSize="xs"
+						color="gray.700"
+						bg="gray.50"
+						borderRadius="md"
+						p={2}
+						data-testid="alignment-matrix-json"
+					>
+						{alignment.affineMatrix
+							? JSON.stringify(alignment.affineMatrix)
+							: "null"}
+					</Box>
+				</Stack>
+			) : null}
 		</Stack>
 	);
 }

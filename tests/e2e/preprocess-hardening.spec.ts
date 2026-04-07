@@ -2,6 +2,24 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
+function alignmentLocators(page: import('@playwright/test').Page) {
+  return {
+    sourceCanvas: page.getByTestId('alignment-add-point-eosin'),
+    targetCanvas: page.getByTestId('alignment-add-point-he'),
+    workflowOverlay: page.getByTestId('alignment-workflow-overlay'),
+    workflowInstruction: page.getByTestId('alignment-workflow-instruction'),
+    selectedPairBadge: page.getByTestId('alignment-selected-pair-badge'),
+    repositionSourceButton: page.getByTestId('alignment-select-reposition-source'),
+    repositionTargetButton: page.getByTestId('alignment-select-reposition-target'),
+    deletePairButton: page.getByTestId('alignment-select-delete-pair'),
+    cancelSelectionButton: page.getByTestId('alignment-select-cancel'),
+  };
+}
+
+async function expectAwaitingSource(page: import('@playwright/test').Page) {
+  await expect(alignmentLocators(page).workflowInstruction).toContainText(/eosin canvas/i);
+}
+
 async function createProject(page: import('@playwright/test').Page, name: string) {
   await page.goto('/preprocess');
   await page.getByPlaceholder('Tumor preprocess set A').fill(name);
@@ -13,29 +31,31 @@ async function uploadAlignmentImages(page: import('@playwright/test').Page) {
   const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.png');
   const hePath = path.join(process.cwd(), 'tests/fixtures/preprocess/he.png');
 
-  await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
+  await page.locator('input[type="file"]').last().setInputFiles(hePath);
+
+  await page.getByTestId('preprocess-step-localize').click();
+  await expect(page.getByTestId('localize-canvas-surface')).toBeVisible();
+  await page.getByTestId('localize-stage-reset').click();
   await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
 
   await page.getByTestId('preprocess-step-align').click();
-  await page.getByRole('button', { name: /Upload H&E image/i }).click();
-  await page.locator('input[type="file"]').last().setInputFiles(hePath);
   await expect(page.getByTestId('alignment-runtime-status-badge')).toContainText(/ready/i, { timeout: 180_000 });
 }
 
 async function addTenIdentityPairs(page: import('@playwright/test').Page) {
   const points = [
-    { x: 0.12, y: 0.14 },
-    { x: 0.22, y: 0.18 },
-    { x: 0.34, y: 0.24 },
-    { x: 0.46, y: 0.32 },
-    { x: 0.16, y: 0.42 },
-    { x: 0.28, y: 0.52 },
-    { x: 0.4, y: 0.6 },
-    { x: 0.52, y: 0.68 },
-    { x: 0.2, y: 0.74 },
-    { x: 0.58, y: 0.2 },
+    { x: 0.24, y: 0.48 },
+    { x: 0.36, y: 0.52 },
+    { x: 0.48, y: 0.58 },
+    { x: 0.62, y: 0.64 },
+    { x: 0.28, y: 0.72 },
+    { x: 0.4, y: 0.78 },
+    { x: 0.54, y: 0.84 },
+    { x: 0.68, y: 0.56 },
+    { x: 0.58, y: 0.72 },
+    { x: 0.32, y: 0.88 },
   ];
 
   for (const point of points) {
@@ -43,21 +63,21 @@ async function addTenIdentityPairs(page: import('@playwright/test').Page) {
     await clickAlignmentPoint(page, 'alignment-add-point-he', point);
   }
 
-  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 10 / 10');
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 10 / 15');
 }
 
 async function addTenClusteredPairs(page: import('@playwright/test').Page) {
   const points = [
-    { x: 0.24, y: 0.28 },
-    { x: 0.26, y: 0.29 },
-    { x: 0.28, y: 0.3 },
-    { x: 0.3, y: 0.31 },
-    { x: 0.32, y: 0.32 },
-    { x: 0.34, y: 0.33 },
-    { x: 0.36, y: 0.34 },
-    { x: 0.38, y: 0.35 },
-    { x: 0.4, y: 0.36 },
-    { x: 0.42, y: 0.37 },
+    { x: 0.24, y: 0.72 },
+    { x: 0.26, y: 0.73 },
+    { x: 0.28, y: 0.74 },
+    { x: 0.3, y: 0.75 },
+    { x: 0.32, y: 0.76 },
+    { x: 0.34, y: 0.77 },
+    { x: 0.36, y: 0.78 },
+    { x: 0.38, y: 0.79 },
+    { x: 0.4, y: 0.8 },
+    { x: 0.42, y: 0.81 },
   ];
 
   for (const point of points) {
@@ -65,7 +85,7 @@ async function addTenClusteredPairs(page: import('@playwright/test').Page) {
     await clickAlignmentPoint(page, 'alignment-add-point-he', point);
   }
 
-  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 10 / 10');
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 10 / 15');
 }
 
 async function clickAlignmentPoint(
@@ -74,12 +94,14 @@ async function clickAlignmentPoint(
   point: { x: number; y: number },
 ) {
   const canvas = page.getByTestId(canvasTestId);
-  const image = canvas.locator('img');
   await expect(canvas).toBeVisible();
-  await expect(image).toBeVisible();
-  const clickPosition = await image.evaluate((img, p) => {
+  const clickPosition = await canvas.evaluate((canvasNode, p) => {
+    const img = canvasNode.querySelector('img');
+    if (!(img instanceof HTMLImageElement)) {
+      throw new Error('Alignment canvas image not found');
+    }
     const imageRect = img.getBoundingClientRect();
-    const canvasRect = img.parentElement?.parentElement?.getBoundingClientRect() ?? img.parentElement?.getBoundingClientRect() ?? imageRect;
+    const canvasRect = canvasNode.getBoundingClientRect();
     return {
       x: imageRect.left - canvasRect.left + imageRect.width * p.x,
       y: imageRect.top - canvasRect.top + imageRect.height * p.y,
@@ -105,21 +127,78 @@ async function getAlignmentImageBox(
   });
 }
 
-test('adding one landmark pair creates one point per canvas', async ({ page }) => {
-  await createProject(page, `task12-single-pair-${Date.now()}`);
+async function getAlignmentCirclePosition(
+  page: import('@playwright/test').Page,
+  canvasTestId: 'alignment-add-point-eosin' | 'alignment-add-point-he',
+  index = 0,
+) {
+  return page
+    .getByTestId(canvasTestId)
+    .locator('svg circle')
+    .nth(index)
+    .evaluate((circle) => ({
+      cx: Number(circle.getAttribute('cx')),
+      cy: Number(circle.getAttribute('cy')),
+    }));
+}
+
+test('guided pair creation keeps the complementary click contract and hides legacy global tools', async ({ page }) => {
+  await createProject(page, `task15-guided-flow-${Date.now()}`);
   await uploadAlignmentImages(page);
 
-  await expect(page.getByTestId('alignment-add-point-eosin')).toBeVisible();
-  await expect(page.getByTestId('alignment-add-point-he')).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Eosin landmarks' })).toHaveCount(0);
+  const locators = alignmentLocators(page);
 
-  await clickAlignmentPoint(page, 'alignment-add-point-eosin', { x: 0.2, y: 0.2 });
-  await clickAlignmentPoint(page, 'alignment-add-point-he', { x: 0.2, y: 0.2 });
+  await expect(locators.workflowOverlay).toBeVisible();
+  await expect(page.getByTestId('alignment-tool-add')).toHaveCount(0);
+  await expect(page.getByTestId('alignment-tool-move')).toHaveCount(0);
+  await expect(page.getByTestId('alignment-tool-delete')).toHaveCount(0);
+  await expectAwaitingSource(page);
 
-  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 1 / 10');
-
+  await clickAlignmentPoint(page, 'alignment-add-point-eosin', { x: 0.24, y: 0.48 });
   await expect(page.getByTestId('alignment-add-point-eosin').locator('svg circle')).toHaveCount(1);
-  await expect(page.getByTestId('alignment-add-point-he').locator('svg circle')).toHaveCount(1);
+  await expect(page.getByTestId('alignment-add-point-he').locator('svg circle')).toHaveCount(0);
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 0 / 15');
+
+  await page.getByTestId('alignment-add-point-eosin').locator('svg circle').nth(0).click();
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 0 / 15');
+
+  await clickAlignmentPoint(page, 'alignment-add-point-he', { x: 0.32, y: 0.88 });
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 1 / 15');
+  await expectAwaitingSource(page);
+});
+
+test('selected pair exposes contextual reposition and delete actions', async ({ page }) => {
+  await createProject(page, `task15-selected-pair-${Date.now()}`);
+  await uploadAlignmentImages(page);
+
+  await clickAlignmentPoint(page, 'alignment-add-point-eosin', { x: 0.32, y: 0.88 });
+  await clickAlignmentPoint(page, 'alignment-add-point-he', { x: 0.32, y: 0.88 });
+
+  const beforeTarget = await getAlignmentCirclePosition(page, 'alignment-add-point-he');
+  await page.getByTestId('alignment-add-point-he').locator('svg circle').nth(0).click();
+
+  await expect(page.getByTestId('alignment-selected-pair-badge')).toContainText(/pair/i);
+  await expect(page.getByTestId('alignment-select-reposition-target')).toBeVisible();
+  await expect(page.getByTestId('alignment-select-delete-pair')).toBeVisible();
+
+  await page.getByTestId('alignment-select-reposition-target').click();
+  await expect(page.getByTestId('alignment-workflow-instruction')).toContainText(/new h&e landmark position/i);
+
+  await clickAlignmentPoint(page, 'alignment-add-point-he', { x: 0.56, y: 0.88 });
+
+  const afterTarget = await getAlignmentCirclePosition(page, 'alignment-add-point-he');
+  expect(
+    afterTarget.cx !== beforeTarget.cx || afterTarget.cy !== beforeTarget.cy,
+  ).toBe(true);
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 1 / 15');
+  await expectAwaitingSource(page);
+
+  await page.getByTestId('alignment-add-point-eosin').locator('svg circle').nth(0).click();
+  await page.getByTestId('alignment-select-delete-pair').click();
+
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 0 / 15');
+  await expect(page.getByTestId('alignment-add-point-eosin').locator('svg circle')).toHaveCount(0);
+  await expect(page.getByTestId('alignment-add-point-he').locator('svg circle')).toHaveCount(0);
 });
 
 test('workspace edits persist only after step transition save', async ({ page }) => {
@@ -129,33 +208,41 @@ test('workspace edits persist only after step transition save', async ({ page })
 
   await createProject(page, initialName);
 
-  const nameInput = page.locator('input').first();
+  await page.getByRole('heading', { name: initialName }).click();
+  const nameInput = page.getByTestId('project-name-input');
   await nameInput.fill(deferredName);
   await page.waitForTimeout(1200);
   await page.reload();
-  await expect(page.locator(`input[value="${initialName}"]`)).toBeVisible();
+  await expect(page.getByRole('heading', { name: initialName })).toBeVisible();
 
-  await nameInput.fill(persistedName);
+  await page.getByRole('heading', { name: initialName }).click();
+  await page.getByTestId('project-name-input').fill(persistedName);
   await page.getByTestId('preprocess-step-localize').click();
   await expect(page.getByTestId('autosave-status')).toContainText(/saved|saving/i);
   await page.waitForTimeout(1200);
   await page.reload();
 
-  await expect(page.locator(`input[value="${persistedName}"]`)).toBeVisible();
+  await expect(page.getByRole('heading', { name: persistedName })).toBeVisible();
   await expect(page.getByText('Chip localization')).toBeVisible();
 });
 
 test('localize transform exposes zoom control', async ({ page }) => {
   await createProject(page, `task12-localize-zoom-${Date.now()}`);
+  await page.getByTestId('preprocess-step-source-assets').click();
+  const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.png');
+  await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
   await page.getByTestId('preprocess-step-localize').click();
-  await expect(page.getByTestId('localize-scale-slider')).toBeVisible();
+  await expect(page.getByTestId('localize-stage-controls')).toBeVisible();
+  await expect(page.getByTestId('localize-stage-zoom-in')).toBeVisible();
 });
 
-test('align exposes HE transform controls and wheel zoom does not scroll page', async ({ page }) => {
-  await createProject(page, `task12-align-he-controls-${Date.now()}`);
+test('align exposes floating H&E transform controls and wheel zoom does not scroll page', async ({ page }) => {
+  await createProject(page, `task15-align-he-controls-${Date.now()}`);
   await uploadAlignmentImages(page);
   await expect(page.getByText(/Landmark alignment can now target this image/i)).toBeHidden({ timeout: 10_000 });
 
+  await expect(page.getByTestId('alignment-reference-view-controls')).toBeVisible();
+  await expect(page.getByTestId('alignment-moving-view-controls')).toBeVisible();
   await expect(page.getByTestId('alignment-he-rotation-slider')).toBeVisible();
   await expect(page.getByTestId('alignment-he-scale-slider')).toBeVisible();
   await expect(page.getByTestId('alignment-he-flip-horizontal')).toBeVisible();
@@ -201,7 +288,7 @@ test('repeated solve/reset stays stable and crop step remains reachable', async 
     await page.getByTestId('alignment-run-solve').click();
     await expect(page.getByTestId('alignment-status')).toContainText(/Accepted|Rejected/i);
     await page.getByTestId('alignment-reset').click();
-    await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 0 / 10');
+    await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 0 / 15');
   }
 
   await addTenIdentityPairs(page);
@@ -236,24 +323,28 @@ test('oversized input and synthetic quota failure surface recoverable errors', a
   await fs.mkdir(path.dirname(oversizedPath), { recursive: true });
   await fs.writeFile(oversizedPath, '');
   await fs.truncate(oversizedPath, 512 * 1024 * 1024 + 1);
-  await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   await page.locator('input[type="file"]').first().setInputFiles(oversizedPath);
 
   await expect(page.getByText(/exceeds/i)).toBeVisible();
 
   const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.png');
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
   await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
+  await page.getByTestId('preprocess-step-localize').click();
+  await page.getByTestId('localize-stage-reset').click();
   await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
 
-  await page.evaluate(() => {
-    (window as unknown as { __PREPROCESS_TEST_FORCE_QUOTA__?: boolean }).__PREPROCESS_TEST_FORCE_QUOTA__ = true;
-  });
-
-  const nameInput = page.locator('input').first();
+  await page.getByRole('heading', { name: /task12-hardening-errors-/i }).click();
+  const nameInput = page.getByTestId('project-name-input');
   await nameInput.fill(`task12-hardening-quota-${Date.now()}`);
-  await page.getByTestId('preprocess-step-align').click();
+  await page.evaluate(() => {
+    Object.defineProperty(window, '__PREPROCESS_TEST_FORCE_QUOTA__', {
+      configurable: true,
+      get: () => true,
+      set: () => {},
+    });
+  });
+  await nameInput.blur();
 
   await expect(page.getByTestId('autosave-status')).toContainText('error');
   await expect(page.getByText('save failed — last saved snapshot preserved')).toBeVisible();
@@ -270,5 +361,9 @@ test('oversized input and synthetic quota failure surface recoverable errors', a
   });
 
   await fs.rm(oversizedPath, { force: true });
+
+  await page.evaluate(() => {
+    delete (window as unknown as { __PREPROCESS_TEST_FORCE_QUOTA__?: boolean }).__PREPROCESS_TEST_FORCE_QUOTA__;
+  });
 
 });

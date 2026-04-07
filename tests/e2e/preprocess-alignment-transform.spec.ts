@@ -20,7 +20,7 @@ async function createProject(page: import('@playwright/test').Page, name: string
 
 async function completeLocalization(page: import('@playwright/test').Page) {
   await page.getByTestId('preprocess-step-localize').click();
-  const rotatePlusNinety = page.getByTestId('localize-rotate-plus-90');
+  const rotatePlusNinety = page.getByTestId('localize-stage-rotate-right-90');
   await expect(rotatePlusNinety).toBeVisible();
   await rotatePlusNinety.click();
   await expect(page.getByTestId('localize-stage-rotation-value')).toHaveText('90.0°');
@@ -45,4 +45,3 @@ test('alignment remains consumer-only after source asset uploads', async ({ page
   await expect(page.getByRole('button', { name: /Replace H&E image/i })).toHaveCount(0);
   await expect(page.getByTestId('alignment-runtime-status-badge')).toContainText(/ready/i, { timeout: 180_000 });
 });
-
