@@ -56,7 +56,7 @@ import { CanvasStage } from "./CanvasStage";
 import { ChipConfigPanel } from "./ChipConfigPanel";
 import { CropQcPanel } from "./CropQcPanel";
 import { ExportPanel } from "./ExportPanel";
-import { PREPROCESS_STEP_ITEMS, StepSidebar } from "./StepSidebar";
+import { StepSidebar } from "./StepSidebar";
 import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
@@ -626,10 +626,6 @@ export function PreprocessWorkspace({
 		[applyLocalizationUpdate],
 	);
 
-	const currentStepMeta = project
-		? (PREPROCESS_STEP_ITEMS.find((step) => step.id === project.currentStep) ??
-			PREPROCESS_STEP_ITEMS[0])
-		: PREPROCESS_STEP_ITEMS[0];
 	const currentCopy = project
 		? placeholderCopyByStep[project.currentStep]
 		: placeholderCopyByStep.sourceAssets;
@@ -794,20 +790,6 @@ export function PreprocessWorkspace({
 
 					<Box flex="1" minW={0}>
 						<Stack spacing={6}>
-							<Flex
-								justify="space-between"
-								align={{ base: "stretch", md: "center" }}
-								gap={4}
-								wrap="wrap"
-							>
-								<Stack spacing={1}>
-									<Badge colorScheme="brand" alignSelf="flex-start">
-										{currentStepMeta.label}
-									</Badge>
-									<Heading size="md">{currentCopy.title}</Heading>
-								</Stack>
-							</Flex>
-
 							{project.currentStep === "sourceAssets" ? (
 								<Stack spacing={5}>
 									<Text color="gray.600" maxW="3xl">
