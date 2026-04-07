@@ -27,6 +27,9 @@ type CanvasStageProps = {
   image: PreprocessSourceImage | null;
   imageTransform: LocalizationImageTransform;
   onChipBoundsChange: (chipBounds: PreprocessRect) => void;
+  onFlipHorizontal: () => void;
+  onFlipVertical: () => void;
+  onResetTransform: () => void;
   onRotationChange: (rotationDegrees: number) => void;
   onRotationDelta: (delta: number) => void;
   onScaleChange: (scale: number) => void;
@@ -85,6 +88,9 @@ export function CanvasStage({
   image,
   imageTransform,
   onChipBoundsChange,
+  onFlipHorizontal,
+  onFlipVertical,
+  onResetTransform,
   onRotationChange,
   onRotationDelta,
   onScaleChange,
@@ -533,35 +539,62 @@ export function CanvasStage({
               backdropFilter='blur(12px)'
               data-testid='localize-stage-controls'
             >
-              <Stack spacing={3}>
-                <Flex justify='space-between' align='center' gap={3}>
-                  <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Zoom</Text>
-                  <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-scale-value'>
-                    {(imageTransform.scale * 100).toFixed(0)}%
-                  </Text>
-                </Flex>
-                <ButtonGroup size='sm' isAttached variant='outline'>
-                  <Button data-testid='localize-stage-zoom-out' onClick={() => onScaleDelta(-0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                    −
+              <Stack spacing={3} minW='220px'>
+                <Stack spacing={2} data-testid='localize-stage-section-zoom'>
+                  <Flex justify='space-between' align='center' gap={3}>
+                    <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Zoom</Text>
+                    <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-scale-value'>
+                      {(imageTransform.scale * 100).toFixed(0)}%
+                    </Text>
+                  </Flex>
+                  <ButtonGroup size='sm' isAttached variant='outline'>
+                    <Button aria-label='Zoom out' data-testid='localize-stage-zoom-out' onClick={() => onScaleDelta(-0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      −
+                    </Button>
+                    <Button aria-label='Zoom in' data-testid='localize-stage-zoom-in' onClick={() => onScaleDelta(0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      +
+                    </Button>
+                  </ButtonGroup>
+                </Stack>
+                <Stack spacing={2} data-testid='localize-stage-section-rotation'>
+                  <Flex justify='space-between' align='center' gap={3}>
+                    <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Rotation</Text>
+                    <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-rotation-value'>
+                      {imageTransform.rotationDegrees.toFixed(1)}°
+                    </Text>
+                  </Flex>
+                  <ButtonGroup size='sm' variant='outline' isAttached>
+                    <Button aria-label='Rotate left 90 degrees' data-testid='localize-stage-rotate-left-90' onClick={() => onRotationDelta(-90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      ↺90
+                    </Button>
+                    <Button aria-label='Rotate right 90 degrees' data-testid='localize-stage-rotate-right-90' onClick={() => onRotationDelta(90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      ↻90
+                    </Button>
+                    <Button aria-label='Rotate left 1 degree' data-testid='localize-stage-rotate-left-1' onClick={() => onRotationDelta(-1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      ↺1
+                    </Button>
+                    <Button aria-label='Rotate right 1 degree' data-testid='localize-stage-rotate-right-1' onClick={() => onRotationDelta(1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      ↻1
+                    </Button>
+                  </ButtonGroup>
+                </Stack>
+                <Stack spacing={2} data-testid='localize-stage-section-flip'>
+                  <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Flip</Text>
+                  <ButtonGroup size='sm' variant='outline' isAttached>
+                    <Button aria-label='Flip horizontally' data-testid='localize-stage-flip-horizontal' onClick={onFlipHorizontal} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      ⇋
+                    </Button>
+                    <Button aria-label='Flip vertically' data-testid='localize-stage-flip-vertical' onClick={onFlipVertical} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                      ⇅
+                    </Button>
+                  </ButtonGroup>
+                </Stack>
+                <Stack spacing={2} data-testid='localize-stage-section-reset'>
+                  <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Reset</Text>
+                  <Button aria-label='Reset localization transform' size='sm' variant='outline' data-testid='localize-stage-reset' onClick={onResetTransform} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    ⟲
                   </Button>
-                  <Button data-testid='localize-stage-zoom-in' onClick={() => onScaleDelta(0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                    +
-                  </Button>
-                </ButtonGroup>
-                <Flex justify='space-between' align='center' gap={3}>
-                  <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Rotation</Text>
-                  <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-rotation-value'>
-                    {imageTransform.rotationDegrees.toFixed(1)}°
-                  </Text>
-                </Flex>
-                <ButtonGroup size='sm' isAttached variant='outline'>
-                  <Button data-testid='localize-stage-rotate-left' onClick={() => onRotationDelta(-90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                    ↺
-                  </Button>
-                  <Button data-testid='localize-stage-rotate-right' onClick={() => onRotationDelta(90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                    ↻
-                  </Button>
-                </ButtonGroup>
+                </Stack>
               </Stack>
             </Box>
             <Box position='absolute' left={4} bottom={4} bg='blackAlpha.700' color='whiteAlpha.900' px={3} py={2} borderRadius='lg' maxW='320px'>
@@ -572,7 +605,7 @@ export function CanvasStage({
           <Flex align='center' justify='center' h='100%' px={6} textAlign='center'>
             <Stack spacing={3} maxW='420px'>
               <Text fontSize='lg' fontWeight='semibold' color='whiteAlpha.900'>No eosin image loaded</Text>
-              <Text color='whiteAlpha.700'>Upload the eosin source from the properties rail to preview and localize the chip footprint here.</Text>
+              <Text color='whiteAlpha.700'>Upload the eosin source to preview and localize the chip footprint here.</Text>
             </Stack>
           </Flex>
         )}

@@ -56,7 +56,6 @@ import { CanvasStage } from "./CanvasStage";
 import { ChipConfigPanel } from "./ChipConfigPanel";
 import { CropQcPanel } from "./CropQcPanel";
 import { ExportPanel } from "./ExportPanel";
-import { LocalizationPanel } from "./LocalizationPanel";
 import { PREPROCESS_STEP_ITEMS, StepSidebar } from "./StepSidebar";
 import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
@@ -81,6 +80,13 @@ const autosaveTone: Record<AutosaveStatus, string> = {
 	saved: "green",
 	retrying: "orange",
 	error: "red",
+};
+
+const clampLocalizationScale = (value: number) => Math.min(4, Math.max(0.5, value));
+
+const normalizeLocalizationRotationDegrees = (value: number) => {
+	const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
+	return Object.is(wrapped, -0) ? 0 : wrapped;
 };
 
 const placeholderCopyByStep: Record<
@@ -613,7 +619,7 @@ export function PreprocessWorkspace({
 				...current,
 				imageTransform: {
 					...current.imageTransform,
-					rotationDegrees: value,
+					rotationDegrees: normalizeLocalizationRotationDegrees(value),
 				},
 			}));
 		},
@@ -842,133 +848,84 @@ export function PreprocessWorkspace({
 									gap={5}
 									align="stretch"
 								>
-									<CanvasStage
-										boxColor={
-											project.localization.boxColor as LocalizationBoxColor
-										}
-										chipBounds={project.localization.chipBounds}
-										image={localizationImage}
-										imageTransform={project.localization.imageTransform}
-										onScaleChange={(value) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
-														...current.imageTransform,
-														scale: value,
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
-										onScaleDelta={(delta) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
-														...current.imageTransform,
-														scale: current.imageTransform.scale + delta,
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
-										onRotationChange={handleLocalizationRotationChange}
-										onRotationDelta={(delta) => {
-											applyLocalizationUpdate((current) => ({
+								<CanvasStage
+									boxColor={
+										project.localization.boxColor as LocalizationBoxColor
+									}
+									chipBounds={project.localization.chipBounds}
+									image={localizationImage}
+									imageTransform={project.localization.imageTransform}
+									onScaleChange={(value) => {
+										applyLocalizationUpdate(
+											(current) => ({
 												...current,
 												imageTransform: {
 													...current.imageTransform,
-													rotationDegrees:
-														current.imageTransform.rotationDegrees + delta,
+													scale: value,
 												},
-											}));
-										}}
-										onChipBoundsChange={(chipBounds) => {
-											applyLocalizationUpdate((current) => ({
+											}),
+											{ invalidateDownstream: false },
+										);
+									}}
+									onScaleDelta={(delta) => {
+										applyLocalizationUpdate(
+											(current) => ({
 												...current,
-												chipBounds,
-												method: "manual",
-											}));
-										}}
-									/>
+												imageTransform: {
+													...current.imageTransform,
+													scale: clampLocalizationScale(
+														current.imageTransform.scale + delta,
+													),
+												},
+											}),
+											{ invalidateDownstream: false },
+										);
+									}}
+									onRotationChange={handleLocalizationRotationChange}
+									onRotationDelta={(delta) => {
+										applyLocalizationUpdate((current) => ({
+											...current,
+											imageTransform: {
+												...current.imageTransform,
+												rotationDegrees: normalizeLocalizationRotationDegrees(
+													current.imageTransform.rotationDegrees + delta,
+												),
+											},
+										}));
+									}}
+									onFlipHorizontal={() => {
+										applyLocalizationUpdate((current) => ({
+											...current,
+											imageTransform: {
+												...current.imageTransform,
+												flipHorizontal: !current.imageTransform.flipHorizontal,
+											},
+										}));
+									}}
+									onFlipVertical={() => {
+										applyLocalizationUpdate((current) => ({
+											...current,
+											imageTransform: {
+												...current.imageTransform,
+												flipVertical: !current.imageTransform.flipVertical,
+											},
+										}));
+									}}
+									onResetTransform={() => {
+										applyLocalizationUpdate((current) => ({
+											...current,
+											imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+										}));
+									}}
+									onChipBoundsChange={(chipBounds) => {
+										applyLocalizationUpdate((current) => ({
+											...current,
+											chipBounds,
+											method: "manual",
+										}));
+									}}
+								/>
 
-									<LocalizationPanel
-										boxColor={
-											project.localization.boxColor as LocalizationBoxColor
-										}
-										image={localizationImage}
-										imageTransform={project.localization.imageTransform}
-										onBoxColorChange={(value) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													boxColor: value,
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
-										onFlipHorizontal={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													flipHorizontal:
-														!current.imageTransform.flipHorizontal,
-												},
-											}));
-										}}
-										onFlipVertical={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													flipVertical: !current.imageTransform.flipVertical,
-												},
-											}));
-										}}
-										onResetTransform={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-											}));
-										}}
-										onRotationChange={handleLocalizationRotationChange}
-										onRotationDelta={(delta) => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													rotationDegrees:
-														current.imageTransform.rotationDegrees + delta,
-												},
-											}));
-										}}
-										onScaleChange={(value) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
-														...current.imageTransform,
-														scale: value,
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
-										onScaleDelta={(delta) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
-														...current.imageTransform,
-														scale: current.imageTransform.scale + delta,
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
-									/>
 								</Flex>
 							) : project.currentStep === "alignment" ? (
 							<AlignmentPanel
