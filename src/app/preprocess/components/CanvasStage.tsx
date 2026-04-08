@@ -4,6 +4,7 @@ import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@ch
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { computeBaseView, getTransform, relativeToImage } from '@/lib/canvasViewport';
 import {
+  applyImageDisplayTransform,
   invertImageDisplayTransform,
 } from '@/lib/preprocess/imageTransforms';
 import {
@@ -349,11 +350,13 @@ export function CanvasStage({
   const toScreenPoint = useCallback((point: PreprocessPoint) => {
     if (!displayTransform) return null;
 
+    const displayPoint = applyImageDisplayTransform(point, imageTransform);
+
     return {
-      x: displayTransform.originX + point.x * displayTransform.width,
-      y: displayTransform.originY + point.y * displayTransform.height,
+      x: displayTransform.originX + displayPoint.x * displayTransform.width,
+      y: displayTransform.originY + displayPoint.y * displayTransform.height,
     };
-  }, [displayTransform]);
+  }, [displayTransform, imageTransform]);
 
   const overlay = useMemo(() => {
     if (!displayTransform || !normalizedChipBounds) return null;

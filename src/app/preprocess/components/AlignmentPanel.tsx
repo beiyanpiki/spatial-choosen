@@ -9,7 +9,6 @@ import {
 	Heading,
 	HStack,
 	IconButton,
-	Input,
 	Stack,
 	Text,
 } from "@chakra-ui/react";
@@ -383,109 +382,99 @@ function LandmarkCanvas({
 		<Stack spacing={3} flex="1" minW={0}>
 			<Box
 				border="1px solid"
-				borderColor="gray.100"
+				borderColor="gray.200"
 				borderRadius="lg"
 				overflow="hidden"
-				bg="gray.900"
+				bg="white"
 				minH="320px"
 				h={{ base: "52vh", xl: "58vh" }}
 				maxH="680px"
 				position="relative"
+				boxShadow="sm"
 				data-testid={`${testIdPrefix}-canvas-container`}
 			>
-			<Box
-				position="absolute"
-				top={3}
-				left={3}
-				zIndex={2}
-				pointerEvents="none"
-			>
-				{helpOverlayState === "hidden" ? (
-					<IconButton
-						aria-label={HELP_COPY.reopen}
-						icon={<InfoOutlineIcon boxSize={4} />}
-						size="sm"
-						variant="outline"
-						onClick={() => setHelpOverlayState("expanded")}
-						pointerEvents="auto"
-						bg="blackAlpha.700"
-						color="whiteAlpha.950"
-						borderColor="whiteAlpha.300"
-						_hover={{ bg: "blackAlpha.800" }}
-						_active={{ bg: "blackAlpha.800" }}
-						data-testid={`${testIdPrefix}-help-reopen`}
-					/>
-				) : (
-					<Stack
-						spacing={helpOverlayState === "expanded" ? 2 : 1}
-						bg="blackAlpha.700"
-						color="whiteAlpha.950"
-						border="1px solid"
-						borderColor="whiteAlpha.300"
-						borderRadius="xl"
-						px={3}
-						py={2}
-						backdropFilter="blur(12px)"
-						maxW={helpOverlayState === "expanded" ? "280px" : "220px"}
-						pointerEvents="auto"
-					>
-						<Flex align="center" gap={2} minW={0}>
-							<InfoOutlineIcon boxSize={3.5} color="whiteAlpha.800" />
-							<Text
-								fontSize="xs"
-								textTransform="uppercase"
-								letterSpacing="0.12em"
-								color="whiteAlpha.700"
-								flex="1"
-								minW={0}
-							>
-								{title}
+				<Box
+					position="absolute"
+					left={4}
+					bottom={4}
+					zIndex={2}
+					pointerEvents="none"
+				>
+					{helpOverlayState === "hidden" ? (
+						<IconButton
+							aria-label={HELP_COPY.reopen}
+							icon={<InfoOutlineIcon boxSize={4} />}
+							size="sm"
+							variant="outline"
+							onClick={() => setHelpOverlayState("expanded")}
+							pointerEvents="auto"
+							bg="blackAlpha.700"
+							color="whiteAlpha.900"
+							borderColor="whiteAlpha.300"
+							_hover={{ bg: "blackAlpha.800" }}
+							_active={{ bg: "blackAlpha.800" }}
+							data-testid={`${testIdPrefix}-help-reopen`}
+						/>
+					) : (
+						<Stack
+							spacing={helpOverlayState === "expanded" ? 2 : 1}
+							bg="blackAlpha.700"
+							color="whiteAlpha.900"
+							px={3}
+							py={2}
+							borderRadius="lg"
+							maxW={helpOverlayState === "expanded" ? "320px" : "220px"}
+							pointerEvents="auto"
+						>
+							<Flex align="center" gap={2} minW={0}>
+								<Text fontSize="xs" fontWeight="semibold" flex="1" minW={0}>
+									{title}
+								</Text>
+								<HStack spacing={1} flexShrink={0}>
+									<IconButton
+										aria-label={
+											helpOverlayState === "expanded"
+												? HELP_COPY.minimize
+												: HELP_COPY.expand
+										}
+										icon={
+											helpOverlayState === "expanded" ? (
+												<ChevronDownIcon boxSize={4} />
+											) : (
+												<ChevronUpIcon boxSize={4} />
+											)
+										}
+										size="xs"
+										variant="ghost"
+										color="whiteAlpha.900"
+										onClick={() =>
+											setHelpOverlayState((current) =>
+												current === "expanded" ? "collapsed" : "expanded",
+											)
+										}
+										_hover={{ bg: "whiteAlpha.200" }}
+										_active={{ bg: "whiteAlpha.200" }}
+									/>
+									<IconButton
+										aria-label={HELP_COPY.dismiss}
+										icon={<CloseIcon boxSize={2.5} />}
+										size="xs"
+										variant="ghost"
+										color="whiteAlpha.900"
+										onClick={() => setHelpOverlayState("hidden")}
+										_hover={{ bg: "whiteAlpha.200" }}
+										_active={{ bg: "whiteAlpha.200" }}
+									/>
+								</HStack>
+							</Flex>
+							<Text fontSize="xs" color="whiteAlpha.900">
+								{helpOverlayState === "expanded"
+									? HELP_COPY.expanded
+									: HELP_COPY.collapsed}
 							</Text>
-							<HStack spacing={1} flexShrink={0}>
-								<IconButton
-									aria-label={
-										helpOverlayState === "expanded"
-											? HELP_COPY.minimize
-											: HELP_COPY.expand
-									}
-									icon={
-										helpOverlayState === "expanded" ? (
-											<ChevronDownIcon boxSize={4} />
-										) : (
-											<ChevronUpIcon boxSize={4} />
-										)
-									}
-									size="xs"
-									variant="ghost"
-									color="whiteAlpha.900"
-									onClick={() =>
-										setHelpOverlayState((current) =>
-											current === "expanded" ? "collapsed" : "expanded",
-										)
-									}
-									_hover={{ bg: "whiteAlpha.200" }}
-									_active={{ bg: "whiteAlpha.200" }}
-								/>
-								<IconButton
-									aria-label={HELP_COPY.dismiss}
-									icon={<CloseIcon boxSize={2.5} />}
-									size="xs"
-									variant="ghost"
-									color="whiteAlpha.900"
-									onClick={() => setHelpOverlayState("hidden")}
-									_hover={{ bg: "whiteAlpha.200" }}
-									_active={{ bg: "whiteAlpha.200" }}
-								/>
-							</HStack>
-						</Flex>
-						<Text fontSize="xs" color="whiteAlpha.800">
-							{helpOverlayState === "expanded"
-								? HELP_COPY.expanded
-								: HELP_COPY.collapsed}
-						</Text>
-					</Stack>
-				)}
-			</Box>
+						</Stack>
+					)}
+				</Box>
 				{panelContent ? (
 					<Box position="absolute" top={4} right={4} zIndex={2}>
 						{panelContent}
@@ -903,20 +892,20 @@ export function AlignmentPanel({
 
 	const workflowInstruction = useMemo(() => {
 		if (interactionMode === "awaiting-source") {
-			return "Click the eosin canvas to place the reference landmark for a new pair.";
+			return "Use wheel zoom and drag pan on the eosin canvas, then click it to place the reference landmark for a new pair.";
 		}
 		if (interactionMode === "awaiting-target") {
-			return "Click the H&E canvas to complete the landmark pair.";
+			return "Pan or zoom as needed, then click the H&E canvas to complete the landmark pair.";
 		}
 		if (interactionMode === "reposition-source") {
-			return "Select the new eosin landmark position for the chosen pair.";
+			return "Use the eosin canvas to choose the new reference landmark position for the selected pair.";
 		}
 		if (interactionMode === "reposition-target") {
-			return "Select the new H&E landmark position for the chosen pair.";
+			return "Use the H&E canvas to choose the new moving-image landmark position for the selected pair.";
 		}
 		return selectedPair
-			? "Selected pair ready. Reposition either point, delete the pair, or continue solving."
-			: "Select an existing pair or start a new one from the eosin canvas.";
+			? "Selected pair ready. Reposition either point, delete the pair, or continue solving while using pan and zoom directly on the canvases."
+			: "Start on the eosin canvas, using wheel zoom and drag pan as needed before placing the next reference point.";
 	}, [interactionMode, selectedPair]);
 
 
@@ -1069,14 +1058,14 @@ export function AlignmentPanel({
 			left={4}
 			right={4}
 			zIndex={3}
-			bg="rgba(15, 23, 42, 0.82)"
-			color="whiteAlpha.950"
+			bg="rgba(255, 255, 255, 0.94)"
+			color="gray.800"
 			border="1px solid"
-			borderColor="whiteAlpha.200"
+			borderColor="gray.200"
 			borderRadius="2xl"
 			px={{ base: 3, md: 4 }}
 			py={{ base: 3, md: 4 }}
-			boxShadow="0 18px 48px rgba(15, 23, 42, 0.28)"
+			boxShadow="0 18px 48px rgba(15, 23, 42, 0.12)"
 			backdropFilter="blur(18px)"
 			data-testid="alignment-workflow-overlay"
 		>
@@ -1093,7 +1082,7 @@ export function AlignmentPanel({
 								fontSize="xs"
 								textTransform="uppercase"
 								letterSpacing="0.12em"
-								color="whiteAlpha.700"
+								color="gray.500"
 							>
 								Guided alignment workflow
 							</Text>
@@ -1182,10 +1171,10 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						variant="outline"
-						color="white"
-						borderColor="whiteAlpha.300"
-						bg="whiteAlpha.100"
-						_hover={{ bg: "whiteAlpha.200" }}
+						color="gray.700"
+						borderColor="gray.300"
+						bg="whiteAlpha.800"
+						_hover={{ bg: "white" }}
 						onClick={() => {
 							if (!selectedPairId) return;
 							setPendingSourcePoint(null);
@@ -1200,10 +1189,10 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						variant="outline"
-						color="white"
-						borderColor="whiteAlpha.300"
-						bg="whiteAlpha.100"
-						_hover={{ bg: "whiteAlpha.200" }}
+						color="gray.700"
+						borderColor="gray.300"
+						bg="whiteAlpha.800"
+						_hover={{ bg: "white" }}
 						onClick={() => {
 							if (!selectedPairId) return;
 							setPendingSourcePoint(null);
@@ -1237,8 +1226,8 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						variant="ghost"
-						color="white"
-						_hover={{ bg: "whiteAlpha.200" }}
+						color="gray.700"
+						_hover={{ bg: "gray.100" }}
 						onClick={clearLocalInteractionState}
 						isDisabled={interactionMode === "awaiting-source" && !pendingSourcePoint}
 						data-testid="alignment-select-cancel"
@@ -1248,8 +1237,8 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						variant="ghost"
-						color="white"
-						_hover={{ bg: "whiteAlpha.200" }}
+						color="gray.700"
+						_hover={{ bg: "gray.100" }}
 						onClick={() => setShowDiagnostics((current) => !current)}
 						data-testid="alignment-diagnostics-toggle"
 					>
@@ -1258,8 +1247,8 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						variant="ghost"
-						color="white"
-						_hover={{ bg: "whiteAlpha.200" }}
+						color="gray.700"
+						_hover={{ bg: "gray.100" }}
 						onClick={() => {
 							setPendingSourcePoint(null);
 							setRepositionPairId(null);
@@ -1276,8 +1265,8 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						variant="ghost"
-						color="white"
-						_hover={{ bg: "whiteAlpha.200" }}
+						color="gray.700"
+						_hover={{ bg: "gray.100" }}
 						onClick={() => {
 							setPendingSourcePoint(null);
 							setRepositionPairId(null);
@@ -1293,7 +1282,7 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						colorScheme="brand"
-						boxShadow="0 0 0 1px rgba(255,255,255,0.08)"
+						boxShadow="sm"
 						onClick={() => void solveAlignment()}
 						isDisabled={!canSolve}
 						data-testid="alignment-run-solve"
@@ -1317,29 +1306,6 @@ export function AlignmentPanel({
 		</Box>
 	);
 
-	const referenceViewControls = (
-		<Box
-			bg="blackAlpha.700"
-			color="whiteAlpha.950"
-			border="1px solid"
-			borderColor="whiteAlpha.300"
-			borderRadius="xl"
-			px={3}
-			py={3}
-			backdropFilter="blur(12px)"
-			data-testid="alignment-reference-view-controls"
-		>
-			<Stack spacing={3} minW="220px">
-				<Text fontSize="xs" textTransform="uppercase" letterSpacing="0.12em" color="whiteAlpha.700">
-					Reference view
-				</Text>
-				<Text fontSize="xs" color="whiteAlpha.800">
-					Use wheel zoom and drag pan on the eosin canvas. Landmark placement stays guided by the shared workflow overlay.
-				</Text>
-			</Stack>
-		</Box>
-	);
-
 	const movingViewControls = (
 		<Box
 			bg="blackAlpha.700"
@@ -1353,14 +1319,6 @@ export function AlignmentPanel({
 			data-testid="alignment-moving-view-controls"
 		>
 			<Stack spacing={3} minW="220px">
-				<Text
-					fontSize="xs"
-					textTransform="uppercase"
-					letterSpacing="0.12em"
-					color="whiteAlpha.700"
-				>
-					Moving image view + transform
-				</Text>
 				<Stack spacing={2} data-testid="alignment-he-section-scale">
 					<Flex justify="space-between" align="center" gap={3}>
 						<Text
@@ -1419,29 +1377,6 @@ export function AlignmentPanel({
 							+
 						</Button>
 					</ButtonGroup>
-					<Input
-						type="range"
-						min={0.5}
-						max={4}
-						step={0.05}
-						value={alignment.movingImageTransform.scale}
-						data-testid="alignment-he-scale-slider"
-						onChange={(event) => {
-							const nextScale = Number(event.target.value);
-							onAlignmentChange(
-								(slice) =>
-									normalizeAlignmentSlice({
-										...slice,
-										movingImageTransform: {
-											...slice.movingImageTransform,
-											scale: nextScale,
-										},
-									}),
-								{ invalidateDownstream: false },
-							);
-						}}
-						px={0}
-					/>
 				</Stack>
 				<Stack spacing={2} data-testid="alignment-he-section-rotation">
 					<Flex justify="space-between" align="center" gap={3}>
@@ -1457,7 +1392,7 @@ export function AlignmentPanel({
 							{alignment.movingImageTransform.rotationDegrees.toFixed(1)}°
 						</Text>
 					</Flex>
-					<ButtonGroup size="sm" variant="outline" isAttached>
+					<ButtonGroup size="sm" variant="outline" isAttached flexWrap="wrap">
 						<Button
 							aria-label="Rotate H&E left 90 degrees"
 							color="white"
@@ -1547,29 +1482,6 @@ export function AlignmentPanel({
 							↻1
 						</Button>
 					</ButtonGroup>
-					<Input
-						type="range"
-						min={-180}
-						max={180}
-						step={0.5}
-						value={alignment.movingImageTransform.rotationDegrees}
-						data-testid="alignment-he-rotation-slider"
-						onChange={(event) => {
-							const nextRotation = Number(event.target.value);
-							onAlignmentChange(
-								(slice) =>
-									normalizeAlignmentSlice({
-										...slice,
-										movingImageTransform: {
-											...slice.movingImageTransform,
-											rotationDegrees: nextRotation,
-										},
-									}),
-								{ invalidateDownstream: false },
-							);
-						}}
-						px={0}
-					/>
 				</Stack>
 				<Stack spacing={2} data-testid="alignment-he-section-flip">
 					<Text
@@ -1714,7 +1626,6 @@ export function AlignmentPanel({
 						title="Eosin landmarks (reference)"
 						interactionMode={interactionMode}
 						selectedPairId={selectedPairId}
-						panelContent={referenceViewControls}
 						onBackgroundPoint={handleBackgroundPoint}
 						onBackgroundFallback={clearLocalInteractionState}
 						onSelectPoint={handleSelectPair}

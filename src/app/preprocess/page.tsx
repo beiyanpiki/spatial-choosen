@@ -3,13 +3,14 @@
 import { Box, Heading, useToast } from '@chakra-ui/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { PREPROCESS_STORAGE_SCHEMA_VERSION } from '@/lib/preprocess/constants';
 import {
   DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
   normalizeLocalizationSlice,
 } from '@/lib/preprocess/localization';
-import { deserializePreprocessImport } from '@/lib/preprocess/package';
-import { PREPROCESS_STORAGE_SCHEMA_VERSION } from '@/lib/preprocess/constants';
 import { migratePreprocessProject } from '@/lib/preprocess/migrations';
+import { deserializePreprocessImport } from '@/lib/preprocess/package';
+import { DEFAULT_TISSUE_PARAMS } from '@/lib/preprocess/tissueThresholds';
 import {
   deletePreprocessProject,
   getPreprocessProject,
@@ -183,12 +184,7 @@ const buildEmptyPreprocessProject = (name: string): PreprocessProject => {
     tissueSelection: {
       ...createSlice('idle'),
       mode: 'polygon',
-      thresholdMode: 'light',
-      activationThreshold: 140,
-      blockThreshold: 180,
-      dbscanEps: 0.03,
-      dbscanMinSamples: 3,
-      minConnectedSpotCount: 8,
+      ...DEFAULT_TISSUE_PARAMS,
       autoSelectedSpotIds: [],
       forcedInSpotIds: [],
       forcedOutSpotIds: [],
