@@ -1,6 +1,7 @@
 export type PreprocessStepId =
   | "sourceAssets"
   | "localization"
+  | "heFocus"
   | "alignment"
   | "cropQc"
   | "chipConfig"
@@ -95,6 +96,14 @@ export type LocalizationSlice = PreprocessSliceBase & {
   handles: LocalizationHandle[];
   boxColor: LocalizationBoxColor;
   imageTransform: LocalizationImageTransform;
+};
+
+export type HeFocusSlice = PreprocessSliceBase & {
+  targetImage: "he";
+  chipBounds: PreprocessRect | null;
+  handles: LocalizationHandle[];
+  imageTransform: LocalizationImageTransform;
+  focusedImageDataUrl: string | null;
 };
 
 export type AlignmentControlPoint = {
@@ -247,11 +256,16 @@ export type PreprocessProject = {
   currentStep: PreprocessStepId;
   sourceAssets: SourceAssetsSlice;
   localization: LocalizationSlice;
+  heFocus: HeFocusSlice;
   alignment: AlignmentSlice;
   cropQc: CropQcSlice;
   chipConfig: ChipConfigSlice;
   tissueSelection: TissueSelectionSlice;
   exportState: ExportStateSlice;
+};
+
+export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus"> & {
+  heFocus?: HeFocusSlice;
 };
 
 export type PreprocessProjectSlices = Pick<PreprocessProject, PreprocessStepId>;
