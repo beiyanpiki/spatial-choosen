@@ -1,3 +1,0 @@
-download=task10-export-1775141091056-preprocess.zip
-entries=aligned_tissue_image.png,process.png,project.json,scalefactors.json,source-assets/,source-assets/eosin,source-assets/he,tissue_matrix.csv,tissue_position.csv,tissue_res_image.png
-header=barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres
