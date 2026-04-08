@@ -1,4 +1,4 @@
-export type TissueThresholdMode = 'dark' | 'light';
+export type TissueThresholdMode = 'gray-min';
 
 export type TissueParams = {
   thresholdMode: TissueThresholdMode;
@@ -10,9 +10,9 @@ export type TissueParams = {
 };
 
 export const DEFAULT_TISSUE_PARAMS: TissueParams = {
-  thresholdMode: 'light',
-  activationThreshold: 140,
-  blockThreshold: 180,
+  thresholdMode: 'gray-min',
+  activationThreshold: 0.1,
+  blockThreshold: 135,
   dbscanEps: 0.03,
   dbscanMinSamples: 3,
   minConnectedSpotCount: 8,
@@ -21,8 +21,14 @@ export const DEFAULT_TISSUE_PARAMS: TissueParams = {
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 export const normalizeTissueParams = (value: Partial<TissueParams>): TissueParams => ({
-  thresholdMode: value.thresholdMode === 'light' ? 'light' : 'dark',
-  activationThreshold: clamp(Math.round(value.activationThreshold ?? DEFAULT_TISSUE_PARAMS.activationThreshold), 0, 255),
+  thresholdMode: 'gray-min',
+  activationThreshold: clamp(
+    (value.activationThreshold ?? DEFAULT_TISSUE_PARAMS.activationThreshold) > 1
+      ? (value.activationThreshold ?? DEFAULT_TISSUE_PARAMS.activationThreshold) / 255
+      : (value.activationThreshold ?? DEFAULT_TISSUE_PARAMS.activationThreshold),
+    0,
+    1,
+  ),
   blockThreshold: clamp(Math.round(value.blockThreshold ?? DEFAULT_TISSUE_PARAMS.blockThreshold), 0, 255),
   dbscanEps: clamp(value.dbscanEps ?? DEFAULT_TISSUE_PARAMS.dbscanEps, 0.005, 0.2),
   dbscanMinSamples: clamp(Math.round(value.dbscanMinSamples ?? DEFAULT_TISSUE_PARAMS.dbscanMinSamples), 1, 20),
