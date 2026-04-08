@@ -24,8 +24,11 @@ import type {
 type CanvasStageProps = {
   boxColor: LocalizationBoxColor;
   chipBounds: PreprocessRect | null;
+  containerTestId?: string;
+  controlTestIdPrefix?: string;
   image: PreprocessSourceImage | null;
   imageTransform: LocalizationImageTransform;
+  labels?: Partial<CanvasStageLabels>;
   onChipBoundsChange: (chipBounds: PreprocessRect) => void;
   onFlipHorizontal: () => void;
   onFlipVertical: () => void;
@@ -34,6 +37,18 @@ type CanvasStageProps = {
   onRotationDelta: (delta: number) => void;
   onScaleChange: (scale: number) => void;
   onScaleDelta: (delta: number) => void;
+};
+
+type CanvasStageLabels = {
+  badgeReady: string;
+  badgeWaiting: string;
+  description: string;
+  emptyDescription: string;
+  emptyTitle: string;
+  heading: string;
+  overlayAriaLabel: string;
+  resetAriaLabel: string;
+  savedHint: string;
 };
 
 type ViewportSize = {
@@ -75,6 +90,20 @@ const normalizeDegrees = (value: number) => {
   return Object.is(wrapped, -0) ? 0 : wrapped;
 };
 
+const DEFAULT_CANVAS_STAGE_LABELS: CanvasStageLabels = {
+  badgeReady: 'Preview ready',
+  badgeWaiting: 'Awaiting eosin image',
+  description: 'Directly manipulate the view and chip footprint with minimal framing around the stage.',
+  emptyDescription: 'Upload the eosin source to preview and localize the chip footprint here.',
+  emptyTitle: 'No eosin image loaded',
+  heading: 'Localization canvas',
+  overlayAriaLabel: 'Chip localization overlay',
+  resetAriaLabel: 'Reset localization transform',
+  savedHint: 'Saved chip coordinates stay axis-aligned in image space.',
+};
+
+const buildTestId = (prefix: string, suffix: string) => `${prefix}-${suffix}`;
+
 const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
   const image = new window.Image();
   image.onload = () => resolve(image);
@@ -85,8 +114,11 @@ const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve
 export function CanvasStage({
   boxColor,
   chipBounds,
+  containerTestId = 'preprocess-localization-canvas-column',
+  controlTestIdPrefix = 'localize',
   image,
   imageTransform,
+  labels,
   onChipBoundsChange,
   onFlipHorizontal,
   onFlipVertical,
@@ -96,6 +128,10 @@ export function CanvasStage({
   onScaleChange,
   onScaleDelta,
 }: CanvasStageProps) {
+  const copy = {
+    ...DEFAULT_CANVAS_STAGE_LABELS,
+    ...labels,
+  };
   const hostRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -381,14 +417,14 @@ export function CanvasStage({
   const swatch = LOCALIZATION_BOX_COLOR_SWATCHS[boxColor];
 
   return (
-    <Stack flex='1' spacing={4} minW={0} data-testid='preprocess-localization-canvas-column'>
+    <Stack flex='1' spacing={4} minW={0} data-testid={containerTestId}>
       <Flex justify='space-between' align={{ base: 'flex-start', md: 'center' }} wrap='wrap' gap={3}>
         <Stack spacing={1}>
-          <Heading size='sm'>Localization canvas</Heading>
-          <Text fontSize='sm' color='gray.500'>Directly manipulate the view and chip footprint with minimal framing around the stage.</Text>
+          <Heading size='sm'>{copy.heading}</Heading>
+          <Text fontSize='sm' color='gray.500'>{copy.description}</Text>
         </Stack>
         <Badge colorScheme={image ? 'green' : 'orange'} borderRadius='full'>
-          {image ? 'Preview ready' : 'Awaiting eosin image'}
+          {image ? copy.badgeReady : copy.badgeWaiting}
         </Badge>
       </Flex>
 
@@ -400,7 +436,7 @@ export function CanvasStage({
         borderRadius='2xl'
         overflow='hidden'
         bg='gray.900'
-        data-testid='localize-canvas-surface'
+        data-testid={buildTestId(controlTestIdPrefix, 'canvas-surface')}
       >
         {image ? (
           <>
@@ -419,7 +455,7 @@ export function CanvasStage({
                   height='100%'
                   viewBox={`0 0 ${viewportSize.width} ${viewportSize.height}`}
                   role='img'
-                  aria-label='Chip localization overlay'
+                  aria-label={copy.overlayAriaLabel}
                   style={{ position: 'absolute', inset: 0, touchAction: 'none' }}
                 >
                   <polygon
@@ -427,7 +463,7 @@ export function CanvasStage({
                     fill='none'
                     stroke={swatch.stroke}
                     strokeWidth={1}
-                    data-testid='localize-box-outline'
+                    data-testid={buildTestId(controlTestIdPrefix, 'box-outline')}
                     pointerEvents='none'
                   />
                   <polygon
@@ -435,7 +471,7 @@ export function CanvasStage({
                     fill='transparent'
                     stroke='transparent'
                     strokeWidth={20}
-                    data-testid='localize-box-body'
+                    data-testid={buildTestId(controlTestIdPrefix, 'box-body')}
                     style={{ cursor: dragState ? 'grabbing' : 'move' }}
                     onPointerDown={(event) => {
                       if (!normalizedChipBounds) return;
@@ -471,7 +507,7 @@ export function CanvasStage({
                       r={13}
                       fill='transparent'
                       stroke='transparent'
-                      data-testid={`localize-box-handle-${handle}`}
+                      data-testid={buildTestId(controlTestIdPrefix, `box-handle-${handle}`)}
                       style={{
                         cursor: handle === 'n' || handle === 's'
                           ? 'ns-resize'
@@ -514,7 +550,7 @@ export function CanvasStage({
                     fillOpacity={0.75}
                     stroke={swatch.stroke}
                     strokeWidth={2}
-                    data-testid='localize-rotation-handle-visible'
+                    data-testid={buildTestId(controlTestIdPrefix, 'rotation-handle-visible')}
                     style={{ cursor: dragState?.kind === 'rotate' ? 'grabbing' : 'grab', pointerEvents: 'auto' }}
                     onPointerDown={(event) => {
                       event.preventDefault();
@@ -537,75 +573,75 @@ export function CanvasStage({
               px={3}
               py={3}
               backdropFilter='blur(12px)'
-              data-testid='localize-stage-controls'
+              data-testid={buildTestId(controlTestIdPrefix, 'stage-controls')}
             >
               <Stack spacing={3} minW='220px'>
-                <Stack spacing={2} data-testid='localize-stage-section-zoom'>
+                <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-zoom')}>
                   <Flex justify='space-between' align='center' gap={3}>
                     <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Zoom</Text>
-                    <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-scale-value'>
+                    <Text fontSize='sm' fontWeight='semibold' data-testid={buildTestId(controlTestIdPrefix, 'stage-scale-value')}>
                       {(imageTransform.scale * 100).toFixed(0)}%
                     </Text>
                   </Flex>
                   <ButtonGroup size='sm' isAttached variant='outline'>
-                    <Button aria-label='Zoom out' data-testid='localize-stage-zoom-out' onClick={() => onScaleDelta(-0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Zoom out' data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-out')} onClick={() => onScaleDelta(-0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       −
                     </Button>
-                    <Button aria-label='Zoom in' data-testid='localize-stage-zoom-in' onClick={() => onScaleDelta(0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Zoom in' data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-in')} onClick={() => onScaleDelta(0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       +
                     </Button>
                   </ButtonGroup>
                 </Stack>
-                <Stack spacing={2} data-testid='localize-stage-section-rotation'>
+                <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-rotation')}>
                   <Flex justify='space-between' align='center' gap={3}>
                     <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Rotation</Text>
-                    <Text fontSize='sm' fontWeight='semibold' data-testid='localize-stage-rotation-value'>
+                    <Text fontSize='sm' fontWeight='semibold' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotation-value')}>
                       {imageTransform.rotationDegrees.toFixed(1)}°
                     </Text>
                   </Flex>
                   <ButtonGroup size='sm' variant='outline' isAttached>
-                    <Button aria-label='Rotate left 90 degrees' data-testid='localize-stage-rotate-left-90' onClick={() => onRotationDelta(-90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Rotate left 90 degrees' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-90')} onClick={() => onRotationDelta(-90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       ↺90
                     </Button>
-                    <Button aria-label='Rotate right 90 degrees' data-testid='localize-stage-rotate-right-90' onClick={() => onRotationDelta(90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Rotate right 90 degrees' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-90')} onClick={() => onRotationDelta(90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       ↻90
                     </Button>
-                    <Button aria-label='Rotate left 1 degree' data-testid='localize-stage-rotate-left-1' onClick={() => onRotationDelta(-1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Rotate left 1 degree' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-1')} onClick={() => onRotationDelta(-1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       ↺1
                     </Button>
-                    <Button aria-label='Rotate right 1 degree' data-testid='localize-stage-rotate-right-1' onClick={() => onRotationDelta(1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Rotate right 1 degree' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-1')} onClick={() => onRotationDelta(1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       ↻1
                     </Button>
                   </ButtonGroup>
                 </Stack>
-                <Stack spacing={2} data-testid='localize-stage-section-flip'>
+                <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-flip')}>
                   <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Flip</Text>
                   <ButtonGroup size='sm' variant='outline' isAttached>
-                    <Button aria-label='Flip horizontally' data-testid='localize-stage-flip-horizontal' onClick={onFlipHorizontal} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Flip horizontally' data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-horizontal')} onClick={onFlipHorizontal} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       ⇋
                     </Button>
-                    <Button aria-label='Flip vertically' data-testid='localize-stage-flip-vertical' onClick={onFlipVertical} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                    <Button aria-label='Flip vertically' data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-vertical')} onClick={onFlipVertical} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                       ⇅
                     </Button>
                   </ButtonGroup>
                 </Stack>
-                <Stack spacing={2} data-testid='localize-stage-section-reset'>
+                <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-reset')}>
                   <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Reset</Text>
-                  <Button aria-label='Reset localization transform' size='sm' variant='outline' data-testid='localize-stage-reset' onClick={onResetTransform} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
+                  <Button aria-label={copy.resetAriaLabel} size='sm' variant='outline' data-testid={buildTestId(controlTestIdPrefix, 'stage-reset')} onClick={onResetTransform} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
                     ⟲
                   </Button>
                 </Stack>
               </Stack>
             </Box>
             <Box position='absolute' left={4} bottom={4} bg='blackAlpha.700' color='whiteAlpha.900' px={3} py={2} borderRadius='lg' maxW='320px'>
-              <Text fontSize='xs'>Saved chip coordinates stay axis-aligned in image space.</Text>
+              <Text fontSize='xs'>{copy.savedHint}</Text>
             </Box>
           </>
         ) : (
           <Flex align='center' justify='center' h='100%' px={6} textAlign='center'>
             <Stack spacing={3} maxW='420px'>
-              <Text fontSize='lg' fontWeight='semibold' color='whiteAlpha.900'>No eosin image loaded</Text>
-              <Text color='whiteAlpha.700'>Upload the eosin source to preview and localize the chip footprint here.</Text>
+              <Text fontSize='lg' fontWeight='semibold' color='whiteAlpha.900'>{copy.emptyTitle}</Text>
+              <Text color='whiteAlpha.700'>{copy.emptyDescription}</Text>
             </Stack>
           </Flex>
         )}

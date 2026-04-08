@@ -25,14 +25,18 @@ import { exportPreprocessZip } from "@/lib/preprocess/exportBundle";
 import {
 	invalidateOnAlignmentChange,
 	invalidateOnCropQcChange,
+	invalidateOnHeFocusChange,
 	invalidateOnLocalizationChange,
 	invalidateOnSourceAssetsChange,
 } from "@/lib/preprocess/invalidation";
 import { loadOpenCv } from "@/lib/preprocess/loadOpenCv";
 import {
+	buildLocalizationHandles,
+	clampNormalizedSquareRect,
 	computeLocalizationStatus,
 	createDefaultChipBounds,
 	DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
 } from "@/lib/preprocess/localization";
 import { buildSourceImage } from "@/lib/preprocess/sourceImage";
@@ -46,9 +50,13 @@ import {
 import type {
 	AlignmentSlice,
 	CropQcSlice,
+	HeFocusSlice,
 	LocalizationBoxColor,
+	LocalizationImageTransform,
 	LocalizationSlice,
 	PreprocessProject,
+	PreprocessRect,
+	PreprocessSourceImage,
 	PreprocessStepId,
 } from "@/types/preprocess";
 import { AlignmentPanel } from "./AlignmentPanel";
@@ -89,6 +97,133 @@ const normalizeLocalizationRotationDegrees = (value: number) => {
 	return Object.is(wrapped, -0) ? 0 : wrapped;
 };
 
+const normalizeHeFocusSlice = (
+	slice: HeFocusSlice,
+	imageAspectRatio = 1,
+): HeFocusSlice => {
+	const nextRect = slice.chipBounds
+		? clampNormalizedSquareRect(slice.chipBounds, imageAspectRatio)
+		: null;
+
+	return {
+		...slice,
+		chipBounds: nextRect,
+		handles: nextRect ? buildLocalizationHandles(nextRect) : [],
+		imageTransform: normalizeLocalizationImageTransform(slice.imageTransform),
+		focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
+	};
+};
+
+const loadDataUrlImage = (dataUrl: string) =>
+	new Promise<HTMLImageElement>((resolve, reject) => {
+		const image = new window.Image();
+		image.onload = () => resolve(image);
+		image.onerror = () => reject(new Error("Focused HE image decoding failed"));
+		image.src = dataUrl;
+	});
+
+const toFocusedHeFileName = (sourceFileName: string | null | undefined) => {
+	const baseName = sourceFileName?.replace(/\.[^.]+$/, "") ?? "he";
+	return `${baseName}-focused.png`;
+};
+
+const createFocusedHeImageRecord = async (
+	dataUrl: string,
+	metadata?: Partial<PreprocessSourceImage> | null,
+): Promise<PreprocessSourceImage> => {
+	const image = await loadDataUrlImage(dataUrl);
+
+	return {
+		id: metadata?.id ?? `focused-he-${Date.now()}`,
+		kind: "he",
+		fileName: toFocusedHeFileName(metadata?.fileName),
+		mimeType: "image/png",
+		sizeBytes: dataUrl.length,
+		width: image.naturalWidth,
+		height: image.naturalHeight,
+		lastModified: metadata?.lastModified ?? Date.now(),
+		dataUrl,
+		thumbnailDataUrl: dataUrl,
+	};
+};
+
+const generateFocusedHeDataUrl = async (args: {
+	sourceDataUrl: string;
+	chipBounds: PreprocessRect;
+	imageTransform: LocalizationImageTransform;
+}) => {
+	const sourceImage = await loadDataUrlImage(args.sourceDataUrl);
+	const sourceWidth = sourceImage.naturalWidth;
+	const sourceHeight = sourceImage.naturalHeight;
+	const cropX = Math.max(
+		0,
+		Math.min(sourceWidth - 1, Math.round(args.chipBounds.x * sourceWidth)),
+	);
+	const cropY = Math.max(
+		0,
+		Math.min(sourceHeight - 1, Math.round(args.chipBounds.y * sourceHeight)),
+	);
+	const cropWidth = Math.max(
+		1,
+		Math.min(sourceWidth - cropX, Math.round(args.chipBounds.width * sourceWidth)),
+	);
+	const cropHeight = Math.max(
+		1,
+		Math.min(
+			sourceHeight - cropY,
+			Math.round(args.chipBounds.height * sourceHeight),
+		),
+	);
+	const outputSize = Math.max(1, Math.min(cropWidth, cropHeight));
+	const cropCanvas = document.createElement("canvas");
+	cropCanvas.width = outputSize;
+	cropCanvas.height = outputSize;
+	const cropContext = cropCanvas.getContext("2d");
+	if (!cropContext) {
+		throw new Error("Focused HE crop context unavailable");
+	}
+	cropContext.imageSmoothingEnabled = true;
+	cropContext.imageSmoothingQuality = "high";
+	cropContext.drawImage(
+		sourceImage,
+		cropX,
+		cropY,
+		cropWidth,
+		cropHeight,
+		0,
+		0,
+		outputSize,
+		outputSize,
+	);
+
+	const focusedCanvas = document.createElement("canvas");
+	focusedCanvas.width = outputSize;
+	focusedCanvas.height = outputSize;
+	const focusedContext = focusedCanvas.getContext("2d");
+	if (!focusedContext) {
+		throw new Error("Focused HE render context unavailable");
+	}
+	focusedContext.imageSmoothingEnabled = true;
+	focusedContext.imageSmoothingQuality = "high";
+	focusedContext.translate(outputSize / 2, outputSize / 2);
+	focusedContext.scale(
+		args.imageTransform.flipHorizontal ? -1 : 1,
+		args.imageTransform.flipVertical ? -1 : 1,
+	);
+	focusedContext.rotate(
+		(args.imageTransform.rotationDegrees * Math.PI) / 180,
+	);
+	focusedContext.drawImage(
+		cropCanvas,
+		-outputSize / 2,
+		-outputSize / 2,
+		outputSize,
+		outputSize,
+	);
+
+	return focusedCanvas.toDataURL("image/png");
+};
+
 const placeholderCopyByStep: Record<
 	PreprocessStepId,
 	{ title: string; body: string }
@@ -100,6 +235,10 @@ const placeholderCopyByStep: Record<
 	localization: {
 		title: "Chip localization",
 		body: "Rotate or flip the displayed eosin image, drag the chip box, and keep the saved rectangle normalized and axis-aligned in image coordinates.",
+	},
+	heFocus: {
+		title: "H&E focus",
+		body: "Adjust a square H&E working region between localization and alignment. Saved focus bounds stay in original H&E image coordinates, and any stored focused-image preview reappears here when available.",
 	},
 	alignment: {
 		title: "Image alignment",
@@ -214,19 +353,30 @@ export function PreprocessWorkspace({
 	const [isExporting, setIsExporting] = useState(false);
 	const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 	const [projectNameDraft, setProjectNameDraft] = useState("");
+	const [focusedHeMovingImage, setFocusedHeMovingImage] =
+		useState<PreprocessSourceImage | null>(null);
 
 	const localizationImage = project
 		? (project.sourceAssets.images[project.localization.targetImage] ?? null)
 		: null;
+	const currentHeImageSource = project
+		? (project.sourceAssets.images[project.heFocus.targetImage] ?? null)
+		: null;
+	const heFocusImageSource = project?.heFocus.focusedImageDataUrl ?? null;
 	const alignmentReferenceImage = project
 		? (project.sourceAssets.images[project.alignment.referenceImage] ?? null)
 		: null;
 	const alignmentMovingImage = project
-		? (project.sourceAssets.images[project.alignment.movingImage] ?? null)
+		? project.alignment.movingImage === "he" &&
+			  project.heFocus.status === "complete"
+				? focusedHeMovingImage
+				: (project.sourceAssets.images[project.alignment.movingImage] ?? null)
 		: null;
 	const localizationImageDataUrl = localizationImage?.dataUrl ?? null;
+	const currentHeImageDataUrl = currentHeImageSource?.dataUrl ?? null;
 	const currentStepId = project?.currentStep ?? null;
 	const hasLocalizationChipBounds = Boolean(project?.localization.chipBounds);
+	const hasHeFocusChipBounds = Boolean(project?.heFocus.chipBounds);
 
 	const applyLocalizationUpdate = useCallback(
 		(
@@ -263,6 +413,54 @@ export function PreprocessWorkspace({
 				return options?.invalidateDownstream === false
 					? nextProject
 					: invalidateOnLocalizationChange(nextProject);
+			});
+		},
+		[onProjectMutate],
+	);
+
+	const applyHeFocusUpdate = useCallback(
+		(
+			updater: (current: HeFocusSlice) => HeFocusSlice,
+			options?: {
+				invalidateDownstream?: boolean;
+				preserveFocusedImage?: boolean;
+			},
+		) => {
+			onProjectMutate((current) => {
+				const currentImage = current.sourceAssets.images[current.heFocus.targetImage];
+				const imageAspectRatio =
+					currentImage?.width && currentImage.height
+						? currentImage.width / currentImage.height
+						: 1;
+				const nextHeFocusBase = normalizeHeFocusSlice(
+					updater(current.heFocus),
+					imageAspectRatio,
+				);
+				const nextHasImage = Boolean(currentImage?.dataUrl);
+				const nextHeFocus: HeFocusSlice = {
+					...nextHeFocusBase,
+					focusedImageDataUrl: options?.preserveFocusedImage
+						? nextHeFocusBase.focusedImageDataUrl ??
+							current.heFocus.focusedImageDataUrl ??
+							null
+						: null,
+					status: computeLocalizationStatus(
+						nextHasImage,
+						nextHeFocusBase.chipBounds,
+					),
+					isStale: false,
+					error: null,
+					updatedAt: new Date().toISOString(),
+				};
+
+				const nextProject = {
+					...current,
+					heFocus: nextHeFocus,
+				};
+
+				return options?.invalidateDownstream === false
+					? nextProject
+					: invalidateOnHeFocusChange(nextProject);
 			});
 		},
 		[onProjectMutate],
@@ -450,6 +648,115 @@ export function PreprocessWorkspace({
 	);
 
 	useEffect(() => {
+		const sourceHeDataUrl = currentHeImageSource?.dataUrl;
+		const focusedChipBounds = project?.heFocus.chipBounds ?? null;
+		if (
+			!project ||
+			project.heFocus.status !== "complete" ||
+			project.heFocus.focusedImageDataUrl ||
+			!focusedChipBounds ||
+			!sourceHeDataUrl
+		) {
+			return;
+		}
+
+		let cancelled = false;
+
+		void (async () => {
+			try {
+				const focusedImageDataUrl = await generateFocusedHeDataUrl({
+					sourceDataUrl: sourceHeDataUrl,
+					chipBounds: focusedChipBounds,
+					imageTransform: project.heFocus.imageTransform,
+				});
+				if (cancelled) return;
+
+				onProjectMutate((current) => {
+					if (
+						current.id !== project.id ||
+						current.heFocus.status !== "complete" ||
+						current.heFocus.focusedImageDataUrl ||
+						!current.heFocus.chipBounds ||
+						!current.sourceAssets.images[current.heFocus.targetImage]?.dataUrl
+					) {
+						return current;
+					}
+
+					return {
+						...current,
+						heFocus: {
+							...current.heFocus,
+							focusedImageDataUrl,
+							updatedAt: new Date().toISOString(),
+						},
+					};
+				});
+			} catch (error) {
+				if (!cancelled) {
+					console.error("Failed to generate focused HE asset", error);
+				}
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		currentHeImageSource?.dataUrl,
+		onProjectMutate,
+		project,
+		project?.heFocus.chipBounds,
+		project?.heFocus.focusedImageDataUrl,
+		project?.heFocus.imageTransform,
+		project?.heFocus.status,
+	]);
+
+	useEffect(() => {
+		if (!project || project.heFocus.status !== "complete") {
+			setFocusedHeMovingImage(null);
+			return;
+		}
+
+		const focusedImageDataUrl = project.heFocus.focusedImageDataUrl;
+		if (!focusedImageDataUrl) {
+			setFocusedHeMovingImage(null);
+			return;
+		}
+
+		let cancelled = false;
+		void (async () => {
+			try {
+				const focusedImage = await createFocusedHeImageRecord(
+					focusedImageDataUrl,
+					currentHeImageSource
+						? {
+							...currentHeImageSource,
+							id: `${currentHeImageSource.id}-focused`,
+						}
+						: null,
+				);
+				if (!cancelled) {
+					setFocusedHeMovingImage(focusedImage);
+				}
+			} catch (error) {
+				if (!cancelled) {
+					console.error("Failed to hydrate focused HE moving image", error);
+					setFocusedHeMovingImage(null);
+				}
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		currentHeImageSource,
+		project,
+		project?.heFocus.focusedImageDataUrl,
+		project?.heFocus.status,
+	]);
+
+	useEffect(() => {
 		if (!project) return;
 		if (currentStepId !== "localization") return;
 		if (!localizationImageDataUrl || hasLocalizationChipBounds) return;
@@ -495,6 +802,56 @@ export function PreprocessWorkspace({
 		currentStepId,
 		hasLocalizationChipBounds,
 		localizationImageDataUrl,
+		onProjectMutate,
+		project,
+	]);
+
+	useEffect(() => {
+		if (!project) return;
+		if (currentStepId !== "heFocus") return;
+		if (!currentHeImageDataUrl || hasHeFocusChipBounds) return;
+
+		onProjectMutate((current) => {
+			const currentImage = current.sourceAssets.images[current.heFocus.targetImage];
+			if (
+				current.currentStep !== "heFocus" ||
+				!currentImage?.dataUrl ||
+				current.heFocus.chipBounds
+			) {
+				return current;
+			}
+
+			const heAspectRatio =
+				currentImage.width && currentImage.height
+					? currentImage.width / currentImage.height
+					: 1;
+
+			const nextHeFocusBase = normalizeHeFocusSlice(
+				{
+					...current.heFocus,
+					chipBounds: createDefaultChipBounds(heAspectRatio),
+					focusedImageDataUrl: null,
+				},
+				heAspectRatio,
+			);
+			const nextHeFocus: HeFocusSlice = {
+				...nextHeFocusBase,
+				focusedImageDataUrl: null,
+				status: computeLocalizationStatus(true, nextHeFocusBase.chipBounds),
+				isStale: false,
+				error: null,
+				updatedAt: new Date().toISOString(),
+			};
+
+			return invalidateOnHeFocusChange({
+				...current,
+				heFocus: nextHeFocus,
+			});
+		});
+	}, [
+		currentHeImageDataUrl,
+		currentStepId,
+		hasHeFocusChipBounds,
 		onProjectMutate,
 		project,
 	]);
@@ -899,19 +1256,191 @@ export function PreprocessWorkspace({
 											imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 										}));
 									}}
-									onChipBoundsChange={(chipBounds) => {
-										applyLocalizationUpdate((current) => ({
-											...current,
-											chipBounds,
-											method: "manual",
-										}));
-									}}
-								/>
+																					onChipBoundsChange={(chipBounds) => {
+																						applyLocalizationUpdate((current) => ({
+																							...current,
+																							chipBounds,
+																							method: "manual",
+																						}));
+																					}}
+																				/>
 
-								</Flex>
-							) : project.currentStep === "alignment" ? (
-							<AlignmentPanel
-								alignment={project.alignment}
+																		</Flex>
+													) : project.currentStep === "heFocus" ? (
+														<Stack spacing={5}>
+															<Text color="gray.600" maxW="3xl">
+																{currentCopy.body}
+															</Text>
+															<Flex
+																direction={{ base: "column", xl: "row" }}
+																gap={5}
+																align="stretch"
+															>
+																<CanvasStage
+																	boxColor="green"
+																	chipBounds={project.heFocus.chipBounds}
+																	containerTestId="preprocess-he-focus-canvas-column"
+																	controlTestIdPrefix="he-focus"
+																	image={currentHeImageSource}
+																	imageTransform={project.heFocus.imageTransform}
+																	labels={{
+																		badgeReady: "H&E preview ready",
+																		badgeWaiting: "Awaiting H&E image",
+																		description:
+																			"Adjust the square H&E working region and orientation before alignment.",
+																		emptyDescription:
+																			"Upload the H&E source image in Source before defining the focus region.",
+																		emptyTitle: "No H&E image loaded",
+																		heading: "H&E focus canvas",
+																		overlayAriaLabel: "H&E focus overlay",
+																		resetAriaLabel: "Reset H&E focus transform",
+																		savedHint:
+																			"Saved focus bounds stay square and normalized in original H&E image coordinates.",
+																	}}
+																	onScaleChange={(value) => {
+																		applyHeFocusUpdate(
+																			(current) => ({
+																				...current,
+																				imageTransform: {
+																					...current.imageTransform,
+																					scale: value,
+																				},
+																			}),
+																			{
+																				invalidateDownstream: false,
+																				preserveFocusedImage: true,
+																			},
+																		);
+																	}}
+																	onScaleDelta={(delta) => {
+																		applyHeFocusUpdate(
+																			(current) => ({
+																				...current,
+																				imageTransform: {
+																					...current.imageTransform,
+																					scale: clampLocalizationScale(
+																						current.imageTransform.scale + delta,
+																					),
+																				},
+																			}),
+																			{
+																				invalidateDownstream: false,
+																				preserveFocusedImage: true,
+																			},
+																		);
+																	}}
+																	onRotationChange={(value) => {
+																		applyHeFocusUpdate((current) => ({
+																			...current,
+																			imageTransform: {
+																				...current.imageTransform,
+																				rotationDegrees: normalizeLocalizationRotationDegrees(
+																					value,
+																				),
+																			},
+																		}));
+																	}}
+																	onRotationDelta={(delta) => {
+																		applyHeFocusUpdate((current) => ({
+																			...current,
+																			imageTransform: {
+																				...current.imageTransform,
+																				rotationDegrees: normalizeLocalizationRotationDegrees(
+																					current.imageTransform.rotationDegrees + delta,
+																				),
+																			},
+																		}));
+																	}}
+																	onFlipHorizontal={() => {
+																		applyHeFocusUpdate((current) => ({
+																			...current,
+																			imageTransform: {
+																				...current.imageTransform,
+																				flipHorizontal: !current.imageTransform.flipHorizontal,
+																			},
+																		}));
+																	}}
+																	onFlipVertical={() => {
+																		applyHeFocusUpdate((current) => ({
+																			...current,
+																			imageTransform: {
+																				...current.imageTransform,
+																				flipVertical: !current.imageTransform.flipVertical,
+																			},
+																		}));
+																	}}
+																	onResetTransform={() => {
+																		applyHeFocusUpdate((current) => ({
+																			...current,
+																			imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+																		}));
+																	}}
+																	onChipBoundsChange={(chipBounds) => {
+																		applyHeFocusUpdate((current) => ({
+																			...current,
+																			chipBounds,
+																		}));
+																	}}
+																/>
+
+																<Box
+																	w={{ base: "100%", xl: "320px" }}
+																	minW={{ base: "100%", xl: "320px" }}
+																	border="1px solid"
+																	borderColor="gray.200"
+																	borderRadius="2xl"
+																	bg="white"
+																	px={4}
+																	py={4}
+																	data-testid="he-focus-focused-image-card"
+																>
+																	<Stack spacing={3}>
+																		<Flex justify="space-between" align="flex-start" gap={3}>
+																			<Stack spacing={1}>
+																				<Heading size="sm">Saved focused H&amp;E image</Heading>
+																				<Text fontSize="sm" color="gray.500">
+																					Persisted focus previews are restored here when available. Editing the square or image orientation clears the saved preview until it is regenerated downstream.
+																				</Text>
+																			</Stack>
+																			<Badge
+																				colorScheme={heFocusImageSource ? "green" : "gray"}
+																				borderRadius="full"
+																			>
+																				{heFocusImageSource ? "Restored" : "Pending"}
+																			</Badge>
+																		</Flex>
+																		<Flex
+																			minH="260px"
+																			borderRadius="xl"
+																			bg="gray.900"
+																			align="center"
+																			justify="center"
+																			overflow="hidden"
+																		>
+																			{heFocusImageSource ? (
+																				<Box
+																					as="img"
+																					src={heFocusImageSource}
+																					alt="Saved focused H&E preview"
+																					w="100%"
+																					h="100%"
+																					objectFit="contain"
+																					display="block"
+																					data-testid="he-focus-focused-image-preview"
+																				/>
+																			) : (
+																				<Text color="whiteAlpha.700" px={6} textAlign="center">
+																					A focused-image asset has not been regenerated yet. The saved square and transform still reopen here.
+																				</Text>
+																			)}
+																		</Flex>
+																	</Stack>
+																</Box>
+															</Flex>
+														</Stack>
+													) : project.currentStep === "alignment" ? (
+													<AlignmentPanel
+														alignment={project.alignment}
 								chipBounds={project.localization.chipBounds}
 								movingImage={alignmentMovingImage}
 								referenceImage={alignmentReferenceImage}
@@ -952,14 +1481,18 @@ export function PreprocessWorkspace({
 										applyCropQcUpdate((current) => ({
 											...current,
 											qcAccepted: false,
-											status: "stale",
-										}));
-									}}
-									canRun={project.alignment.status === "complete"}
-									canAccept={Boolean(
-										project.cropQc.cropWidth && project.cropQc.cropHeight,
-									)}
-								/>
+							status: "stale",
+						}));
+					}}
+					canRun={Boolean(
+						project.alignment.status === "complete" &&
+							alignmentReferenceImage?.dataUrl &&
+							alignmentMovingImage?.dataUrl,
+					)}
+					canAccept={Boolean(
+						project.cropQc.cropWidth && project.cropQc.cropHeight,
+					)}
+				/>
 							) : project.currentStep === "chipConfig" ? (
 								<ChipConfigPanel
 									manifests={chipManifests}
