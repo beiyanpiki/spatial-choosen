@@ -8,10 +8,17 @@ import {
 	Flex,
 	Heading,
 	HStack,
+	IconButton,
 	Input,
 	Stack,
 	Text,
 } from "@chakra-ui/react";
+import {
+	ChevronDownIcon,
+	ChevronUpIcon,
+	CloseIcon,
+	InfoOutlineIcon,
+} from "@chakra-ui/icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -101,6 +108,17 @@ type PanSession = {
 	pointerId: number;
 };
 
+type HelpOverlayState = "expanded" | "collapsed" | "hidden";
+
+const HELP_COPY = {
+	expanded: "Drag to pan. Wheel to zoom. Add or adjust landmarks in order.",
+	collapsed: "Pan, zoom, and place landmarks.",
+	reopen: "Show canvas help",
+	minimize: "Minimize canvas help",
+	expand: "Expand canvas help",
+	dismiss: "Dismiss canvas help",
+} as const;
+
 const clamp = (value: number, min: number, max: number) =>
 	Math.min(max, Math.max(min, value));
 
@@ -139,6 +157,9 @@ function LandmarkCanvas({
 		width: number;
 		height: number;
 	} | null>(null);
+	const [helpOverlayState, setHelpOverlayState] = useState<HelpOverlayState>(
+		"expanded",
+	);
 
 	useEffect(() => {
 		const node = hostElement;
@@ -372,36 +393,99 @@ function LandmarkCanvas({
 				position="relative"
 				data-testid={`${testIdPrefix}-canvas-container`}
 			>
-				<Box
-					position="absolute"
-					top={4}
-					left={4}
-					zIndex={2}
-					bg="blackAlpha.700"
-					color="whiteAlpha.950"
-					border="1px solid"
-					borderColor="whiteAlpha.300"
-					borderRadius="xl"
-					px={3}
-					py={3}
-					backdropFilter="blur(12px)"
-					maxW="320px"
-				>
-					<Stack spacing={2}>
-						<Text
-							fontSize="xs"
-							textTransform="uppercase"
-							letterSpacing="0.12em"
-							color="whiteAlpha.700"
-						>
-							{title}
-						</Text>
+			<Box
+				position="absolute"
+				top={3}
+				left={3}
+				zIndex={2}
+				pointerEvents="none"
+			>
+				{helpOverlayState === "hidden" ? (
+					<IconButton
+						aria-label={HELP_COPY.reopen}
+						icon={<InfoOutlineIcon boxSize={4} />}
+						size="sm"
+						variant="outline"
+						onClick={() => setHelpOverlayState("expanded")}
+						pointerEvents="auto"
+						bg="blackAlpha.700"
+						color="whiteAlpha.950"
+						borderColor="whiteAlpha.300"
+						_hover={{ bg: "blackAlpha.800" }}
+						_active={{ bg: "blackAlpha.800" }}
+						data-testid={`${testIdPrefix}-help-reopen`}
+					/>
+				) : (
+					<Stack
+						spacing={helpOverlayState === "expanded" ? 2 : 1}
+						bg="blackAlpha.700"
+						color="whiteAlpha.950"
+						border="1px solid"
+						borderColor="whiteAlpha.300"
+						borderRadius="xl"
+						px={3}
+						py={2}
+						backdropFilter="blur(12px)"
+						maxW={helpOverlayState === "expanded" ? "280px" : "220px"}
+						pointerEvents="auto"
+					>
+						<Flex align="center" gap={2} minW={0}>
+							<InfoOutlineIcon boxSize={3.5} color="whiteAlpha.800" />
+							<Text
+								fontSize="xs"
+								textTransform="uppercase"
+								letterSpacing="0.12em"
+								color="whiteAlpha.700"
+								flex="1"
+								minW={0}
+							>
+								{title}
+							</Text>
+							<HStack spacing={1} flexShrink={0}>
+								<IconButton
+									aria-label={
+										helpOverlayState === "expanded"
+											? HELP_COPY.minimize
+											: HELP_COPY.expand
+									}
+									icon={
+										helpOverlayState === "expanded" ? (
+											<ChevronDownIcon boxSize={4} />
+										) : (
+											<ChevronUpIcon boxSize={4} />
+										)
+									}
+									size="xs"
+									variant="ghost"
+									color="whiteAlpha.900"
+									onClick={() =>
+										setHelpOverlayState((current) =>
+											current === "expanded" ? "collapsed" : "expanded",
+										)
+									}
+									_hover={{ bg: "whiteAlpha.200" }}
+									_active={{ bg: "whiteAlpha.200" }}
+								/>
+								<IconButton
+									aria-label={HELP_COPY.dismiss}
+									icon={<CloseIcon boxSize={2.5} />}
+									size="xs"
+									variant="ghost"
+									color="whiteAlpha.900"
+									onClick={() => setHelpOverlayState("hidden")}
+									_hover={{ bg: "whiteAlpha.200" }}
+									_active={{ bg: "whiteAlpha.200" }}
+								/>
+							</HStack>
+						</Flex>
 						<Text fontSize="xs" color="whiteAlpha.800">
-							Pan with drag, zoom with wheel, and use the guided workflow to
-							place or edit landmarks.
+							{helpOverlayState === "expanded"
+								? HELP_COPY.expanded
+								: HELP_COPY.collapsed}
 						</Text>
 					</Stack>
-				</Box>
+				)}
+			</Box>
 				{panelContent ? (
 					<Box position="absolute" top={4} right={4} zIndex={2}>
 						{panelContent}
@@ -985,38 +1069,64 @@ export function AlignmentPanel({
 			left={4}
 			right={4}
 			zIndex={3}
-			bg="blackAlpha.700"
+			bg="rgba(15, 23, 42, 0.82)"
 			color="whiteAlpha.950"
 			border="1px solid"
-			borderColor="whiteAlpha.300"
-			borderRadius="xl"
-			px={4}
-			py={4}
-			backdropFilter="blur(12px)"
+			borderColor="whiteAlpha.200"
+			borderRadius="2xl"
+			px={{ base: 3, md: 4 }}
+			py={{ base: 3, md: 4 }}
+			boxShadow="0 18px 48px rgba(15, 23, 42, 0.28)"
+			backdropFilter="blur(18px)"
 			data-testid="alignment-workflow-overlay"
 		>
 			<Stack spacing={3}>
-				<Flex justify="space-between" align={{ base: "flex-start", md: "center" }} gap={3} wrap="wrap">
-					<Stack spacing={1}>
-						<Text fontSize="xs" textTransform="uppercase" letterSpacing="0.12em" color="whiteAlpha.700">
-							Guided alignment workflow
-						</Text>
-						<Text fontSize="sm" fontWeight="semibold" data-testid="alignment-workflow-instruction">
+				<Flex
+					justify="space-between"
+					align={{ base: "flex-start", lg: "center" }}
+					gap={3}
+					wrap="wrap"
+				>
+					<Stack spacing={2} flex="1" minW="240px">
+						<Flex align="center" gap={2} wrap="wrap">
+							<Text
+								fontSize="xs"
+								textTransform="uppercase"
+								letterSpacing="0.12em"
+								color="whiteAlpha.700"
+							>
+								Guided alignment workflow
+							</Text>
+							<Badge
+								colorScheme={
+									alignment.controlPoints.length >= ALIGNMENT_MIN_PAIRS
+										? "green"
+										: "orange"
+								}
+								borderRadius="full"
+								px={2.5}
+								py={1}
+								data-testid="alignment-pair-count-badge"
+								data-pair-count={alignment.controlPoints.length}
+							>
+								Pairs {alignment.controlPoints.length} / {ALIGNMENT_TARGET_PAIRS}
+							</Badge>
+						</Flex>
+						<Text
+							fontSize={{ base: "sm", md: "md" }}
+							fontWeight="semibold"
+							lineHeight="1.45"
+							data-testid="alignment-workflow-instruction"
+						>
 							{workflowInstruction}
 						</Text>
 					</Stack>
-					<HStack spacing={2} wrap="wrap">
-						<Badge
-							colorScheme={
-								alignment.controlPoints.length >= ALIGNMENT_MIN_PAIRS
-									? "green"
-									: "orange"
-							}
-							data-testid="alignment-pair-count-badge"
-							data-pair-count={alignment.controlPoints.length}
-						>
-							Pairs {alignment.controlPoints.length} / {ALIGNMENT_TARGET_PAIRS}
-						</Badge>
+					<Flex
+						gap={2}
+						wrap="wrap"
+						align="center"
+						justify={{ base: "flex-start", lg: "flex-end" }}
+					>
 						<Badge
 							colorScheme={
 								runtimeStatus === "ready"
@@ -1025,6 +1135,9 @@ export function AlignmentPanel({
 										? "red"
 										: "orange"
 							}
+							borderRadius="full"
+							px={2.5}
+							py={1}
 							data-testid="alignment-runtime-status-badge"
 							data-runtime-status={runtimeStatus}
 						>
@@ -1038,6 +1151,9 @@ export function AlignmentPanel({
 										? "red"
 										: "gray"
 							}
+							borderRadius="full"
+							px={2.5}
+							py={1}
 							data-testid="alignment-status"
 							data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
 							data-failure-reason={alignment.failureReason ?? ""}
@@ -1049,18 +1165,26 @@ export function AlignmentPanel({
 									: "Not solved"}
 						</Badge>
 						{selectedPair ? (
-							<Badge colorScheme="purple" data-testid="alignment-selected-pair-badge">
-								Selected pair #{alignment.controlPoints.findIndex((pair) => pair.id === selectedPair.id) + 1}
+							<Badge
+								colorScheme="purple"
+								borderRadius="full"
+								px={2.5}
+								py={1}
+								data-testid="alignment-selected-pair-badge"
+							>
+								Selected pair #
+								{alignment.controlPoints.findIndex((pair) => pair.id === selectedPair.id) + 1}
 							</Badge>
 						) : null}
-					</HStack>
+					</Flex>
 				</Flex>
-				<Flex gap={3} wrap="wrap" align="center">
+				<Flex gap={2} wrap="wrap" align="center">
 					<Button
 						size="sm"
 						variant="outline"
 						color="white"
-						borderColor="whiteAlpha.400"
+						borderColor="whiteAlpha.300"
+						bg="whiteAlpha.100"
 						_hover={{ bg: "whiteAlpha.200" }}
 						onClick={() => {
 							if (!selectedPairId) return;
@@ -1077,7 +1201,8 @@ export function AlignmentPanel({
 						size="sm"
 						variant="outline"
 						color="white"
-						borderColor="whiteAlpha.400"
+						borderColor="whiteAlpha.300"
+						bg="whiteAlpha.100"
 						_hover={{ bg: "whiteAlpha.200" }}
 						onClick={() => {
 							if (!selectedPairId) return;
@@ -1168,6 +1293,7 @@ export function AlignmentPanel({
 					<Button
 						size="sm"
 						colorScheme="brand"
+						boxShadow="0 0 0 1px rgba(255,255,255,0.08)"
 						onClick={() => void solveAlignment()}
 						isDisabled={!canSolve}
 						data-testid="alignment-run-solve"
@@ -1226,38 +1352,73 @@ export function AlignmentPanel({
 			backdropFilter="blur(12px)"
 			data-testid="alignment-moving-view-controls"
 		>
-			<Stack spacing={3} minW="260px">
-				<Text fontSize="xs" textTransform="uppercase" letterSpacing="0.12em" color="whiteAlpha.700">
+			<Stack spacing={3} minW="220px">
+				<Text
+					fontSize="xs"
+					textTransform="uppercase"
+					letterSpacing="0.12em"
+					color="whiteAlpha.700"
+				>
 					Moving image view + transform
 				</Text>
-				<Stack spacing={1}>
-					<Text fontSize="xs" color="whiteAlpha.700">Rotation</Text>
-					<Input
-						type="range"
-						min={-180}
-						max={180}
-						step={0.5}
-						value={alignment.movingImageTransform.rotationDegrees}
-						data-testid="alignment-he-rotation-slider"
-						onChange={(event) => {
-							const nextRotation = Number(event.target.value);
-							onAlignmentChange(
-								(slice) =>
-									normalizeAlignmentSlice({
-										...slice,
-										movingImageTransform: {
-											...slice.movingImageTransform,
-											rotationDegrees: nextRotation,
-										},
-									}),
-								{ invalidateDownstream: false },
-							);
-						}}
-						px={0}
-					/>
-				</Stack>
-				<Stack spacing={1}>
-					<Text fontSize="xs" color="whiteAlpha.700">Scale</Text>
+				<Stack spacing={2} data-testid="alignment-he-section-scale">
+					<Flex justify="space-between" align="center" gap={3}>
+						<Text
+							fontSize="xs"
+							textTransform="uppercase"
+							letterSpacing="0.12em"
+							color="whiteAlpha.700"
+						>
+							Zoom
+						</Text>
+						<Text fontSize="sm" fontWeight="semibold">
+							{(alignment.movingImageTransform.scale * 100).toFixed(0)}%
+						</Text>
+					</Flex>
+					<ButtonGroup size="sm" isAttached variant="outline">
+						<Button
+							aria-label="Zoom out H&E image"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												scale: Math.max(0.5, slice.movingImageTransform.scale - 0.05),
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							−
+						</Button>
+						<Button
+							aria-label="Zoom in H&E image"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												scale: Math.min(4, slice.movingImageTransform.scale + 0.05),
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							+
+						</Button>
+					</ButtonGroup>
 					<Input
 						type="range"
 						min={0.5}
@@ -1282,29 +1443,202 @@ export function AlignmentPanel({
 						px={0}
 					/>
 				</Stack>
-				<ButtonGroup size="sm" isAttached variant="outline">
-					<Button
-						color="white"
-						borderColor="whiteAlpha.400"
-						_hover={{ bg: "whiteAlpha.200" }}
-						data-testid="alignment-he-flip-horizontal"
-						onClick={() => {
+				<Stack spacing={2} data-testid="alignment-he-section-rotation">
+					<Flex justify="space-between" align="center" gap={3}>
+						<Text
+							fontSize="xs"
+							textTransform="uppercase"
+							letterSpacing="0.12em"
+							color="whiteAlpha.700"
+						>
+							Rotation
+						</Text>
+						<Text fontSize="sm" fontWeight="semibold">
+							{alignment.movingImageTransform.rotationDegrees.toFixed(1)}°
+						</Text>
+					</Flex>
+					<ButtonGroup size="sm" variant="outline" isAttached>
+						<Button
+							aria-label="Rotate H&E left 90 degrees"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												rotationDegrees:
+													slice.movingImageTransform.rotationDegrees - 90,
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							↺90
+						</Button>
+						<Button
+							aria-label="Rotate H&E right 90 degrees"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												rotationDegrees:
+													slice.movingImageTransform.rotationDegrees + 90,
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							↻90
+						</Button>
+						<Button
+							aria-label="Rotate H&E left 1 degree"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												rotationDegrees:
+													slice.movingImageTransform.rotationDegrees - 1,
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							↺1
+						</Button>
+						<Button
+							aria-label="Rotate H&E right 1 degree"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												rotationDegrees:
+													slice.movingImageTransform.rotationDegrees + 1,
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							↻1
+						</Button>
+					</ButtonGroup>
+					<Input
+						type="range"
+						min={-180}
+						max={180}
+						step={0.5}
+						value={alignment.movingImageTransform.rotationDegrees}
+						data-testid="alignment-he-rotation-slider"
+						onChange={(event) => {
+							const nextRotation = Number(event.target.value);
 							onAlignmentChange(
 								(slice) =>
 									normalizeAlignmentSlice({
 										...slice,
 										movingImageTransform: {
 											...slice.movingImageTransform,
-											flipHorizontal: !slice.movingImageTransform.flipHorizontal,
+											rotationDegrees: nextRotation,
 										},
 									}),
 								{ invalidateDownstream: false },
 							);
 						}}
+						px={0}
+					/>
+				</Stack>
+				<Stack spacing={2} data-testid="alignment-he-section-flip">
+					<Text
+						fontSize="xs"
+						textTransform="uppercase"
+						letterSpacing="0.12em"
+						color="whiteAlpha.700"
 					>
-						Flip horizontal
-					</Button>
+						Flip
+					</Text>
+					<ButtonGroup size="sm" variant="outline" isAttached>
+						<Button
+							aria-label="Flip H&E horizontally"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							data-testid="alignment-he-flip-horizontal"
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												flipHorizontal: !slice.movingImageTransform.flipHorizontal,
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							⇋
+						</Button>
+						<Button
+							aria-label="Flip H&E vertically"
+							color="white"
+							borderColor="whiteAlpha.400"
+							_hover={{ bg: "whiteAlpha.200" }}
+							data-testid="alignment-he-flip-vertical"
+							onClick={() => {
+								onAlignmentChange(
+									(slice) =>
+										normalizeAlignmentSlice({
+											...slice,
+											movingImageTransform: {
+												...slice.movingImageTransform,
+												flipVertical: !slice.movingImageTransform.flipVertical,
+											},
+										}),
+									{ invalidateDownstream: false },
+								);
+							}}
+						>
+							⇅
+						</Button>
+					</ButtonGroup>
+				</Stack>
+				<Stack spacing={2} data-testid="alignment-he-section-reset">
+					<Text
+						fontSize="xs"
+						textTransform="uppercase"
+						letterSpacing="0.12em"
+						color="whiteAlpha.700"
+					>
+						Reset
+					</Text>
 					<Button
+						size="sm"
+						variant="outline"
 						color="white"
 						borderColor="whiteAlpha.400"
 						_hover={{ bg: "whiteAlpha.200" }}
@@ -1313,36 +1647,15 @@ export function AlignmentPanel({
 								(slice) =>
 									normalizeAlignmentSlice({
 										...slice,
-										movingImageTransform: {
-											...slice.movingImageTransform,
-											flipVertical: !slice.movingImageTransform.flipVertical,
-										},
+										movingImageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 									}),
 								{ invalidateDownstream: false },
 							);
 						}}
 					>
-						Flip vertical
+						⟲
 					</Button>
-				</ButtonGroup>
-				<Button
-					size="sm"
-					variant="ghost"
-					color="white"
-					_hover={{ bg: "whiteAlpha.200" }}
-					onClick={() => {
-						onAlignmentChange(
-							(slice) =>
-								normalizeAlignmentSlice({
-									...slice,
-									movingImageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-								}),
-							{ invalidateDownstream: false },
-						);
-					}}
-				>
-					Reset H&E transform
-				</Button>
+				</Stack>
 			</Stack>
 		</Box>
 	);
