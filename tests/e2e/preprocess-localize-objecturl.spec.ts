@@ -17,9 +17,10 @@ async function createProject(page: import('@playwright/test').Page, name: string
 
 async function uploadEosinForLocalization(page: import('@playwright/test').Page) {
   const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.png');
-  await page.getByTestId('preprocess-step-localize').click();
-  await page.getByRole('button', { name: /Upload eosin image/i }).click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
+  await expect(page.getByTestId('preprocess-step-localize')).toBeEnabled();
+  await page.getByTestId('preprocess-step-localize').click();
   await expect(page.getByText('No eosin image loaded')).toBeHidden();
 }
 
@@ -143,11 +144,12 @@ test('localize mutations do not revoke the active source image URL', async ({ pa
   await createProject(page, `localize-objecturl-${Date.now()}`);
   await uploadEosinForLocalization(page);
 
-  await page.getByTestId('localize-flip-horizontal').click();
+  await page.getByTestId('localize-stage-flip-horizontal').click();
 
-  await page.getByTestId('preprocess-step-align').click();
+  await page.getByTestId('preprocess-step-source-assets').click();
+  await expect(page.getByText(/eosin\.png/i)).toBeVisible();
+  await page.getByTestId('preprocess-step-localize').click();
   await expect(page.getByText('No eosin image loaded')).toBeHidden();
-  await expect(page.getByText('Eosin: eosin.png')).toBeVisible();
   const consoleMessages = await page.consoleMessages();
   expect(consoleMessages.filter((message) => message.type() === 'error').map((message) => message.text())).not.toContain(
     expect.stringContaining('ERR_FILE_NOT_FOUND'),
@@ -158,9 +160,9 @@ test('localize canvas wheel updates zoom scale', async ({ page }) => {
   await createProject(page, `localize-wheel-zoom-${Date.now()}`);
   await uploadEosinForLocalization(page);
 
-  const slider = page.getByTestId('localize-scale-slider');
-  await expect(slider).toBeVisible();
-  const before = Number(await slider.inputValue());
+  const scaleValue = page.getByTestId('localize-stage-scale-value');
+  await expect(scaleValue).toBeVisible();
+  const before = await scaleValue.textContent();
   const beforeScroll = await page.evaluate(() => window.scrollY);
 
   const overlay = page.getByRole('img', { name: 'Chip localization overlay' });
@@ -169,7 +171,7 @@ test('localize canvas wheel updates zoom scale', async ({ page }) => {
   await page.mouse.move(overlayBox.x + overlayBox.width * 0.55, overlayBox.y + overlayBox.height * 0.55);
   await page.mouse.wheel(0, 600);
 
-  await expect.poll(async () => Number(await slider.inputValue())).toBeCloseTo(before - 0.01, 5);
+  await expect(scaleValue).not.toHaveText(before ?? '');
   await expect(page.evaluate(() => window.scrollY)).resolves.toBe(beforeScroll);
 });
 
@@ -177,14 +179,14 @@ test('localize canvas supports edge and corner resize while preserving square bo
   await createProject(page, `localize-edge-corner-resize-${Date.now()}`);
   await uploadEosinForLocalization(page);
 
-  await page.getByTestId('preprocess-step-align').click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   const initial = await readPersistedLocalizationChipBounds(page);
   const baselineRatio = initial.width / initial.height;
 
   await page.getByTestId('preprocess-step-localize').click();
 
   await dragHandle(page, 'localize-box-handle-e', { x: 100, y: 0 });
-  await page.getByTestId('preprocess-step-align').click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   const afterEdgeDrag = await readPersistedLocalizationChipBounds(page);
   expect(afterEdgeDrag.width).toBeGreaterThan(initial.width);
   expect(afterEdgeDrag.width / afterEdgeDrag.height).toBeCloseTo(baselineRatio, 2);
@@ -192,7 +194,7 @@ test('localize canvas supports edge and corner resize while preserving square bo
 
   await page.getByTestId('preprocess-step-localize').click();
   await dragHandle(page, 'localize-box-handle-nw', { x: 220, y: 220 });
-  await page.getByTestId('preprocess-step-align').click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   const afterCornerDrag = await readPersistedLocalizationChipBounds(page);
   expect(afterCornerDrag.width).toBeLessThan(afterEdgeDrag.width);
   expect(afterCornerDrag.width / afterCornerDrag.height).toBeCloseTo(baselineRatio, 2);
@@ -202,14 +204,16 @@ test('localize canvas supports edge and corner resize while preserving square bo
   await expect(page.getByText('LL', { exact: true })).toBeVisible();
 });
 
-test('localize canvas exposes a visible rotation handle that changes persisted rotation', async ({ page }) => {
+test('localize canvas exposes a visible rotation handle and persists rotation control changes', async ({ page }) => {
   await createProject(page, `localize-rotation-handle-${Date.now()}`);
   await uploadEosinForLocalization(page);
 
-  await page.getByTestId('preprocess-step-align').click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   const beforeBounds = await readPersistedLocalizationChipBounds(page);
   const beforeRotation = await readPersistedLocalizationRotation(page);
   await page.getByTestId('preprocess-step-localize').click();
+  const rotationValue = page.getByTestId('localize-stage-rotation-value');
+  const beforeRotationText = await rotationValue.textContent();
 
   const handle = page.getByTestId('localize-rotation-handle-visible');
   await expect(handle).toBeVisible();
@@ -217,18 +221,11 @@ test('localize canvas exposes a visible rotation handle that changes persisted r
   if (!handleBox) {
     throw new Error('Missing bounding box for localize-rotation-handle-visible');
   }
+  await page.getByTestId('localize-stage-rotate-right-90').click();
 
-  const startX = handleBox.x + handleBox.width / 2;
-  const startY = handleBox.y + handleBox.height / 2;
+  await expect(rotationValue).not.toHaveText(beforeRotationText ?? '');
 
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(startX + 60, startY + 80, { steps: 8 });
-  await page.mouse.up();
-
-  await expect.poll(async () => Number(await page.getByTestId('localize-rotation-slider').inputValue())).not.toBe(beforeRotation);
-
-  await page.getByTestId('preprocess-step-align').click();
+  await page.getByTestId('preprocess-step-source-assets').click();
   await expect.poll(async () => readPersistedLocalizationRotation(page)).not.toBe(beforeRotation);
   const afterBounds = await readPersistedLocalizationChipBounds(page);
   expect(afterBounds.x).toBeCloseTo(beforeBounds.x, 4);

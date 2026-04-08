@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
+const PREPROCESS_STORAGE_KEY = 'spatial-preprocess-projects';
+
 function alignmentLocators(page: import('@playwright/test').Page) {
   return {
     sourceCanvas: page.getByTestId('alignment-add-point-eosin'),
@@ -27,6 +29,392 @@ async function createProject(page: import('@playwright/test').Page, name: string
   await expect(page).toHaveURL(/preprocess_id=/);
 }
 
+async function getCurrentPreprocessId(page: import('@playwright/test').Page) {
+  const url = new URL(page.url());
+  const preprocessId = url.searchParams.get('preprocess_id');
+  if (!preprocessId) throw new Error('Missing preprocess_id in URL');
+  return preprocessId;
+}
+
+async function seedFocusedHeConsumerState(
+  page: import('@playwright/test').Page,
+  currentStep: 'alignment' | 'cropQc',
+) {
+  const preprocessId = await getCurrentPreprocessId(page);
+
+  return page.evaluate(({ preprocessId, currentStep, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) {
+      throw new Error('No preprocess storage payload found');
+    }
+
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const makeImage = (width: number, height: number, fill: string) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas unavailable for seeded image');
+      context.fillStyle = fill;
+      context.fillRect(0, 0, width, height);
+      return {
+        dataUrl: canvas.toDataURL('image/png'),
+        width,
+        height,
+      };
+    };
+
+    const eosin = makeImage(320, 240, 'rgb(180,180,180)');
+    const originalHe = makeImage(320, 240, 'rgb(40,90,220)');
+    const focusedHe = makeImage(140, 140, 'rgb(220,60,60)');
+    const now = new Date().toISOString();
+
+    const nextProjects = projects.map((project) => {
+      if (project.id !== preprocessId) return project;
+
+      return {
+        ...project,
+        currentStep,
+        updatedAt: now,
+        sourceAssets: {
+          ...(project.sourceAssets as Record<string, unknown>),
+          status: 'ready',
+          isStale: false,
+          updatedAt: now,
+          images: {
+            eosin: {
+              id: `seed-eosin-${preprocessId}`,
+              kind: 'eosin',
+              fileName: 'eosin.png',
+              mimeType: 'image/png',
+              sizeBytes: eosin.dataUrl.length,
+              width: eosin.width,
+              height: eosin.height,
+              lastModified: Date.now(),
+              dataUrl: eosin.dataUrl,
+              thumbnailDataUrl: eosin.dataUrl,
+            },
+            he: {
+              id: `seed-he-${preprocessId}`,
+              kind: 'he',
+              fileName: 'he.png',
+              mimeType: 'image/png',
+              sizeBytes: originalHe.dataUrl.length,
+              width: originalHe.width,
+              height: originalHe.height,
+              lastModified: Date.now(),
+              dataUrl: originalHe.dataUrl,
+              thumbnailDataUrl: originalHe.dataUrl,
+            },
+          },
+        },
+        localization: {
+          ...(project.localization as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          chipBounds: {
+            x: 0.05,
+            y: 0.08,
+            width: 0.24,
+            height: 0.32,
+          },
+          handles: [],
+          imageTransform: {
+            rotationDegrees: 0,
+            flipHorizontal: false,
+            flipVertical: false,
+            scale: 1,
+          },
+          error: null,
+        },
+        heFocus: {
+          ...(project.heFocus as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          chipBounds: {
+            x: 0.08,
+            y: 0.04,
+            width: 0.4375,
+            height: 0.5833333333333334,
+          },
+          handles: [],
+          imageTransform: {
+            rotationDegrees: 0,
+            flipHorizontal: false,
+            flipVertical: false,
+            scale: 1,
+          },
+          focusedImageDataUrl: focusedHe.dataUrl,
+          error: null,
+        },
+        alignment: {
+          ...(project.alignment as Record<string, unknown>),
+          status: currentStep === 'alignment' ? 'ready' : 'complete',
+          isStale: false,
+          updatedAt: now,
+          referenceImage: 'eosin',
+          movingImage: 'he',
+          controlPoints: [
+            {
+              id: 'seed-pair-1',
+              source: { x: 0.12, y: 0.12 },
+              target: { x: 0.12, y: 0.12 },
+            },
+          ],
+          affineMatrix: currentStep === 'cropQc' ? [1, 0, 0, 0, 1, 0] : null,
+          inlierMask: currentStep === 'cropQc' ? [true] : null,
+          reprojectionRmse: currentStep === 'cropQc' ? 0 : null,
+          inlierRatio: currentStep === 'cropQc' ? 1 : null,
+          ransacReprojThreshold: currentStep === 'cropQc' ? 3 : null,
+          qualityFlags: {
+            minPairs: currentStep === 'cropQc',
+            inlierRatio: currentStep === 'cropQc',
+            rmse: currentStep === 'cropQc',
+            finiteMatrix: currentStep === 'cropQc',
+            scaleRange: currentStep === 'cropQc',
+            accepted: currentStep === 'cropQc',
+          },
+          solveAccepted: currentStep === 'cropQc',
+          failureReason: null,
+          transform: null,
+          previewDataUrl: null,
+          error: null,
+        },
+        cropQc: {
+          ...(project.cropQc as Record<string, unknown>),
+          status: currentStep === 'cropQc' ? 'ready' : 'idle',
+          isStale: false,
+          updatedAt: now,
+          cropRect: null,
+          cropWidth: null,
+          cropHeight: null,
+          qcAccepted: false,
+          eosinPreviewDataUrl: null,
+          previewDataUrl: null,
+          checkerboardPreviewDataUrl: null,
+          error: null,
+        },
+      };
+    });
+
+    window.localStorage.setItem(preprocessStorageKey, JSON.stringify(nextProjects));
+
+    return {
+      focusedHeDataUrl: focusedHe.dataUrl,
+      originalHeDataUrl: originalHe.dataUrl,
+    };
+  }, {
+    preprocessId,
+    currentStep,
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
+}
+
+async function seedCompletedDownstreamState(page: import('@playwright/test').Page) {
+  const preprocessId = await getCurrentPreprocessId(page);
+
+  return page.evaluate(({ preprocessId, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) {
+      throw new Error('No preprocess storage payload found');
+    }
+
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const makeImage = (width: number, height: number, fill: string) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas unavailable for seeded image');
+      context.fillStyle = fill;
+      context.fillRect(0, 0, width, height);
+      return canvas.toDataURL('image/png');
+    };
+
+    const eosinDataUrl = makeImage(320, 240, 'rgb(180,180,180)');
+    const originalHeDataUrl = makeImage(320, 240, 'rgb(40,90,220)');
+    const focusedHeDataUrl = makeImage(140, 140, 'rgb(220,60,60)');
+    const cropPreviewDataUrl = makeImage(120, 120, 'rgb(220,60,60)');
+    const checkerboardDataUrl = makeImage(120, 120, 'rgb(200,120,120)');
+    const now = new Date().toISOString();
+
+    const nextProjects = projects.map((project) => {
+      if (project.id !== preprocessId) return project;
+
+      return {
+        ...project,
+        currentStep: 'heFocus',
+        updatedAt: now,
+        sourceAssets: {
+          ...(project.sourceAssets as Record<string, unknown>),
+          status: 'ready',
+          isStale: false,
+          updatedAt: now,
+          images: {
+            eosin: {
+              id: `seed-eosin-${preprocessId}`,
+              kind: 'eosin',
+              fileName: 'eosin.png',
+              mimeType: 'image/png',
+              sizeBytes: eosinDataUrl.length,
+              width: 320,
+              height: 240,
+              lastModified: Date.now(),
+              dataUrl: eosinDataUrl,
+              thumbnailDataUrl: eosinDataUrl,
+            },
+            he: {
+              id: `seed-he-${preprocessId}`,
+              kind: 'he',
+              fileName: 'he.png',
+              mimeType: 'image/png',
+              sizeBytes: originalHeDataUrl.length,
+              width: 320,
+              height: 240,
+              lastModified: Date.now(),
+              dataUrl: originalHeDataUrl,
+              thumbnailDataUrl: originalHeDataUrl,
+            },
+          },
+        },
+        localization: {
+          ...(project.localization as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          chipBounds: {
+            x: 0.05,
+            y: 0.08,
+            width: 0.24,
+            height: 0.32,
+          },
+          handles: [],
+          imageTransform: {
+            rotationDegrees: 0,
+            flipHorizontal: false,
+            flipVertical: false,
+            scale: 1,
+          },
+          error: null,
+        },
+        heFocus: {
+          ...(project.heFocus as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          chipBounds: {
+            x: 0.08,
+            y: 0.04,
+            width: 0.4375,
+            height: 0.5833333333333334,
+          },
+          handles: [],
+          imageTransform: {
+            rotationDegrees: 0,
+            flipHorizontal: false,
+            flipVertical: false,
+            scale: 1,
+          },
+          focusedImageDataUrl: focusedHeDataUrl,
+          error: null,
+        },
+        alignment: {
+          ...(project.alignment as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          referenceImage: 'eosin',
+          movingImage: 'he',
+          controlPoints: [
+            {
+              id: 'seed-pair-1',
+              source: { x: 0.12, y: 0.12 },
+              target: { x: 0.12, y: 0.12 },
+            },
+            {
+              id: 'seed-pair-2',
+              source: { x: 0.24, y: 0.2 },
+              target: { x: 0.24, y: 0.2 },
+            },
+          ],
+          affineMatrix: [1, 0, 0, 0, 1, 0],
+          inlierMask: [true, true],
+          reprojectionRmse: 0,
+          inlierRatio: 1,
+          ransacReprojThreshold: 3,
+          qualityFlags: {
+            minPairs: true,
+            inlierRatio: true,
+            rmse: true,
+            finiteMatrix: true,
+            scaleRange: true,
+            accepted: true,
+          },
+          solveAccepted: true,
+          failureReason: null,
+          transform: null,
+          previewDataUrl: null,
+          error: null,
+        },
+        cropQc: {
+          ...(project.cropQc as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          cropRect: {
+            x: 0.05,
+            y: 0.08,
+            width: 0.24,
+            height: 0.32,
+          },
+          cropWidth: 120,
+          cropHeight: 120,
+          qcAccepted: true,
+          eosinPreviewDataUrl: eosinDataUrl,
+          previewDataUrl: cropPreviewDataUrl,
+          checkerboardPreviewDataUrl: checkerboardDataUrl,
+          error: null,
+        },
+      };
+    });
+
+    window.localStorage.setItem(preprocessStorageKey, JSON.stringify(nextProjects));
+  }, {
+    preprocessId,
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
+}
+
+async function sampleImagePixel(
+  locator: ReturnType<import('@playwright/test').Page['locator']>,
+  xRatio = 0.25,
+  yRatio = 0.25,
+) {
+  return locator.evaluate(async (image, { xRatio, yRatio }) => {
+    if (!(image instanceof HTMLImageElement)) {
+      throw new Error('Expected an image element');
+    }
+    const decoded = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const nextImage = new Image();
+      nextImage.onload = () => resolve(nextImage);
+      nextImage.onerror = () => reject(new Error('Failed to decode preview image'));
+      nextImage.src = image.src;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = decoded.naturalWidth;
+    canvas.height = decoded.naturalHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas unavailable for image sampling');
+    context.drawImage(decoded, 0, 0);
+    const sampleX = Math.max(0, Math.min(decoded.naturalWidth - 1, Math.floor(decoded.naturalWidth * xRatio)));
+    const sampleY = Math.max(0, Math.min(decoded.naturalHeight - 1, Math.floor(decoded.naturalHeight * yRatio)));
+    const data = context.getImageData(sampleX, sampleY, 1, 1).data;
+    return { r: data[0], g: data[1], b: data[2] };
+  }, { xRatio, yRatio });
+}
+
 async function uploadAlignmentImages(page: import('@playwright/test').Page) {
   const eosinPath = path.join(process.cwd(), 'tests/fixtures/preprocess/eosin.png');
   const hePath = path.join(process.cwd(), 'tests/fixtures/preprocess/he.png');
@@ -38,6 +426,11 @@ async function uploadAlignmentImages(page: import('@playwright/test').Page) {
   await page.getByTestId('preprocess-step-localize').click();
   await expect(page.getByTestId('localize-canvas-surface')).toBeVisible();
   await page.getByTestId('localize-stage-reset').click();
+  await expect(page.getByTestId('preprocess-step-he-focus')).toBeEnabled();
+  await expect(page.getByTestId('preprocess-step-align')).toBeDisabled();
+  await page.getByTestId('preprocess-step-he-focus').click();
+  await expect(page.getByTestId('preprocess-he-focus-canvas-column')).toBeVisible();
+  await page.getByTestId('he-focus-stage-reset').click();
   await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
 
   await page.getByTestId('preprocess-step-align').click();
@@ -167,6 +560,68 @@ test('guided pair creation keeps the complementary click contract and hides lega
   await expectAwaitingSource(page);
 });
 
+test('alignment uses focused HE asset instead of the original H&E upload', async ({ page }) => {
+  await createProject(page, `task5-focused-align-${Date.now()}`);
+  const { focusedHeDataUrl, originalHeDataUrl } = await seedFocusedHeConsumerState(page, 'alignment');
+
+  await page.reload();
+  await expect(page.getByTestId('alignment-add-point-he').locator('img')).toBeVisible();
+
+  const movingImageSrc = await page.getByTestId('alignment-add-point-he').locator('img').getAttribute('src');
+  expect(movingImageSrc).toBe(focusedHeDataUrl);
+  expect(movingImageSrc).not.toBe(originalHeDataUrl);
+});
+
+test('crop generation uses focused HE asset instead of the original H&E upload', async ({ page }) => {
+  await createProject(page, `task5-focused-crop-${Date.now()}`);
+  await seedFocusedHeConsumerState(page, 'cropQc');
+
+  await page.reload();
+  await page.getByTestId('cropqc-run').click();
+  await page.getByRole('tab', { name: 'Overlay opacity' }).click();
+  const heCropPreview = page.getByAltText('Warped HE crop preview');
+  await expect(heCropPreview).toBeVisible({ timeout: 180_000 });
+
+  const pixel = await sampleImagePixel(heCropPreview, 0.25, 0.25);
+  expect(pixel.r).toBeGreaterThan(180);
+  expect(pixel.g).toBeLessThan(120);
+  expect(pixel.b).toBeLessThan(120);
+});
+
+test('changing HE Focus clears alignment solve state and crop outputs through invalidation', async ({ page }) => {
+  await createProject(page, `task5-hefocus-invalidation-${Date.now()}`);
+  await seedCompletedDownstreamState(page);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByTestId('he-focus-stage-rotate-right-90').click();
+
+  await page.waitForFunction(({ preprocessId, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) return false;
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const project = projects.find((entry) => entry.id === preprocessId);
+    if (!project || typeof project.alignment !== 'object' || project.alignment === null) {
+      return false;
+    }
+
+    const alignment = project.alignment as Record<string, unknown>;
+    const cropQc = project.cropQc as Record<string, unknown>;
+    const controlPoints = Array.isArray(alignment.controlPoints)
+      ? alignment.controlPoints.length
+      : -1;
+
+    return alignment.status === 'stale'
+      && alignment.affineMatrix === null
+      && controlPoints === 0
+      && cropQc.status === 'stale'
+      && cropQc.previewDataUrl === null;
+  }, {
+    preprocessId: await getCurrentPreprocessId(page),
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
+});
+
 test('selected pair exposes contextual reposition and delete actions', async ({ page }) => {
   await createProject(page, `task15-selected-pair-${Date.now()}`);
   await uploadAlignmentImages(page);
@@ -223,7 +678,7 @@ test('workspace edits persist only after step transition save', async ({ page })
   await page.reload();
 
   await expect(page.getByRole('heading', { name: persistedName })).toBeVisible();
-  await expect(page.getByText('Chip localization')).toBeVisible();
+  await expect(page.getByText('No eosin image loaded')).toBeVisible();
 });
 
 test('localize transform exposes zoom control', async ({ page }) => {
@@ -332,7 +787,8 @@ test('oversized input and synthetic quota failure surface recoverable errors', a
   await page.locator('input[type="file"]').first().setInputFiles(eosinPath);
   await page.getByTestId('preprocess-step-localize').click();
   await page.getByTestId('localize-stage-reset').click();
-  await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
+  await expect(page.getByTestId('preprocess-step-he-focus')).toBeEnabled();
+  await expect(page.getByTestId('preprocess-step-align')).toBeDisabled();
 
   await page.getByRole('heading', { name: /task12-hardening-errors-/i }).click();
   const nameInput = page.getByTestId('project-name-input');

@@ -5,15 +5,141 @@ import JSZip from 'jszip';
 import { exportPreprocessZip } from '@/lib/preprocess/exportBundle';
 import type { PreprocessProject } from '@/types/preprocess';
 
+const PREPROCESS_STORAGE_KEY = 'spatial-preprocess-projects';
+const PREPROCESS_DB_NAME = 'spatial-preprocess';
+const PREPROCESS_DERIVED_IMAGE_STORE = 'preprocess-derived-images';
+const HE_FOCUS_STORE_KEY_SUFFIX = 'he-focus';
+const HE_FOCUS_PACKAGE_PATH = 'derived-assets/he-focus';
+
+type SeededProjectInfo = {
+  preprocessId: string;
+  projectName: string;
+};
+
+async function inspectStoredProjectState(
+  page: import('@playwright/test').Page,
+  preprocessId: string,
+) {
+  return page.evaluate(async ({
+    preprocessDbName,
+    preprocessDerivedImageStore,
+    preprocessId,
+    preprocessStorageKey,
+    heFocusStoreKeySuffix,
+  }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    const projects = raw ? JSON.parse(raw) as Array<Record<string, unknown>> : [];
+    const meta = projects.find((project) => project.id === preprocessId) ?? null;
+
+    const openDb = () => new Promise<IDBDatabase>((resolve, reject) => {
+      const request = window.indexedDB.open(preprocessDbName);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+
+    const readStore = (db: IDBDatabase, store: string, keyName: string) => new Promise<string | Blob | undefined>((resolve, reject) => {
+      const tx = db.transaction(store, 'readonly');
+      const req = tx.objectStore(store).get(keyName);
+      req.onsuccess = () => resolve(req.result as string | Blob | undefined);
+      req.onerror = () => reject(req.error);
+    });
+
+    const db = await openDb();
+    const hasDerivedStore = db.objectStoreNames.contains(preprocessDerivedImageStore);
+    const derivedAsset = hasDerivedStore
+      ? await readStore(db, preprocessDerivedImageStore, `${preprocessId}:${heFocusStoreKeySuffix}`)
+      : undefined;
+    const heFocus = meta && typeof meta.heFocus === 'object' && meta.heFocus !== null
+      ? meta.heFocus as Record<string, unknown>
+      : null;
+    db.close();
+
+    return {
+      derivedAssetKind:
+        derivedAsset instanceof Blob
+          ? 'blob'
+          : typeof derivedAsset === 'string'
+            ? 'string'
+            : null,
+      derivedAssetSize:
+        derivedAsset instanceof Blob
+          ? derivedAsset.size
+          : typeof derivedAsset === 'string'
+            ? derivedAsset.length
+            : 0,
+      hasDerivedStore,
+      metaExists: Boolean(meta),
+      heFocusFocusedImageDataUrl: heFocus?.focusedImageDataUrl ?? null,
+    };
+  }, {
+    preprocessDbName: PREPROCESS_DB_NAME,
+    preprocessDerivedImageStore: PREPROCESS_DERIVED_IMAGE_STORE,
+    preprocessId,
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+    heFocusStoreKeySuffix: HE_FOCUS_STORE_KEY_SUFFIX,
+  });
+}
+
+async function downloadExportOrThrow(
+  page: import('@playwright/test').Page,
+  preprocessId: string,
+) {
+  const downloadPromise = page.waitForEvent('download').then((download) => ({
+    kind: 'download' as const,
+    download,
+  }));
+  const exportErrorPromise = page.waitForFunction(
+    ({ preprocessId, preprocessStorageKey }) => {
+      const raw = window.localStorage.getItem(preprocessStorageKey);
+      if (!raw) return false;
+
+      const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+      const project = projects.find((entry) => entry.id === preprocessId);
+      if (!project || typeof project.exportState !== 'object' || project.exportState === null) {
+        return false;
+      }
+
+      const exportState = project.exportState as Record<string, unknown>;
+      if (exportState.status !== 'error') {
+        return false;
+      }
+
+      return typeof exportState.error === 'string' && exportState.error.length > 0
+        ? exportState.error
+        : 'Export failed';
+    },
+    {
+      preprocessId,
+      preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+    },
+    {
+      timeout: 15_000,
+    },
+  ).then(async (handle) => ({
+    kind: 'error' as const,
+    message: await handle.jsonValue<string>(),
+  }));
+
+  await page.getByTestId('export-download-zip').click();
+  const result = await Promise.race([downloadPromise, exportErrorPromise]);
+
+  if (result.kind === 'error') {
+    throw new Error(result.message);
+  }
+
+  return result.download;
+}
+
 async function seedProjectToExportReady(
   page: import('@playwright/test').Page,
   storageMode: 'legacy-data-url' | 'blob-backed' = 'legacy-data-url',
-) {
+): Promise<SeededProjectInfo> {
   const projectName = `task10-export-${Date.now()}`;
   await page.goto('/preprocess');
   await page.getByPlaceholder('Tumor preprocess set A').fill(projectName);
   await page.getByTestId('preprocess-create-project').click();
   await expect(page).toHaveURL(/preprocess_id=/);
+  await expect(page.getByTestId('autosave-status')).toHaveText('saved');
 
   const url = new URL(page.url());
   const preprocessId = url.searchParams.get('preprocess_id');
@@ -38,6 +164,9 @@ async function seedProjectToExportReady(
     context.fillRect(20, 20, 280, 200);
     const alignedHeDataUrl = canvas.toDataURL('image/png');
     const heSourceDataUrl = canvas.toDataURL('image/png');
+    context.fillStyle = 'rgb(200,80,80)';
+    context.fillRect(60, 40, 140, 140);
+    const focusedHeDataUrl = canvas.toDataURL('image/png');
 
     const projectedSpots = Array.from({ length: 16 }, (_, index) => {
       const row = Math.floor(index / 4) + 1;
@@ -106,6 +235,40 @@ async function seedProjectToExportReady(
           status: 'complete',
           isStale: false,
           updatedAt: now,
+          chipBounds: {
+            x: 0.05,
+            y: 0.08,
+            width: 0.24,
+            height: 0.32,
+          },
+          handles: [],
+          imageTransform: {
+            rotationDegrees: 0,
+            flipHorizontal: false,
+            flipVertical: false,
+            scale: 1,
+          },
+          error: null,
+        },
+        heFocus: {
+          ...(project.heFocus as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          chipBounds: {
+            x: 0.2,
+            y: 0.15,
+            width: 0.5,
+            height: 0.5,
+          },
+          handles: [],
+          imageTransform: {
+            rotationDegrees: 0,
+            flipHorizontal: false,
+            flipVertical: false,
+            scale: 1,
+          },
+          focusedImageDataUrl: null,
         },
         alignment: {
           ...(project.alignment as Record<string, unknown>),
@@ -163,16 +326,7 @@ async function seedProjectToExportReady(
     });
 
     const openDb = () => new Promise<IDBDatabase>((resolve, reject) => {
-      const request = window.indexedDB.open('spatial-preprocess', 2);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains('preprocess-source-images')) {
-          db.createObjectStore('preprocess-source-images');
-        }
-        if (!db.objectStoreNames.contains('preprocess-thumbnails')) {
-          db.createObjectStore('preprocess-thumbnails');
-        }
-      };
+      const request = window.indexedDB.open('spatial-preprocess');
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -207,36 +361,49 @@ async function seedProjectToExportReady(
       writeStore(db, 'preprocess-source-images', `${id}:he`, heSourceValue),
       writeStore(db, 'preprocess-thumbnails', `${id}:eosin`, eosinThumbnailValue),
       writeStore(db, 'preprocess-thumbnails', `${id}:he`, heThumbnailValue),
+      writeStore(db, 'preprocess-derived-images', `${id}:he-focus`, focusedHeDataUrl),
     ]);
+    db.close();
 
     window.localStorage.setItem(key, JSON.stringify(next));
   }, { preprocessId: preprocessId, storageMode, id: preprocessId });
 
   await page.reload();
-  await page.getByTestId('preprocess-step-export').click();
 
-  return projectName;
+  return {
+    preprocessId,
+    projectName,
+  };
 }
 
-test('blob-backed preprocess storage hydrates source images after reload', async ({ page }) => {
+test('blob-backed preprocess storage hydrates source images after reload and routes through HE Focus', async ({ page }) => {
   await seedProjectToExportReady(page, 'blob-backed');
 
   await page.getByTestId('preprocess-step-localize').click();
+  await expect(page.getByTestId('preprocess-step-he-focus')).toBeEnabled();
   await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
   await expect(page.getByText('No eosin image loaded')).toBeHidden();
-  await expect(page.getByText('Eosin: eosin.png')).toBeVisible();
-  await expect(page.getByText('H&E: he.png')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Localization canvas' })).toBeVisible();
+
+  await page.getByTestId('preprocess-step-he-focus').click();
+  await expect(page.getByRole('heading', { name: 'H&E focus canvas' })).toBeVisible();
+  await expect(page.getByText('No H&E image loaded')).toBeHidden();
+  await expect(page.getByTestId('he-focus-focused-image-card')).toBeVisible();
+  await page.getByTestId('he-focus-stage-reset').click();
+  await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
 });
 
 test('export full preprocess ZIP with recovery payload', async ({ page }) => {
-  await seedProjectToExportReady(page);
+  const { preprocessId } = await seedProjectToExportReady(page);
+  const storedState = await inspectStoredProjectState(page, preprocessId);
+  expect(storedState.heFocusFocusedImageDataUrl).toBeNull();
+  expect(storedState.hasDerivedStore).toBe(true);
+  expect(storedState.derivedAssetKind).toBe('string');
 
   await page.getByTestId('export-include-project').check();
   await page.getByTestId('export-include-aligned-image').check();
 
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('export-download-zip').click();
-  const download = await downloadPromise;
+  const download = await downloadExportOrThrow(page, preprocessId);
   const filePath = await download.path();
   if (!filePath) throw new Error('Missing downloaded zip path');
 
@@ -252,7 +419,19 @@ test('export full preprocess ZIP with recovery payload', async ({ page }) => {
     'tissue_position.csv',
     'project.json',
     'aligned_tissue_image.png',
+    HE_FOCUS_PACKAGE_PATH,
   ]));
+
+   const projectEntry = zip.file('project.json');
+   if (!projectEntry) throw new Error('Missing project.json in export zip');
+   const projectPayload = JSON.parse(await projectEntry.async('text')) as {
+     project: {
+       heFocus: {
+         focusedImageDataUrl: string | null;
+       };
+     };
+   };
+   expect(projectPayload.project.heFocus.focusedImageDataUrl).toBeNull();
 
   const scalefactorsEntry = zip.file('scalefactors.json');
   if (!scalefactorsEntry) throw new Error('Missing scalefactors.json in export zip');
@@ -276,11 +455,9 @@ test('export full preprocess ZIP with recovery payload', async ({ page }) => {
 });
 
 test('export includes the chip-sized tissue matrix csv', async ({ page }) => {
-  await seedProjectToExportReady(page);
+  const { preprocessId } = await seedProjectToExportReady(page);
 
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('export-download-zip').click();
-  const download = await downloadPromise;
+  const download = await downloadExportOrThrow(page, preprocessId);
   const filePath = await download.path();
   if (!filePath) throw new Error('Missing downloaded zip path');
 
@@ -447,12 +624,10 @@ test('export derives tissue matrix content from regions when selectedSpotIds is 
 });
 
 test('recovery import restores a saved project from exported zip', async ({ page }) => {
-  const projectName = await seedProjectToExportReady(page);
+  const { preprocessId, projectName } = await seedProjectToExportReady(page);
 
   await page.getByTestId('export-include-project').check();
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('export-download-zip').click();
-  const download = await downloadPromise;
+  const download = await downloadExportOrThrow(page, preprocessId);
 
   const zipPath = path.join(process.cwd(), '.sisyphus/evidence/task-10-recovery-source.zip');
   await download.saveAs(zipPath);
@@ -471,8 +646,6 @@ test('recovery import restores a saved project from exported zip', async ({ page
   }
 
   await expect(page.getByTestId('preprocess-step-export')).toBeEnabled();
-  await expect(page.getByText('Eosin: eosin.png')).toBeVisible();
-  await expect(page.getByText('H&E: he.png')).toBeVisible();
 
   await page.screenshot({
     path: path.join(process.cwd(), '.sisyphus/evidence/task-10-export-recovery.png'),
@@ -481,12 +654,10 @@ test('recovery import restores a saved project from exported zip', async ({ page
 });
 
 test('recovery import restores a blob-backed project from exported zip', async ({ page }) => {
-  const projectName = await seedProjectToExportReady(page, 'blob-backed');
+  const { preprocessId, projectName } = await seedProjectToExportReady(page, 'blob-backed');
 
   await page.getByTestId('export-include-project').check();
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('export-download-zip').click();
-  const download = await downloadPromise;
+  const download = await downloadExportOrThrow(page, preprocessId);
 
   const zipPath = path.join(process.cwd(), '.sisyphus/evidence/task-10-recovery-source-blob.zip');
   await download.saveAs(zipPath);
@@ -505,9 +676,52 @@ test('recovery import restores a blob-backed project from exported zip', async (
   }
 
   await page.reload();
-  await page.getByTestId('preprocess-step-localize').click();
-  await expect(page.getByTestId('preprocess-step-align')).toBeEnabled();
-  await expect(page.getByText('No eosin image loaded')).toBeHidden();
-  await expect(page.getByText('Eosin: eosin.png')).toBeVisible();
-  await expect(page.getByText('H&E: he.png')).toBeVisible();
+  await expect(page.getByTestId('export-download-zip')).toBeVisible();
+
+   const importedUrl = new URL(page.url());
+   const importedPreprocessId = importedUrl.searchParams.get('preprocess_id');
+   if (!importedPreprocessId) throw new Error('Missing imported preprocess_id in URL');
+
+   const storedState = await inspectStoredProjectState(page, importedPreprocessId);
+   expect(storedState.metaExists).toBe(true);
+   expect(storedState.heFocusFocusedImageDataUrl).toBeNull();
+   expect(storedState.hasDerivedStore).toBe(true);
+   expect(storedState.derivedAssetKind).toBe('blob');
+   expect(storedState.derivedAssetSize).toBeGreaterThan(0);
+});
+
+test('deleting a preprocess project removes the focused HE derived asset store entry', async ({ page }) => {
+  const { preprocessId, projectName } = await seedProjectToExportReady(page, 'blob-backed');
+
+  await page.getByTestId('export-include-project').check();
+  const download = await downloadExportOrThrow(page, preprocessId);
+
+  const zipPath = path.join(process.cwd(), '.sisyphus/evidence/task-10-delete-derived-source.zip');
+  await download.saveAs(zipPath);
+
+  await page.goto('/preprocess');
+  await page.getByTestId('preprocess-import-project').click();
+  await page.locator('input[type="file"]').setInputFiles(zipPath);
+
+  try {
+    await expect(page).toHaveURL(/preprocess_id=/, { timeout: 15_000 });
+  } catch {
+    await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open workspace' }).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Open workspace' }).first().click();
+    await expect(page).toHaveURL(/preprocess_id=/);
+  }
+
+  const storedBeforeDelete = await inspectStoredProjectState(page, preprocessId);
+  expect(storedBeforeDelete.derivedAssetKind).toBe('blob');
+  expect(storedBeforeDelete.derivedAssetSize).toBeGreaterThan(0);
+
+  await page.goto('/preprocess');
+  await page.getByLabel(`Delete ${projectName}`).click();
+  await expect(page.getByRole('heading', { name: projectName })).toHaveCount(0);
+
+  const storedState = await inspectStoredProjectState(page, preprocessId);
+  expect(storedState.metaExists).toBe(false);
+  expect(storedState.derivedAssetKind).toBeNull();
+  expect(storedState.derivedAssetSize).toBe(0);
 });

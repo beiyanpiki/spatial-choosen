@@ -24,6 +24,15 @@ async function completeLocalization(page: import('@playwright/test').Page) {
   await expect(rotatePlusNinety).toBeVisible();
   await rotatePlusNinety.click();
   await expect(page.getByTestId('localize-stage-rotation-value')).toHaveText('90.0°');
+  await expect(page.getByTestId('preprocess-step-he-focus')).toBeEnabled({ timeout: 20_000 });
+  await expect(page.getByTestId('preprocess-step-align')).toBeDisabled();
+}
+
+async function completeHeFocus(page: import('@playwright/test').Page) {
+  await page.getByTestId('preprocess-step-he-focus').click();
+  const resetFocusTransform = page.getByTestId('he-focus-stage-reset');
+  await expect(resetFocusTransform).toBeVisible();
+  await resetFocusTransform.click();
   await expect(page.getByTestId('preprocess-step-align')).toBeEnabled({ timeout: 20_000 });
 }
 
@@ -39,6 +48,7 @@ test('alignment remains consumer-only after source asset uploads', async ({ page
 
   await expect(page.getByTestId('preprocess-step-align')).toBeDisabled();
   await completeLocalization(page);
+  await completeHeFocus(page);
 
   await page.getByTestId('preprocess-step-align').click();
   await expect(page.getByRole('button', { name: /Upload H&E image/i })).toHaveCount(0);
