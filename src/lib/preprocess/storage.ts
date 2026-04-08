@@ -11,6 +11,7 @@ import type {
 import {
   PREPROCESS_DB_NAME,
   PREPROCESS_DB_VERSION,
+  PREPROCESS_DERIVED_IMAGE_STORE,
   PREPROCESS_SOURCE_IMAGE_KINDS,
   PREPROCESS_SOURCE_IMAGE_STORE,
   PREPROCESS_STORAGE_KEY,
@@ -39,11 +40,16 @@ type StoredSourceAssetsSlice = Omit<SourceAssetsSlice, 'images'> & {
   images: Record<PreprocessImageKind, StoredSourceImage | null>;
 };
 
+type StoredHeFocusSlice = Omit<PreprocessProject['heFocus'], 'focusedImageDataUrl'> & {
+  focusedImageDataUrl: null;
+};
+
 export type PreprocessProjectMeta = Omit<
   PreprocessProject,
-  'sourceAssets' | 'alignment' | 'cropQc' | 'chipConfig' | 'tissueSelection' | 'exportState'
+  'sourceAssets' | 'heFocus' | 'alignment' | 'cropQc' | 'chipConfig' | 'tissueSelection' | 'exportState'
 > & {
   sourceAssets: StoredSourceAssetsSlice;
+  heFocus: StoredHeFocusSlice;
   alignment: Omit<AlignmentSlice, 'previewDataUrl'> & { previewDataUrl: null };
   cropQc: PreprocessProject['cropQc'] & {
     eosinPreviewDataUrl: null;
@@ -75,6 +81,9 @@ const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
     if (!db.objectStoreNames.contains(PREPROCESS_THUMBNAIL_STORE)) {
       db.createObjectStore(PREPROCESS_THUMBNAIL_STORE);
     }
+    if (!db.objectStoreNames.contains(PREPROCESS_DERIVED_IMAGE_STORE)) {
+      db.createObjectStore(PREPROCESS_DERIVED_IMAGE_STORE);
+    }
   };
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(request.error);
@@ -104,6 +113,7 @@ const persistMetas = (metas: PreprocessProjectMeta[]) => {
 };
 
 const assetStoreKey = (projectId: string, kind: PreprocessImageKind) => `${projectId}:${kind}`;
+const derivedImageStoreKey = (projectId: string) => `${projectId}:he-focus`;
 
 const saveStoreValue = async (storeName: string, key: string, value: string | Blob) => {
   const db = await openDb();
@@ -131,8 +141,8 @@ const deleteStoreValue = async (storeName: string, key: string) => {
   await txDone(tx);
 };
 
-const dataUrlToBlob = async (dataUrl: string) => {
-  const response = await fetch(dataUrl);
+const urlToBlob = async (url: string) => {
+  const response = await fetch(url);
   return response.blob();
 };
 
@@ -157,6 +167,10 @@ const toProjectMeta = (project: PreprocessProject): PreprocessProjectMeta => ({
       eosin: stripSourcePayload(project.sourceAssets.images.eosin),
       he: stripSourcePayload(project.sourceAssets.images.he),
     },
+  },
+  heFocus: {
+    ...project.heFocus,
+    focusedImageDataUrl: null,
   },
   alignment: {
     ...project.alignment,
@@ -224,16 +238,26 @@ const hydrateSourceImage = (
   };
 };
 
+const hydrateDerivedImagePayload = async (payload: string | Blob | undefined) => {
+  if (!payload) return null;
+  if (payload instanceof Blob) {
+    return URL.createObjectURL(payload);
+  }
+  return payload;
+};
+
 const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessProject | undefined> => {
-  const [eosinDataUrl, heDataUrl, eosinThumbnailDataUrl, heThumbnailDataUrl] = await Promise.all([
+  const [eosinDataUrl, heDataUrl, eosinThumbnailDataUrl, heThumbnailDataUrl, focusedHePayload] = await Promise.all([
     readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'eosin')),
     readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'he')),
     readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'eosin')),
     readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'he')),
+    readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, derivedImageStoreKey(meta.id)),
   ]);
 
   const eosin = hydrateSourceImage(meta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
   const he = hydrateSourceImage(meta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
+  const focusedImageDataUrl = await hydrateDerivedImagePayload(focusedHePayload ?? meta.heFocus?.focusedImageDataUrl ?? undefined);
 
   if (meta.sourceAssets.images.eosin && !eosin) return undefined;
   if (meta.sourceAssets.images.he && !he) return undefined;
@@ -247,6 +271,12 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
         he,
       },
     },
+    heFocus: meta.heFocus
+      ? {
+          ...meta.heFocus,
+          focusedImageDataUrl,
+        }
+      : meta.heFocus,
   });
 };
 
@@ -254,8 +284,8 @@ const readMetas = async (): Promise<PreprocessProjectMeta[]> => readRawProjects(
 
 const syncImageStores = async (projectId: string, image: PreprocessSourceImage | null, kind: PreprocessImageKind) => {
   const key = assetStoreKey(projectId, kind);
-  const sourcePayload = image?.sourceBlob ?? (image?.dataUrl?.startsWith('data:') ? await dataUrlToBlob(image.dataUrl) : undefined);
-  const thumbnailPayload = image?.thumbnailBlob ?? (image?.thumbnailDataUrl?.startsWith('data:') ? await dataUrlToBlob(image.thumbnailDataUrl) : undefined);
+  const sourcePayload = image?.sourceBlob ?? (image?.dataUrl?.startsWith('data:') ? await urlToBlob(image.dataUrl) : undefined);
+  const thumbnailPayload = image?.thumbnailBlob ?? (image?.thumbnailDataUrl?.startsWith('data:') ? await urlToBlob(image.thumbnailDataUrl) : undefined);
 
   if (sourcePayload) {
     await saveStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, key, sourcePayload);
@@ -268,6 +298,18 @@ const syncImageStores = async (projectId: string, image: PreprocessSourceImage |
   } else {
     await deleteStoreValue(PREPROCESS_THUMBNAIL_STORE, key);
   }
+};
+
+const syncDerivedImageStore = async (projectId: string, focusedImageDataUrl: string | null) => {
+  const key = derivedImageStoreKey(projectId);
+  const payload = focusedImageDataUrl ? await urlToBlob(focusedImageDataUrl) : undefined;
+
+  if (payload) {
+    await saveStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key, payload);
+    return;
+  }
+
+  await deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key);
 };
 
 export async function readPreprocessProjects(): Promise<PreprocessProject[]> {
@@ -297,9 +339,10 @@ export async function upsertPreprocessProject(project: PreprocessProject) {
   }
   persistMetas(metas);
 
-  await Promise.all(
-    PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),
-  );
+  await Promise.all([
+    ...PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),
+    syncDerivedImageStore(migratedProject.id, migratedProject.heFocus.focusedImageDataUrl),
+  ]);
 }
 
 export async function getPreprocessProject(projectId: string): Promise<PreprocessProject | undefined> {
@@ -313,9 +356,12 @@ export async function deletePreprocessProject(projectId: string) {
   const metas = await readMetas();
   persistMetas(metas.filter((entry) => entry.id !== projectId));
   await Promise.all(
-    PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => [
-      deleteStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(projectId, kind)),
-      deleteStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(projectId, kind)),
-    ]),
+    [
+      ...PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => [
+        deleteStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(projectId, kind)),
+        deleteStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(projectId, kind)),
+      ]),
+      deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, derivedImageStoreKey(projectId)),
+    ],
   );
 }
