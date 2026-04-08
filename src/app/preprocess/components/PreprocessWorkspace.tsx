@@ -4,10 +4,20 @@ import {
 	Badge,
 	Box,
 	Button,
+	Card,
+	CardBody,
 	Flex,
+	FormControl,
+	FormLabel,
 	Heading,
 	HStack,
+	Image,
 	Input,
+	Select,
+	Slider,
+	SliderFilledTrack,
+	SliderThumb,
+	SliderTrack,
 	Spinner,
 	Stack,
 	Text,
@@ -40,10 +50,11 @@ import {
 	normalizeLocalizationSlice,
 } from "@/lib/preprocess/localization";
 import { buildSourceImage } from "@/lib/preprocess/sourceImage";
-import { applySpotOverrides } from "@/lib/preprocess/spotOverrides";
 import { projectSpotsForCrop } from "@/lib/preprocess/spotProjection";
 import { runTissueAutoSelection } from "@/lib/preprocess/tissuePipeline";
 import {
+  AUTO_TISSUE_REGION_ID,
+  buildDefaultTissueRegionFromDetectedSpots,
 	buildSelectedCountSummary,
 	deriveSelectedSpotIdsFromRegions,
 } from "@/lib/preprocess/tissueRegions";
@@ -58,14 +69,14 @@ import type {
 	PreprocessRect,
 	PreprocessSourceImage,
 	PreprocessStepId,
+	TissueSelectionSlice,
 } from "@/types/preprocess";
 import { AlignmentPanel } from "./AlignmentPanel";
 import { CanvasStage } from "./CanvasStage";
-import { ChipConfigPanel } from "./ChipConfigPanel";
 import { CropQcPanel } from "./CropQcPanel";
 import { ExportPanel } from "./ExportPanel";
 import { StepSidebar } from "./StepSidebar";
-import { TissueSelectionPanel } from "./TissueSelectionPanel";
+import { TissueSelectionPanel, type ToolMode } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
 
@@ -223,7 +234,6 @@ const generateFocusedHeDataUrl = async (args: {
 
 	return focusedCanvas.toDataURL("image/png");
 };
-
 const placeholderCopyByStep: Record<
 	PreprocessStepId,
 	{ title: string; body: string }
@@ -260,6 +270,53 @@ const placeholderCopyByStep: Record<
 		title: "Export shell",
 		body: "Export packaging will be added later. For now this step confirms route wiring, navigation, and autosave status feedback.",
 	},
+};
+
+const OVERRIDES_CLEARED_NOTICE = "Overrides cleared due to geometry change.";
+
+const hasManualTissueEdits = (tissueSelection: TissueSelectionSlice) =>
+	tissueSelection.forcedInSpotIds.length > 0 ||
+	tissueSelection.forcedOutSpotIds.length > 0 ||
+	tissueSelection.regions.some((region) => region.id !== AUTO_TISSUE_REGION_ID);
+
+const buildTissueAutoDetectionPatch = async (args: {
+	eosinCropDataUrl: string;
+	projectedSpots: NonNullable<PreprocessProject["chipConfig"]["projectedSpots"]>;
+	tissueSelection: TissueSelectionSlice;
+	replaceManualEdits: boolean;
+}) => {
+	const result = await runTissueAutoSelection({
+		eosinCropDataUrl: args.eosinCropDataUrl,
+		projectedSpots: args.projectedSpots,
+		params: {
+			thresholdMode: args.tissueSelection.thresholdMode,
+			activationThreshold: args.tissueSelection.activationThreshold,
+			blockThreshold: args.tissueSelection.blockThreshold,
+			dbscanEps: args.tissueSelection.dbscanEps,
+			dbscanMinSamples: args.tissueSelection.dbscanMinSamples,
+			minConnectedSpotCount: args.tissueSelection.minConnectedSpotCount,
+		},
+	});
+
+	const defaultRegion = buildDefaultTissueRegionFromDetectedSpots({
+		projectedSpots: args.projectedSpots,
+		selectedSpotIds: result.selectedIds,
+	});
+	const nextRegions = defaultRegion ? [defaultRegion] : [];
+	const nextSelectedSpotIds = nextRegions.length > 0
+		? deriveSelectedSpotIdsFromRegions(nextRegions, args.projectedSpots)
+		: result.selectedIds;
+
+	return {
+		result,
+		nextRegions,
+		nextSelectedRegionId: defaultRegion?.id ?? null,
+		nextSelectedSpotIds,
+		paritySummary: buildSelectedCountSummary(nextSelectedSpotIds, args.projectedSpots.length),
+		overrideNotice: args.replaceManualEdits && hasManualTissueEdits(args.tissueSelection)
+			? OVERRIDES_CLEARED_NOTICE
+			: null,
+	};
 };
 
 function SourceAssetUploader({
@@ -355,6 +412,7 @@ export function PreprocessWorkspace({
 	const [projectNameDraft, setProjectNameDraft] = useState("");
 	const [focusedHeMovingImage, setFocusedHeMovingImage] =
 		useState<PreprocessSourceImage | null>(null);
+	const [tissueTool, setTissueTool] = useState<ToolMode>("edit");
 
 	const localizationImage = project
 		? (project.sourceAssets.images[project.localization.targetImage] ?? null)
@@ -440,9 +498,7 @@ export function PreprocessWorkspace({
 				const nextHeFocus: HeFocusSlice = {
 					...nextHeFocusBase,
 					focusedImageDataUrl: options?.preserveFocusedImage
-						? nextHeFocusBase.focusedImageDataUrl ??
-							current.heFocus.focusedImageDataUrl ??
-							null
+						? (nextHeFocusBase.focusedImageDataUrl ?? current.heFocus.focusedImageDataUrl ?? null)
 						: null,
 					status: computeLocalizationStatus(
 						nextHasImage,
@@ -648,15 +704,13 @@ export function PreprocessWorkspace({
 	);
 
 	useEffect(() => {
+		if (!project) return;
+		if (project.heFocus.status !== "complete") return;
+		if (project.heFocus.focusedImageDataUrl) return;
+
 		const sourceHeDataUrl = currentHeImageSource?.dataUrl;
-		const focusedChipBounds = project?.heFocus.chipBounds ?? null;
-		if (
-			!project ||
-			project.heFocus.status !== "complete" ||
-			project.heFocus.focusedImageDataUrl ||
-			!focusedChipBounds ||
-			!sourceHeDataUrl
-		) {
+		const focusedChipBounds = project.heFocus.chipBounds;
+		if (!focusedChipBounds || !sourceHeDataUrl) {
 			return;
 		}
 
@@ -673,7 +727,6 @@ export function PreprocessWorkspace({
 
 				onProjectMutate((current) => {
 					if (
-						current.id !== project.id ||
 						current.heFocus.status !== "complete" ||
 						current.heFocus.focusedImageDataUrl ||
 						!current.heFocus.chipBounds ||
@@ -693,7 +746,7 @@ export function PreprocessWorkspace({
 				});
 			} catch (error) {
 				if (!cancelled) {
-					console.error("Failed to generate focused HE asset", error);
+					console.error("Failed to regenerate focused HE preview", error);
 				}
 			}
 		})();
@@ -702,17 +755,18 @@ export function PreprocessWorkspace({
 			cancelled = true;
 		};
 	}, [
+		currentHeImageSource,
 		currentHeImageSource?.dataUrl,
-		onProjectMutate,
-		project,
 		project?.heFocus.chipBounds,
 		project?.heFocus.focusedImageDataUrl,
 		project?.heFocus.imageTransform,
 		project?.heFocus.status,
+		onProjectMutate,
+		project,
 	]);
 
 	useEffect(() => {
-		if (!project || project.heFocus.status !== "complete") {
+		if (!project || project.alignment.movingImage !== "he") {
 			setFocusedHeMovingImage(null);
 			return;
 		}
@@ -724,6 +778,7 @@ export function PreprocessWorkspace({
 		}
 
 		let cancelled = false;
+
 		void (async () => {
 			try {
 				const focusedImage = await createFocusedHeImageRecord(
@@ -749,12 +804,8 @@ export function PreprocessWorkspace({
 		return () => {
 			cancelled = true;
 		};
-	}, [
-		currentHeImageSource,
-		project,
-		project?.heFocus.focusedImageDataUrl,
-		project?.heFocus.status,
-	]);
+	}, [currentHeImageSource, project?.alignment.movingImage, project?.heFocus.focusedImageDataUrl, project]);
+
 
 	useEffect(() => {
 		if (!project) return;
@@ -937,7 +988,12 @@ export function PreprocessWorkspace({
 	]);
 
 	useEffect(() => {
-		if (!project || project.currentStep !== "chipConfig") return;
+		if (!project) return;
+		if (
+			project.currentStep !== "chipConfig" &&
+			project.currentStep !== "tissueSelection"
+		)
+			return;
 		if (chipManifests.length > 0) return;
 
 		let cancelled = false;
@@ -1297,38 +1353,38 @@ export function PreprocessWorkspace({
 																		savedHint:
 																			"Saved focus bounds stay square and normalized in original H&E image coordinates.",
 																	}}
-																	onScaleChange={(value) => {
-																		applyHeFocusUpdate(
-																			(current) => ({
-																				...current,
-																				imageTransform: {
-																					...current.imageTransform,
-																					scale: value,
-																				},
-																			}),
-																			{
-																				invalidateDownstream: false,
-																				preserveFocusedImage: true,
-																			},
-																		);
-																	}}
-																	onScaleDelta={(delta) => {
-																		applyHeFocusUpdate(
-																			(current) => ({
-																				...current,
-																				imageTransform: {
-																					...current.imageTransform,
-																					scale: clampLocalizationScale(
-																						current.imageTransform.scale + delta,
-																					),
-																				},
-																			}),
-																			{
-																				invalidateDownstream: false,
-																				preserveFocusedImage: true,
-																			},
-																		);
-																	}}
+											onScaleChange={(value) => {
+												applyHeFocusUpdate(
+													(current) => ({
+														...current,
+														imageTransform: {
+															...current.imageTransform,
+															scale: value,
+														},
+													}),
+													{
+														invalidateDownstream: false,
+														preserveFocusedImage: true,
+													},
+												);
+											}}
+											onScaleDelta={(delta) => {
+												applyHeFocusUpdate(
+													(current) => ({
+														...current,
+														imageTransform: {
+															...current.imageTransform,
+															scale: clampLocalizationScale(
+																current.imageTransform.scale + delta,
+															),
+														},
+													}),
+													{
+														invalidateDownstream: false,
+														preserveFocusedImage: true,
+													},
+												);
+											}}
 																	onRotationChange={(value) => {
 																		applyHeFocusUpdate((current) => ({
 																			...current,
@@ -1383,59 +1439,38 @@ export function PreprocessWorkspace({
 																	}}
 																/>
 
-																<Box
-																	w={{ base: "100%", xl: "320px" }}
-																	minW={{ base: "100%", xl: "320px" }}
-																	border="1px solid"
-																	borderColor="gray.200"
-																	borderRadius="2xl"
-																	bg="white"
-																	px={4}
-																	py={4}
-																	data-testid="he-focus-focused-image-card"
-																>
-																	<Stack spacing={3}>
-																		<Flex justify="space-between" align="flex-start" gap={3}>
-																			<Stack spacing={1}>
-																				<Heading size="sm">Saved focused H&amp;E image</Heading>
-																				<Text fontSize="sm" color="gray.500">
-																					Persisted focus previews are restored here when available. Editing the square or image orientation clears the saved preview until it is regenerated downstream.
-																				</Text>
-																			</Stack>
-																			<Badge
-																				colorScheme={heFocusImageSource ? "green" : "gray"}
-																				borderRadius="full"
-																			>
-																				{heFocusImageSource ? "Restored" : "Pending"}
-																			</Badge>
-																		</Flex>
-																		<Flex
-																			minH="260px"
-																			borderRadius="xl"
-																			bg="gray.900"
-																			align="center"
-																			justify="center"
-																			overflow="hidden"
-																		>
-																			{heFocusImageSource ? (
-																				<Box
-																					as="img"
-																					src={heFocusImageSource}
-																					alt="Saved focused H&E preview"
-																					w="100%"
-																					h="100%"
-																					objectFit="contain"
-																					display="block"
-																					data-testid="he-focus-focused-image-preview"
-																				/>
-																			) : (
-																				<Text color="whiteAlpha.700" px={6} textAlign="center">
-																					A focused-image asset has not been regenerated yet. The saved square and transform still reopen here.
-																				</Text>
-																			)}
-																		</Flex>
-																	</Stack>
-																</Box>
+												<Box
+													w={{ base: "100%", xl: "320px" }}
+													minW={{ base: "100%", xl: "320px" }}
+													border="1px dashed"
+													borderColor="gray.200"
+											borderRadius="2xl"
+											bg="gray.50"
+											px={4}
+											py={4}
+													data-testid="he-focus-focused-image-card"
+												>
+													<Stack spacing={3}>
+														<Heading size="sm">Saved focused H&amp;E preview</Heading>
+														{heFocusImageSource ? (
+															<Image
+																src={heFocusImageSource}
+																alt="Saved focused H&E preview"
+																borderRadius="lg"
+																border="1px solid"
+																borderColor="gray.200"
+																objectFit="contain"
+																bg="white"
+																maxH="280px"
+																w="100%"
+															/>
+														) : (
+															<Text fontSize="sm" color="gray.600">
+																No saved focused H&amp;E preview yet.
+															</Text>
+														)}
+													</Stack>
+												</Box>
 															</Flex>
 														</Stack>
 													) : project.currentStep === "alignment" ? (
@@ -1493,366 +1528,614 @@ export function PreprocessWorkspace({
 						project.cropQc.cropWidth && project.cropQc.cropHeight,
 					)}
 				/>
-							) : project.currentStep === "chipConfig" ? (
-								<ChipConfigPanel
-									manifests={chipManifests}
-									selectedChip={project.chipConfig.chipType}
-									projectedSpots={project.chipConfig.projectedSpots}
-									eosinCropDataUrl={project.cropQc.eosinPreviewDataUrl}
-									error={chipConfigError ?? project.chipConfig.error}
-									onSelectChip={(chipId) => {
-										if (!project.cropQc.cropWidth || !project.cropQc.cropHeight)
-											return;
-										const cropWidth = project.cropQc.cropWidth;
-										const cropHeight = project.cropQc.cropHeight;
-										void (async () => {
-											try {
-												setChipConfigError(null);
-												const config = await loadChipConfigData(chipId);
-												const projectedSpots = projectSpotsForCrop({
-													chip: config.manifest,
-													templateEntries: config.templateEntries,
-													cropWidth,
-													cropHeight,
-												});
-
-												onProjectMutate((current) => ({
-													...current,
-													chipConfig: {
-														...current.chipConfig,
-														chipType: config.manifest.id,
-														rows: config.manifest.gridRows,
-														columns: config.manifest.gridCols,
-														pitchX: config.manifest.spotGap,
-														pitchY: config.manifest.spotGap,
-														origin: { x: 0, y: 0 },
-														rotationDegrees: 0,
+							) : project.currentStep === "chipConfig" || project.currentStep === "tissueSelection" ? (
+								<Flex direction={{ base: "column", xl: "row" }} gap={5} align="stretch">
+									<Box flex="1" minW={0}>
+										<TissueSelectionPanel
+											eosinCropDataUrl={project.cropQc.eosinPreviewDataUrl}
+											projectedSpots={project.chipConfig.projectedSpots ?? []}
+											selectedSpotIds={(() => {
+												const regions = project.tissueSelection.regions;
+												const projectedSpots =
+													project.chipConfig.projectedSpots ?? [];
+												if (regions.length > 0) {
+													return deriveSelectedSpotIdsFromRegions(
+														regions,
 														projectedSpots,
-														status: "complete",
-														isStale: false,
-														updatedAt: new Date().toISOString(),
-														error: null,
-													},
-													tissueSelection: {
-														...current.tissueSelection,
-														forcedInSpotIds: [],
-														forcedOutSpotIds: [],
-														regions: [],
-														selectedRegionId: null,
-														overrideNotice:
-															current.tissueSelection.forcedInSpotIds.length >
-																0 ||
-															current.tissueSelection.forcedOutSpotIds.length >
-																0 ||
-															current.tissueSelection.regions.length > 0
-																? "Overrides cleared due to geometry change."
-																: null,
-														autoSelectedSpotIds: [],
-														selectedSpotIds: [],
-														paritySummary: null,
-														status: "ready",
-														isStale: false,
-														updatedAt: new Date().toISOString(),
-														error: null,
-													},
-													exportState: {
-														...current.exportState,
-														status: "stale",
-														isStale: true,
-														updatedAt: new Date().toISOString(),
-														lastExportedAt: null,
-														artifacts: [],
-														error: null,
-													},
-												}));
-											} catch (error) {
-												const message =
-													error instanceof Error
-														? error.message
-														: "Failed to load chip config";
-												setChipConfigError(message);
-												onProjectMutate((current) => ({
-													...current,
-													chipConfig: {
-														...current.chipConfig,
-														chipType: chipId,
-														projectedSpots: null,
-														status: "error",
-														isStale: false,
-														updatedAt: new Date().toISOString(),
-														error: message,
-													},
-												}));
-											}
-										})();
-									}}
-								/>
-							) : project.currentStep === "tissueSelection" ? (
-								<Stack spacing={4}>
-									<HStack spacing={3} align="center">
-										<Text fontSize="sm" color="gray.600">
-											Activation threshold
-										</Text>
-										<Input
-											width="120px"
-											type="number"
-											min={0}
-											max={255}
-											step={1}
-											value={project.tissueSelection.activationThreshold}
-											data-testid="tissue-activation-threshold"
-											onChange={(event) => {
-												const next = Number(event.target.value);
+													);
+												}
+												return project.tissueSelection.autoSelectedSpotIds;
+											})()}
+											regions={project.tissueSelection.regions}
+											selectedRegionId={project.tissueSelection.selectedRegionId}
+											showControls={false}
+											tool={tissueTool}
+											onToolChange={setTissueTool}
+											onRegionsChange={(nextRegions) => {
+												onProjectMutate((current) => {
+													const projectedSpots =
+														current.chipConfig.projectedSpots ?? [];
+													const finalSelectedSpotIds =
+														nextRegions.length > 0
+															? deriveSelectedSpotIdsFromRegions(
+																	nextRegions,
+																	projectedSpots,
+															  )
+															: [];
+													const totalSpots = projectedSpots.length;
+													const paritySummary = buildSelectedCountSummary(
+														finalSelectedSpotIds,
+														totalSpots,
+													);
+													return {
+														...current,
+														tissueSelection: {
+															...current.tissueSelection,
+															mode: "polygon",
+															regions: nextRegions,
+															selectedSpotIds: finalSelectedSpotIds,
+															paritySummary,
+															overrideNotice: null,
+															status: "complete",
+															isStale: false,
+															updatedAt: new Date().toISOString(),
+															warning: null,
+															error: null,
+														},
+														exportState: {
+															...current.exportState,
+															status: "stale",
+															isStale: true,
+															updatedAt: new Date().toISOString(),
+															lastExportedAt: null,
+															artifacts: [],
+															error: null,
+														},
+													};
+												});
+											}}
+											onSelectedRegionIdChange={(id) => {
 												onProjectMutate((current) => ({
 													...current,
 													tissueSelection: {
 														...current.tissueSelection,
-														activationThreshold: Number.isFinite(next)
-															? next
-															: current.tissueSelection.activationThreshold,
-														status: "ready",
-														warning: null,
-														isStale: false,
-														updatedAt: new Date().toISOString(),
-													},
-													exportState: {
-														...current.exportState,
-														status: "stale",
-														isStale: true,
-														updatedAt: new Date().toISOString(),
+														selectedRegionId: id,
 													},
 												}));
 											}}
 										/>
-										<Button
-											data-testid="tissue-run-auto"
-											colorScheme="brand"
-											onClick={() => {
-												if (
-													!project.cropQc.eosinPreviewDataUrl ||
-													!project.chipConfig.projectedSpots
-												)
-													return;
-												const eosinCropDataUrl =
-													project.cropQc.eosinPreviewDataUrl;
-												const projectedSpots =
-													project.chipConfig.projectedSpots;
-												void (async () => {
-													const result = await runTissueAutoSelection({
-														eosinCropDataUrl,
-														projectedSpots,
-														params: {
-															thresholdMode:
-																project.tissueSelection.thresholdMode,
-															activationThreshold:
-																project.tissueSelection.activationThreshold,
-															blockThreshold:
-																project.tissueSelection.blockThreshold,
-															dbscanEps: project.tissueSelection.dbscanEps,
-															dbscanMinSamples:
-																project.tissueSelection.dbscanMinSamples,
-															minConnectedSpotCount:
-																project.tissueSelection.minConnectedSpotCount,
-														},
-													});
-
-													onProjectMutate((current) => {
-														const hasRegions =
-															current.tissueSelection.regions.length > 0;
-														const finalSelectedSpotIds = hasRegions
-															? deriveSelectedSpotIdsFromRegions(
-																	current.tissueSelection.regions,
-																	projectedSpots,
-																)
-															: applySpotOverrides({
-																	autoSelected: result.selectedIds,
-																	forcedIn:
-																		current.tissueSelection.forcedInSpotIds,
-																	forcedOut:
-																		current.tissueSelection.forcedOutSpotIds,
-																});
-														const paritySummary = buildSelectedCountSummary(
-															finalSelectedSpotIds,
-															projectedSpots.length,
-														);
-
-														return {
-															...current,
-															tissueSelection: {
-																...current.tissueSelection,
-																thresholdMode: result.params.thresholdMode,
-																activationThreshold:
-																	result.params.activationThreshold,
-																blockThreshold: result.params.blockThreshold,
-																dbscanEps: result.params.dbscanEps,
-																dbscanMinSamples:
-																	result.params.dbscanMinSamples,
-																minConnectedSpotCount:
-																	result.params.minConnectedSpotCount,
-																autoSelectedSpotIds: result.selectedIds,
-																selectedSpotIds: finalSelectedSpotIds,
-																paritySummary,
-																warning: hasRegions ? null : result.warning,
-																status: hasRegions
-																	? "complete"
-																	: result.warning
-																		? "error"
-																		: "complete",
-																isStale: false,
-																updatedAt: new Date().toISOString(),
-																error: hasRegions ? null : result.warning,
-															},
-															exportState: {
-																...current.exportState,
-																status: hasRegions
-																	? "stale"
-																	: result.warning
-																		? "stale"
-																		: "ready",
-																isStale: hasRegions || Boolean(result.warning),
-																updatedAt: new Date().toISOString(),
-																lastExportedAt: null,
-																artifacts: [],
-																error: null,
-															},
-														};
-													});
-												})();
-											}}
-										>
-											Run auto-selection
-										</Button>
-									</HStack>
-
-									<HStack justify="space-between">
-										<Text color="gray.600">Selected spots</Text>
-										<Text
-											data-testid="tissue-selected-count"
-											fontWeight="semibold"
-										>
-											{project.tissueSelection.paritySummary?.selectedCount ??
-												0}
-										</Text>
-									</HStack>
-									<HStack justify="space-between">
-										<Text color="gray.600">Selected percent</Text>
-										<Text
-											data-testid="tissue-selected-percent"
-											fontWeight="semibold"
-										>
-											{project.tissueSelection.paritySummary?.selectedPercent.toFixed(
-												2,
-											) ?? "0.00"}
-										</Text>
-									</HStack>
-									<Box
-										as="pre"
-										fontSize="xs"
-										color="gray.700"
-										bg="gray.50"
-										borderRadius="md"
-										p={2}
-										data-testid="tissue-parity-json"
-									>
-										{JSON.stringify(
-											{
-												thresholdMode: project.tissueSelection.thresholdMode,
-												activationThreshold:
-													project.tissueSelection.activationThreshold,
-												blockThreshold: project.tissueSelection.blockThreshold,
-												dbscanEps: project.tissueSelection.dbscanEps,
-												dbscanMinSamples:
-													project.tissueSelection.dbscanMinSamples,
-												minConnectedSpotCount:
-													project.tissueSelection.minConnectedSpotCount,
-												summary: project.tissueSelection.paritySummary,
-											},
-											null,
-											2,
-										)}
 									</Box>
-									{project.tissueSelection.warning ? (
-										<Text color="orange.700">
-											{project.tissueSelection.warning}
-										</Text>
-									) : null}
-									{project.tissueSelection.overrideNotice ? (
-										<Text color="orange.700">
-											{project.tissueSelection.overrideNotice}
-										</Text>
-									) : null}
+									<Stack w={{ base: "100%", xl: "320px" }} spacing={4} flexShrink={0}>
+										<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
+											<CardBody p={4}>
+												<Stack spacing={3}>
+													<Text fontSize="sm" fontWeight="semibold">Chip size</Text>
+													<FormControl>
+														<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Capture pitch</FormLabel>
+														<Select
+															value={project.chipConfig.chipType ?? ""}
+															placeholder="Select chip size"
+															data-testid="tissue-chip-size-select"
+															onChange={(event) => {
+																const chipId = event.target.value;
+																if (chipId !== "15um" && chipId !== "50um") return;
+																if (!project.cropQc.cropWidth || !project.cropQc.cropHeight) return;
+																const cropWidth = project.cropQc.cropWidth;
+																const cropHeight = project.cropQc.cropHeight;
+																void (async () => {
+																	try {
+																		setChipConfigError(null);
+																		const config = await loadChipConfigData(chipId);
+																		const projectedSpots = projectSpotsForCrop({
+																			chip: config.manifest,
+																			templateEntries: config.templateEntries,
+																			cropWidth,
+																			cropHeight,
+																		});
+																		const tissuePatch = project.cropQc.eosinPreviewDataUrl
+																			? await buildTissueAutoDetectionPatch({
+																				eosinCropDataUrl: project.cropQc.eosinPreviewDataUrl,
+																				projectedSpots,
+																				tissueSelection: project.tissueSelection,
+																				replaceManualEdits: true,
+																			})
+																			: null;
 
-									<TissueSelectionPanel
-										eosinCropDataUrl={project.cropQc.eosinPreviewDataUrl}
-										projectedSpots={project.chipConfig.projectedSpots ?? []}
-										selectedSpotIds={(() => {
-											const regions = project.tissueSelection.regions;
-											const projectedSpots =
-												project.chipConfig.projectedSpots ?? [];
-											if (regions.length > 0) {
-												return deriveSelectedSpotIdsFromRegions(
-													regions,
-													projectedSpots,
-												);
-											}
-											return project.tissueSelection.autoSelectedSpotIds;
-										})()}
-										regions={project.tissueSelection.regions}
-										selectedRegionId={project.tissueSelection.selectedRegionId}
-										onRegionsChange={(nextRegions) => {
-											onProjectMutate((current) => {
-												const projectedSpots =
-													current.chipConfig.projectedSpots ?? [];
-												const finalSelectedSpotIds =
-													nextRegions.length > 0
-														? deriveSelectedSpotIdsFromRegions(
-																nextRegions,
-																projectedSpots,
-															)
-														: current.tissueSelection.autoSelectedSpotIds;
-												const totalSpots = projectedSpots.length;
-												const paritySummary = buildSelectedCountSummary(
-													finalSelectedSpotIds,
-													totalSpots,
-												);
-												return {
-													...current,
-													tissueSelection: {
-														...current.tissueSelection,
-														mode: "polygon",
-														regions: nextRegions,
-														selectedSpotIds: finalSelectedSpotIds,
-														paritySummary,
-														overrideNotice: null,
-														status: "complete",
-														isStale: false,
-														updatedAt: new Date().toISOString(),
-														warning: null,
-														error: null,
-													},
-													exportState: {
-														...current.exportState,
-														status: "stale",
-														isStale: true,
-														updatedAt: new Date().toISOString(),
-														lastExportedAt: null,
-														artifacts: [],
-														error: null,
-													},
-												};
-											});
-										}}
-										onSelectedRegionIdChange={(id) => {
-											onProjectMutate((current) => ({
-												...current,
-												tissueSelection: {
-													...current.tissueSelection,
-													selectedRegionId: id,
-												},
-											}));
-										}}
-									/>
-								</Stack>
+																		onProjectMutate((current) => ({
+																			...current,
+																			chipConfig: {
+																				...current.chipConfig,
+																				chipType: config.manifest.id,
+																				rows: config.manifest.gridRows,
+																				columns: config.manifest.gridCols,
+																				pitchX: config.manifest.spotGap,
+																				pitchY: config.manifest.spotGap,
+																				origin: { x: 0, y: 0 },
+																				rotationDegrees: 0,
+																				projectedSpots,
+																				status: "complete",
+																				isStale: false,
+																				updatedAt: new Date().toISOString(),
+																				error: null,
+																			},
+																			tissueSelection: {
+																				...current.tissueSelection,
+																				forcedInSpotIds: [],
+																				forcedOutSpotIds: [],
+																				regions: tissuePatch?.nextRegions ?? [],
+																				selectedRegionId: tissuePatch?.nextSelectedRegionId ?? null,
+																				overrideNotice: tissuePatch?.overrideNotice ?? null,
+																				autoSelectedSpotIds: tissuePatch?.result.selectedIds ?? [],
+																				selectedSpotIds: tissuePatch?.nextSelectedSpotIds ?? [],
+																				paritySummary: tissuePatch?.paritySummary ?? null,
+																				warning: tissuePatch?.result.warning ?? null,
+																				status: tissuePatch
+																					? (tissuePatch.result.warning ? "error" : "complete")
+																					: "ready",
+																				isStale: false,
+																				updatedAt: new Date().toISOString(),
+																				error: tissuePatch?.result.warning ?? null,
+																			},
+																			exportState: {
+																				...current.exportState,
+																				status: tissuePatch && !tissuePatch.result.warning ? "ready" : "stale",
+																				isStale: !tissuePatch || Boolean(tissuePatch.result.warning),
+																				updatedAt: new Date().toISOString(),
+																				lastExportedAt: null,
+																				artifacts: [],
+																				error: null,
+																			},
+																		}));
+																	} catch (error) {
+																		const message =
+																			error instanceof Error
+																				? error.message
+																				: "Failed to load chip config";
+																setChipConfigError(message);
+																onProjectMutate((current) => ({
+																	...current,
+																	chipConfig: {
+																		...current.chipConfig,
+																		chipType: chipId,
+																		projectedSpots: null,
+																		status: "error",
+																		isStale: false,
+																		updatedAt: new Date().toISOString(),
+																		error: message,
+																	},
+																	tissueSelection: {
+																		...current.tissueSelection,
+																		regions: [],
+																		selectedRegionId: null,
+																		autoSelectedSpotIds: [],
+																		selectedSpotIds: [],
+																		paritySummary: buildSelectedCountSummary([], 0),
+																		overrideNotice: null,
+																		warning: message,
+																		status: "error",
+																		isStale: false,
+																		updatedAt: new Date().toISOString(),
+																		error: message,
+																	},
+																	exportState: {
+																		...current.exportState,
+																		status: "stale",
+																		isStale: true,
+																		updatedAt: new Date().toISOString(),
+																		lastExportedAt: null,
+																		artifacts: [],
+																		error: null,
+																	},
+																}));
+
+																	}
+																})();
+															}}
+														>
+															<option value="15um">15um</option>
+															<option value="50um">50um</option>
+														</Select>
+													</FormControl>
+													<Text fontSize="xs" color="gray.500">
+														Changing chip size clears previous tissue edits, regenerates projected spots, and reruns auto detection.
+													</Text>
+													{chipConfigError ?? project.chipConfig.error ? (
+														<Text fontSize="sm" color="red.600">{chipConfigError ?? project.chipConfig.error}</Text>
+													) : null}
+												</Stack>
+											</CardBody>
+										</Card>
+
+										<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
+											<CardBody p={4}>
+												<Stack spacing={4}>
+													<Text fontSize="sm" fontWeight="semibold">Auto detection</Text>
+													<FormControl>
+														<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Threshold mode</FormLabel>
+														<Select value="gray-min" isDisabled data-testid="tissue-threshold-mode-select">
+															<option value="gray-min">gray-min</option>
+														</Select>
+													</FormControl>
+													<FormControl>
+														<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Activation threshold</FormLabel>
+														<Stack spacing={2}>
+															<Slider
+																min={0}
+																max={1}
+																step={0.01}
+																value={project.tissueSelection.activationThreshold}
+																onChange={(value) => {
+																	onProjectMutate((current) => ({
+																		...current,
+																		tissueSelection: {
+																			...current.tissueSelection,
+																			activationThreshold: value,
+																			status: "ready",
+																			warning: null,
+																			isStale: false,
+																			updatedAt: new Date().toISOString(),
+																		},
+																		exportState: {
+																			...current.exportState,
+																			status: "stale",
+																			isStale: true,
+																			updatedAt: new Date().toISOString(),
+																		},
+																	}));
+																}}
+																data-testid="tissue-activation-threshold-slider"
+															>
+																<SliderTrack>
+																	<SliderFilledTrack bg="brand.500" />
+																</SliderTrack>
+																<SliderThumb />
+															</Slider>
+															<Input
+																type="number"
+																min={0}
+																max={1}
+																step={0.01}
+																value={project.tissueSelection.activationThreshold}
+																onChange={(event) => {
+																	const next = Number(event.target.value);
+																	onProjectMutate((current) => ({
+																		...current,
+																		tissueSelection: {
+																			...current.tissueSelection,
+																			activationThreshold: Number.isFinite(next)
+																				? next
+																				: current.tissueSelection.activationThreshold,
+																			status: "ready",
+																			warning: null,
+																			isStale: false,
+																			updatedAt: new Date().toISOString(),
+																		},
+																		exportState: {
+																			...current.exportState,
+																			status: "stale",
+																			isStale: true,
+																			updatedAt: new Date().toISOString(),
+																		},
+																	}));
+																}}
+																data-testid="tissue-activation-threshold-input"
+															/>
+														</Stack>
+													</FormControl>
+													<FormControl>
+														<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Block threshold</FormLabel>
+														<Stack spacing={2}>
+															<Slider
+																min={0}
+																max={255}
+																step={1}
+																value={project.tissueSelection.blockThreshold}
+																onChange={(value) => {
+																	onProjectMutate((current) => ({
+																		...current,
+																		tissueSelection: {
+																			...current.tissueSelection,
+																			blockThreshold: value,
+																			status: "ready",
+																			warning: null,
+																			isStale: false,
+																			updatedAt: new Date().toISOString(),
+																		},
+																		exportState: {
+																			...current.exportState,
+																			status: "stale",
+																			isStale: true,
+																			updatedAt: new Date().toISOString(),
+																		},
+																	}));
+																}}
+																data-testid="tissue-block-threshold-slider"
+															>
+																<SliderTrack>
+																	<SliderFilledTrack bg="brand.500" />
+																</SliderTrack>
+																<SliderThumb />
+															</Slider>
+															<Input
+																type="number"
+																min={0}
+																max={255}
+																step={1}
+																value={project.tissueSelection.blockThreshold}
+																onChange={(event) => {
+																	const next = Number(event.target.value);
+																	onProjectMutate((current) => ({
+																		...current,
+																		tissueSelection: {
+																			...current.tissueSelection,
+																			blockThreshold: Number.isFinite(next)
+																				? next
+																				: current.tissueSelection.blockThreshold,
+																			status: "ready",
+																			warning: null,
+																			isStale: false,
+																			updatedAt: new Date().toISOString(),
+																		},
+																		exportState: {
+																			...current.exportState,
+																			status: "stale",
+																			isStale: true,
+																			updatedAt: new Date().toISOString(),
+																		},
+																	}));
+																}}
+																data-testid="tissue-block-threshold-input"
+															/>
+														</Stack>
+													</FormControl>
+													<Button
+														data-testid="tissue-run-auto"
+														colorScheme="brand"
+														isDisabled={!project.cropQc.eosinPreviewDataUrl || !project.chipConfig.projectedSpots}
+														onClick={() => {
+															if (
+																!project.cropQc.eosinPreviewDataUrl ||
+																!project.chipConfig.projectedSpots
+															) {
+																return;
+															}
+															const eosinCropDataUrl = project.cropQc.eosinPreviewDataUrl;
+															const projectedSpots = project.chipConfig.projectedSpots;
+															void (async () => {
+																try {
+																	const tissuePatch = await buildTissueAutoDetectionPatch({
+																		eosinCropDataUrl,
+																		projectedSpots,
+																		tissueSelection: project.tissueSelection,
+																		replaceManualEdits: true,
+																	});
+
+																	onProjectMutate((current) => {
+																		return {
+																			...current,
+																			tissueSelection: {
+																				...current.tissueSelection,
+																				thresholdMode: tissuePatch.result.params.thresholdMode,
+																				activationThreshold:
+																					tissuePatch.result.params.activationThreshold,
+																				blockThreshold: tissuePatch.result.params.blockThreshold,
+																				dbscanEps: tissuePatch.result.params.dbscanEps,
+																				dbscanMinSamples:
+																					tissuePatch.result.params.dbscanMinSamples,
+																				minConnectedSpotCount:
+																					tissuePatch.result.params.minConnectedSpotCount,
+																				forcedInSpotIds: [],
+																				forcedOutSpotIds: [],
+																				regions: tissuePatch.nextRegions,
+																				selectedRegionId: tissuePatch.nextSelectedRegionId,
+																				overrideNotice: tissuePatch.overrideNotice,
+																				autoSelectedSpotIds: tissuePatch.result.selectedIds,
+																				selectedSpotIds: tissuePatch.nextSelectedSpotIds,
+																				paritySummary: tissuePatch.paritySummary,
+																				warning: tissuePatch.result.warning,
+																				status: tissuePatch.result.warning ? "error" : "complete",
+																				isStale: false,
+																				updatedAt: new Date().toISOString(),
+																				error: tissuePatch.result.warning,
+																			},
+																			exportState: {
+																				...current.exportState,
+																				status: tissuePatch.result.warning ? "stale" : "ready",
+																				isStale: Boolean(tissuePatch.result.warning),
+																				updatedAt: new Date().toISOString(),
+																				lastExportedAt: null,
+																				artifacts: [],
+																				error: null,
+																			},
+																		};
+																	});
+																} catch (error) {
+																	const message =
+																		error instanceof Error
+																			? error.message
+																			: "Failed to run auto detection";
+																	onProjectMutate((current) => ({
+																		...current,
+																		tissueSelection: {
+																			...current.tissueSelection,
+																			warning: message,
+																			status: "error",
+																			isStale: false,
+																			updatedAt: new Date().toISOString(),
+																			error: message,
+																		},
+																		exportState: {
+																			...current.exportState,
+																			status: "stale",
+																			isStale: true,
+																			updatedAt: new Date().toISOString(),
+																			lastExportedAt: null,
+																			artifacts: [],
+																			error: null,
+																		},
+																	}));
+																}
+															})();
+														}}
+													>
+
+														Run auto detection
+													</Button>
+													<Stack spacing={1}>
+													<Text fontSize="sm" color="gray.600" data-testid="tissue-selected-count">
+														Selected spots: {project.tissueSelection.selectedSpotIds?.length ?? 0}
+													</Text>
+														{project.tissueSelection.warning ? (
+															<Text fontSize="sm" color="orange.700" data-testid="tissue-detection-warning">
+																{project.tissueSelection.warning}
+															</Text>
+														) : (
+															<Text fontSize="sm" color="gray.500" data-testid="tissue-detection-status">
+																{project.tissueSelection.status === "complete"
+																	? "Auto detection ready. The default region is selected and editable."
+																	: "Choose thresholds and run auto detection to regenerate the default region."}
+															</Text>
+														)}
+														{project.tissueSelection.overrideNotice ? (
+															<Text fontSize="sm" color="orange.700" data-testid="tissue-override-notice">
+																{project.tissueSelection.overrideNotice}
+															</Text>
+														) : null}
+													</Stack>
+												</Stack>
+											</CardBody>
+										</Card>
+
+										<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
+											<CardBody p={4}>
+												<Stack spacing={3}>
+													<Text fontSize="sm" fontWeight="semibold">Tools</Text>
+													<Button
+														data-testid="tissue-tool-edit"
+														variant={tissueTool === "edit" ? "solid" : "outline"}
+														colorScheme={tissueTool === "edit" ? "brand" : undefined}
+														justifyContent="flex-start"
+														onClick={() => setTissueTool("edit")}
+													>
+														Edit
+													</Button>
+													<Button
+														data-testid="tissue-tool-draw"
+														variant={tissueTool === "draw" ? "solid" : "outline"}
+														colorScheme={tissueTool === "draw" ? "brand" : undefined}
+														justifyContent="flex-start"
+														onClick={() => setTissueTool("draw")}
+													>
+														Draw
+													</Button>
+													<Button
+														data-testid="tissue-tool-erase"
+														variant={tissueTool === "erase" ? "solid" : "outline"}
+														colorScheme={tissueTool === "erase" ? "brand" : undefined}
+														justifyContent="flex-start"
+														onClick={() => setTissueTool("erase")}
+													>
+														Punch Out
+													</Button>
+													<Button
+														size="xs"
+														colorScheme="red"
+														variant="outline"
+														isDisabled={!project.tissueSelection.selectedRegionId}
+														data-testid="tissue-delete-selected"
+														onClick={() => {
+															const selectedId = project.tissueSelection.selectedRegionId;
+															if (!selectedId) return;
+															onProjectMutate((current) => {
+																const nextRegions = current.tissueSelection.regions.filter(
+																	(region) => region.id !== selectedId,
+																);
+																const projectedSpots = current.chipConfig.projectedSpots ?? [];
+															const finalSelectedSpotIds =
+																nextRegions.length > 0
+																	? deriveSelectedSpotIdsFromRegions(nextRegions, projectedSpots)
+																	: [];
+
+																const paritySummary = buildSelectedCountSummary(
+																	finalSelectedSpotIds,
+																	projectedSpots.length,
+																);
+																return {
+																	...current,
+																	tissueSelection: {
+																		...current.tissueSelection,
+																		regions: nextRegions,
+																		selectedRegionId: nextRegions[0]?.id ?? null,
+																		selectedSpotIds: finalSelectedSpotIds,
+																		paritySummary,
+																		overrideNotice: null,
+																		status: "complete",
+																		isStale: false,
+																		updatedAt: new Date().toISOString(),
+																		warning: null,
+																		error: null,
+																	},
+																	exportState: {
+																		...current.exportState,
+																		status: "stale",
+																		isStale: true,
+																		updatedAt: new Date().toISOString(),
+																		lastExportedAt: null,
+																		artifacts: [],
+																		error: null,
+																	},
+																};
+															});
+														}}
+													>
+														Delete selected
+													</Button>
+												</Stack>
+											</CardBody>
+										</Card>
+
+										<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
+											<CardBody p={4}>
+												<Stack spacing={2}>
+													<Text fontSize="sm" fontWeight="semibold">Regions</Text>
+													<Stack spacing={2} maxH="260px" overflowY="auto">
+														{project.tissueSelection.regions.map((region) => (
+															<HStack
+																key={region.id}
+																p={3}
+																bg={project.tissueSelection.selectedRegionId === region.id ? "brand.50" : "white"}
+																border="1px solid"
+																borderColor={project.tissueSelection.selectedRegionId === region.id ? "brand.200" : "gray.200"}
+																borderRadius="lg"
+																cursor="pointer"
+																data-testid={`tissue-region-row-${region.id}`}
+																onClick={() => {
+																	onProjectMutate((current) => ({
+																		...current,
+																		tissueSelection: {
+																			...current.tissueSelection,
+																			selectedRegionId: region.id,
+																		},
+																	}));
+																}}
+															>
+																<Box w="12px" h="12px" borderRadius="sm" bg={region.color} />
+																<Text fontSize="sm" flex="1" fontWeight="medium">{region.label}</Text>
+															</HStack>
+														))}
+														{project.tissueSelection.regions.length === 0 ? (
+															<Box border="1px dashed" borderColor="gray.200" borderRadius="lg" px={3} py={4}>
+																<Text fontSize="sm" color="gray.500">
+																	No tissue regions yet. Run auto detection to generate the default editable region.
+																</Text>
+															</Box>
+														) : null}
+													</Stack>
+												</Stack>
+											</CardBody>
+										</Card>
+									</Stack>
+								</Flex>
 							) : project.currentStep === "exportState" ? (
 								<ExportPanel
 									includeProject={includeProjectJson}

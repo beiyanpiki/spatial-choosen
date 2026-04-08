@@ -1,6 +1,6 @@
 'use client';
 
-import { Box, Select, Stack, Text } from '@chakra-ui/react';
+import { Box, Stack, Text } from '@chakra-ui/react';
 import type { ChipConfigManifest } from '@/lib/preprocess/chipConfigs';
 import type { ProjectedSpot } from '@/types/preprocess';
 
@@ -10,7 +10,6 @@ type ChipConfigPanelProps = {
   projectedSpots: ProjectedSpot[] | null;
   eosinCropDataUrl: string | null;
   error: string | null;
-  onSelectChip: (chipId: '50um' | '15um') => void;
 };
 
 export function ChipConfigPanel({
@@ -19,25 +18,16 @@ export function ChipConfigPanel({
   projectedSpots,
   eosinCropDataUrl,
   error,
-  onSelectChip,
 }: ChipConfigPanelProps) {
+  const selectedManifest = manifests.find((manifest) => manifest.id === selectedChip) ?? null;
+
   return (
     <Stack spacing={5}>
-      <Stack spacing={2} maxW='320px'>
-        <Text fontSize='sm' color='gray.600'>Square-grid chip configuration</Text>
-        <Select
-          value={selectedChip ?? ''}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value === '50um' || value === '15um') onSelectChip(value);
-          }}
-          data-testid='chipconfig-select'
-        >
-          <option value='' disabled>Select chip config…</option>
-          {manifests.map((manifest) => (
-            <option key={manifest.id} value={manifest.id}>{manifest.label}</option>
-          ))}
-        </Select>
+      <Stack spacing={2} maxW='420px'>
+        <Text fontSize='sm' color='gray.600'>Square-grid chip configuration preview</Text>
+        <Text fontSize='sm' color='gray.500' data-testid='chipconfig-selected-chip'>
+          {selectedManifest?.label ?? 'Choose chip size in the Tissue step to generate the projected spot grid.'}
+        </Text>
       </Stack>
 
       <Text data-testid='chipconfig-spot-count' fontWeight='semibold'>

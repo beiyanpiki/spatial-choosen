@@ -40,12 +40,6 @@ export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
     testId: 'preprocess-step-crop',
   },
   {
-    id: 'chipConfig',
-    label: 'Chip',
-    description: 'Preview spot grid settings',
-    testId: 'preprocess-step-chip',
-  },
-  {
     id: 'tissueSelection',
     label: 'Tissue',
     description: 'Select capture regions',
@@ -112,7 +106,7 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
     case 'chipConfig':
       return project.cropQc.status === 'complete';
     case 'tissueSelection':
-      return project.chipConfig.status === 'complete';
+      return project.cropQc.status === 'complete';
     case 'exportState':
       return project.tissueSelection.status === 'complete';
     default:
@@ -121,6 +115,8 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
 };
 
 export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarProps) {
+  const visibleCurrentStep = currentStep === 'chipConfig' ? 'tissueSelection' : currentStep;
+
   return (
     <Stack
       spacing={4}
@@ -145,7 +141,7 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
       </Box>
       {PREPROCESS_STEP_ITEMS.map((step) => {
         const stepState = stepStateFor(project, step.id);
-        const isActive = step.id === currentStep;
+        const isActive = step.id === visibleCurrentStep;
         const enabled = isStepEnabled(project, step.id);
         return (
           <Button
