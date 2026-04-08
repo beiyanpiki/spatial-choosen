@@ -22,6 +22,12 @@ export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
     testId: 'preprocess-step-localize',
   },
   {
+    id: 'heFocus',
+    label: 'HE Focus',
+    description: 'Focus the working H&E area',
+    testId: 'preprocess-step-he-focus',
+  },
+  {
     id: 'alignment',
     label: 'Align',
     description: 'Register both source images',
@@ -68,6 +74,8 @@ const stepStateFor = (project: PreprocessProject, stepId: PreprocessStepId) => {
       return project.sourceAssets;
     case 'localization':
       return project.localization;
+    case 'heFocus':
+      return project.heFocus;
     case 'alignment':
       return project.alignment;
     case 'cropQc':
@@ -95,8 +103,10 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
       return true;
     case 'localization':
       return true;
-    case 'alignment':
+    case 'heFocus':
       return project.localization.status === 'complete';
+    case 'alignment':
+      return project.heFocus.status === 'complete';
     case 'cropQc':
       return project.alignment.status === 'complete';
     case 'chipConfig':

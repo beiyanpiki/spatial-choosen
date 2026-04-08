@@ -17,6 +17,7 @@ import {
   upsertPreprocessProject,
 } from '@/lib/preprocess/storage';
 import type {
+  HeFocusSlice,
   PreprocessProject,
   PreprocessSliceBase,
   PreprocessStepId,
@@ -42,13 +43,26 @@ const revokeObjectUrls = (urls: Iterable<string>) => {
   }
 };
 
-const WORKFLOW_VERSION = 1;
+const WORKFLOW_VERSION = 2;
 
 const createSlice = (status: PreprocessSliceBase['status']): PreprocessSliceBase => ({
   status,
   isStale: false,
   updatedAt: null,
   error: null,
+});
+
+const createDefaultImageTransform = () => ({
+  ...DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+});
+
+const createHeFocusSlice = (status: PreprocessSliceBase['status']): HeFocusSlice => ({
+  ...createSlice(status),
+  targetImage: 'he',
+  chipBounds: null,
+  handles: [],
+  imageTransform: createDefaultImageTransform(),
+  focusedImageDataUrl: null,
 });
 
 const cloneProject = (project: PreprocessProject): PreprocessProject => {
@@ -59,11 +73,29 @@ const cloneProject = (project: PreprocessProject): PreprocessProject => {
   return JSON.parse(JSON.stringify(project)) as PreprocessProject;
 };
 
+const normalizeHeFocusSlice = (slice: HeFocusSlice): HeFocusSlice => {
+  const normalized = normalizeLocalizationSlice({
+    ...slice,
+    chipType: null,
+    method: null,
+    boxColor: 'green',
+  });
+
+  return {
+    ...slice,
+    chipBounds: normalized.chipBounds,
+    handles: normalized.handles,
+    imageTransform: normalized.imageTransform,
+    focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
+  };
+};
+
 const normalizeProjectForWorkspace = (project: PreprocessProject): PreprocessProject => {
   const migrated = migratePreprocessProject(project);
   return {
     ...migrated,
     localization: normalizeLocalizationSlice(migrated.localization),
+    heFocus: normalizeHeFocusSlice(migrated.heFocus),
   };
 };
 
@@ -95,18 +127,14 @@ const buildEmptyPreprocessProject = (name: string): PreprocessProject => {
       chipBounds: null,
       handles: [],
       boxColor: 'green',
-      imageTransform: {
-        rotationDegrees: 0,
-        flipHorizontal: false,
-        flipVertical: false,
-        scale: 1,
-      },
+      imageTransform: createDefaultImageTransform(),
     },
+    heFocus: createHeFocusSlice('idle'),
     alignment: {
       ...createSlice('idle'),
       referenceImage: 'eosin',
       movingImage: 'he',
-      movingImageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+      movingImageTransform: createDefaultImageTransform(),
       overlayOpacity: 0.5,
       controlPoints: [],
       inlierMask: null,
