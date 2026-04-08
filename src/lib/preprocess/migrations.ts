@@ -1,5 +1,6 @@
 import { PREPROCESS_STORAGE_SCHEMA_VERSION } from './constants';
 import { DEFAULT_LOCALIZATION_IMAGE_TRANSFORM } from './localization';
+import { DEFAULT_TISSUE_PARAMS, normalizeTissueParams } from './tissueThresholds';
 import type {
   HeFocusSlice,
   LegacyPreprocessProject,
@@ -69,6 +70,15 @@ export function migratePreprocessProject(
 
   const tissueSelection = {
     ...project.tissueSelection,
+    ...(project.tissueSelection.thresholdMode === 'gray-min'
+      ? normalizeTissueParams({
+        activationThreshold: project.tissueSelection.activationThreshold,
+        blockThreshold: project.tissueSelection.blockThreshold,
+        dbscanEps: project.tissueSelection.dbscanEps,
+        dbscanMinSamples: project.tissueSelection.dbscanMinSamples,
+        minConnectedSpotCount: project.tissueSelection.minConnectedSpotCount,
+      })
+      : DEFAULT_TISSUE_PARAMS),
     forcedInSpotIds: project.tissueSelection.forcedInSpotIds ?? [],
     forcedOutSpotIds: project.tissueSelection.forcedOutSpotIds ?? [],
     overrideNotice: project.tissueSelection.overrideNotice ?? null,
@@ -78,6 +88,7 @@ export function migratePreprocessProject(
       ...region,
       paths: region.paths?.length ? region.paths : [region.points],
     })),
+    selectedSpotIds: project.tissueSelection.selectedSpotIds ?? null,
   };
 
   return {

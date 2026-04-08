@@ -536,7 +536,7 @@ const assertTissueSelectionSlice = (value: unknown) => {
   if (slice.mode !== "polygon" && slice.mode !== "brush" && slice.mode !== "threshold" && slice.mode !== "imported") {
     throw new Error('Project field "tissueSelection.mode" is invalid or missing');
   }
-  if (slice.thresholdMode !== "dark" && slice.thresholdMode !== "light") {
+  if (slice.thresholdMode !== "gray-min" && slice.thresholdMode !== "dark" && slice.thresholdMode !== "light") {
     throw new Error('Project field "tissueSelection.thresholdMode" is invalid or missing');
   }
   for (const key of ["activationThreshold", "blockThreshold", "dbscanEps", "dbscanMinSamples", "minConnectedSpotCount"] as const) {

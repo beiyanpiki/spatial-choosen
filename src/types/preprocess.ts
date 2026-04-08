@@ -210,7 +210,7 @@ export type TissueRegion = {
 
 export type TissueSelectionSlice = PreprocessSliceBase & {
   mode: "polygon" | "brush" | "threshold" | "imported";
-  thresholdMode: 'dark' | 'light';
+  thresholdMode: 'gray-min';
   activationThreshold: number;
   blockThreshold: number;
   dbscanEps: number;
@@ -230,6 +230,10 @@ export type TissueSelectionSlice = PreprocessSliceBase & {
   selectedRegionId: string | null;
   previewDataUrl: string | null;
   selectedSpotIds: string[] | null;
+};
+
+export type LegacyTissueSelectionSlice = Omit<TissueSelectionSlice, 'thresholdMode'> & {
+  thresholdMode: 'dark' | 'light' | 'gray-min';
 };
 
 export type ExportArtifact = {
@@ -264,8 +268,9 @@ export type PreprocessProject = {
   exportState: ExportStateSlice;
 };
 
-export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus"> & {
+export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "tissueSelection"> & {
   heFocus?: HeFocusSlice;
+  tissueSelection: LegacyTissueSelectionSlice;
 };
 
 export type PreprocessProjectSlices = Pick<PreprocessProject, PreprocessStepId>;
