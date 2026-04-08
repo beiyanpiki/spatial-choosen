@@ -1,7 +1,19 @@
-import type { PreprocessImageKind, PreprocessProject, PreprocessSourceImage } from "../../types/preprocess";
 import JSZip from 'jszip';
+import type {
+  LegacyPreprocessProject,
+  PreprocessImageKind,
+  PreprocessProject,
+  PreprocessSourceImage,
+  PreprocessStepId,
+} from '../../types/preprocess';
+import {
+  PREPROCESS_DB_NAME,
+  PREPROCESS_DERIVED_IMAGE_STORE,
+  PREPROCESS_STORAGE_KEY,
+} from './constants';
+import { migratePreprocessProject } from './migrations';
 
-export const PACKAGE_VERSION = 2;
+export const PACKAGE_VERSION = 3;
 
 type PackagedSourceImage = Omit<
   PreprocessSourceImage,
@@ -10,10 +22,13 @@ type PackagedSourceImage = Omit<
 
 type PreprocessPackagedProject = Omit<
   PreprocessProject,
-  "sourceAssets" | "alignment" | "cropQc" | "chipConfig" | "tissueSelection" | "exportState"
+  "sourceAssets" | "heFocus" | "alignment" | "cropQc" | "chipConfig" | "tissueSelection" | "exportState"
 > & {
   sourceAssets: Omit<PreprocessProject["sourceAssets"], "images"> & {
     images: Record<PreprocessImageKind, PackagedSourceImage | null>;
+  };
+  heFocus: Omit<PreprocessProject["heFocus"], "focusedImageDataUrl"> & {
+    focusedImageDataUrl: null;
   };
   alignment: Omit<PreprocessProject["alignment"], "previewDataUrl"> & { previewDataUrl: null };
   cropQc: Omit<PreprocessProject["cropQc"], "eosinPreviewDataUrl" | "previewDataUrl" | "checkerboardPreviewDataUrl"> & {
@@ -29,17 +44,26 @@ type PreprocessPackagedProject = Omit<
   exportState: Omit<PreprocessProject["exportState"], "artifacts"> & { artifacts: [] };
 };
 
+type LegacyPreprocessPackagedProject = Omit<PreprocessPackagedProject, 'heFocus'> & {
+  heFocus?: PreprocessPackagedProject['heFocus'];
+};
+
 type PreprocessPackageV1 = {
   version: 1;
-  project: PreprocessPackagedProject;
+  project: LegacyPreprocessPackagedProject;
 };
 
 type PreprocessPackageV2 = {
+  version: 2;
+  project: LegacyPreprocessPackagedProject;
+};
+
+type PreprocessPackageV3 = {
   version: typeof PACKAGE_VERSION;
   project: PreprocessPackagedProject;
 };
 
-type PreprocessPackage = PreprocessPackageV1 | PreprocessPackageV2;
+type PreprocessPackage = PreprocessPackageV1 | PreprocessPackageV2 | PreprocessPackageV3;
 
 const isBrowser = () => typeof window !== "undefined";
 
@@ -63,6 +87,10 @@ const toPackagedProject = (project: PreprocessProject): PreprocessPackagedProjec
       eosin: stripRuntimeImageState(project.sourceAssets.images.eosin),
       he: stripRuntimeImageState(project.sourceAssets.images.he),
     },
+  },
+  heFocus: {
+    ...project.heFocus,
+    focusedImageDataUrl: null,
   },
   alignment: {
     ...project.alignment,
@@ -90,6 +118,70 @@ const toPackagedProject = (project: PreprocessProject): PreprocessPackagedProjec
 });
 
 const packageSourcePath = (kind: PreprocessImageKind) => `source-assets/${kind}`;
+const packageHeFocusPath = () => 'derived-assets/he-focus';
+const packageHeFocusStoreKey = (projectId: string) => `${projectId}:he-focus`;
+
+const openPackagedAssetDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
+  const request = window.indexedDB.open(PREPROCESS_DB_NAME);
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+
+const readPackagedStoreValue = async (storeName: string, key: string): Promise<string | Blob | undefined> => {
+  const db = await openPackagedAssetDb();
+  if (!db.objectStoreNames.contains(storeName)) {
+    db.close();
+    return undefined;
+  }
+
+  const tx = db.transaction(storeName, 'readonly');
+  const req = tx.objectStore(storeName).get(key);
+  const value = await new Promise<string | Blob | undefined>((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result as string | Blob | undefined);
+    req.onerror = () => reject(req.error);
+  });
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+  return value ?? undefined;
+};
+
+const readLegacyFocusedHeImageDataUrl = (projectId: string) => {
+  const raw = window.localStorage.getItem(PREPROCESS_STORAGE_KEY);
+  if (!raw) return null;
+
+  try {
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const project = projects.find((entry) => entry.id === projectId);
+    const heFocus = project && typeof project.heFocus === 'object' && project.heFocus !== null
+      ? project.heFocus as Record<string, unknown>
+      : null;
+    return typeof heFocus?.focusedImageDataUrl === 'string'
+      ? heFocus.focusedImageDataUrl
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const resolvePackagedHeFocusAsset = async (project: PreprocessProject) => {
+  if (project.heFocus.focusedImageDataUrl) {
+    return project.heFocus.focusedImageDataUrl;
+  }
+
+  const storedAsset = await readPackagedStoreValue(
+    PREPROCESS_DERIVED_IMAGE_STORE,
+    packageHeFocusStoreKey(project.id),
+  );
+  if (storedAsset) {
+    return storedAsset;
+  }
+
+  return readLegacyFocusedHeImageDataUrl(project.id);
+};
 
 const imageUrlToBlob = async (image: PreprocessSourceImage) => {
   const source = image.sourceBlob ?? image.dataUrl ?? image.objectUrl;
@@ -102,7 +194,7 @@ const imageUrlToBlob = async (image: PreprocessSourceImage) => {
 };
 
 export async function getPreprocessPackageSourceEntries(project: PreprocessProject) {
-  const entries = await Promise.all(
+  const sourceEntries = await Promise.all(
     (['eosin', 'he'] as const).map(async (kind) => {
       const image = project.sourceAssets.images[kind];
       if (!image) return null;
@@ -114,7 +206,22 @@ export async function getPreprocessPackageSourceEntries(project: PreprocessProje
     }),
   );
 
-  return entries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  const focusedHeAsset = await resolvePackagedHeFocusAsset(project);
+
+  const focusedHeEntry = focusedHeAsset
+    ? {
+        kind: 'he-focus',
+        path: packageHeFocusPath(),
+        blob: focusedHeAsset instanceof Blob
+          ? focusedHeAsset
+          : await fetch(focusedHeAsset).then((response) => response.blob()),
+      }
+    : null;
+
+  return [
+    ...sourceEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)),
+    ...(focusedHeEntry ? [focusedHeEntry] : []),
+  ];
 }
 
 const hydratePackagedSourceBlob = (image: PreprocessSourceImage, blob: Blob): PreprocessSourceImage => {
@@ -151,6 +258,26 @@ const attachPackagedSourceBlobs = async (project: PreprocessProject, zip: JSZip)
   };
 };
 
+const attachPackagedDerivedImage = async (project: PreprocessProject, zip: JSZip) => {
+  const entry = zip.file(packageHeFocusPath());
+  if (!entry) {
+    return project;
+  }
+
+  return {
+    ...project,
+    heFocus: {
+      ...project.heFocus,
+      focusedImageDataUrl: URL.createObjectURL(await entry.async('blob')),
+    },
+  };
+};
+
+const attachPackagedAssets = async (project: PreprocessProject, zip: JSZip) => {
+  const withSources = await attachPackagedSourceBlobs(project, zip);
+  return attachPackagedDerivedImage(withSources, zip);
+};
+
 const assertString = (value: unknown, fieldName: string) => {
   if (typeof value !== "string") {
     throw new Error(`Project field "${fieldName}" is invalid or missing`);
@@ -183,6 +310,23 @@ const assertNumber = (value: unknown, fieldName: string) => {
 
 const assertNullableString = (value: unknown, fieldName: string) => {
   if (value !== null && typeof value !== "string") {
+    throw new Error(`Project field "${fieldName}" is invalid or missing`);
+  }
+};
+
+const assertPreprocessStepId = (value: unknown, fieldName: string) => {
+  const allowedStepIds: readonly PreprocessStepId[] = [
+    'sourceAssets',
+    'localization',
+    'heFocus',
+    'alignment',
+    'cropQc',
+    'chipConfig',
+    'tissueSelection',
+    'exportState',
+  ];
+
+  if (typeof value !== 'string' || !allowedStepIds.includes(value as PreprocessStepId)) {
     throw new Error(`Project field "${fieldName}" is invalid or missing`);
   }
 };
@@ -258,6 +402,32 @@ const assertLocalizationSlice = (value: unknown) => {
   assertBoolean(transform.flipHorizontal, "localization.imageTransform.flipHorizontal");
   assertBoolean(transform.flipVertical, "localization.imageTransform.flipVertical");
   assertNumber(transform.scale, "localization.imageTransform.scale");
+};
+
+const assertHeFocusSlice = (value: unknown) => {
+  assertPreprocessSliceBase(value, 'heFocus');
+  const slice = value as Record<string, unknown>;
+  if (slice.targetImage !== 'he') {
+    throw new Error('Project field "heFocus.targetImage" is invalid or missing');
+  }
+  if (slice.chipBounds !== null) {
+    assertPreprocessRect(slice.chipBounds, 'heFocus.chipBounds');
+  }
+  assertArray(slice.handles, 'heFocus.handles');
+  for (const [index, handle] of (slice.handles as unknown[]).entries()) {
+    assertObject(handle, `heFocus.handles[${index}]`);
+    const item = handle as Record<string, unknown>;
+    assertString(item.id, `heFocus.handles[${index}].id`);
+    assertString(item.label, `heFocus.handles[${index}].label`);
+    assertPreprocessPoint(item.point, `heFocus.handles[${index}].point`);
+  }
+  assertObject(slice.imageTransform, 'heFocus.imageTransform');
+  const transform = slice.imageTransform as Record<string, unknown>;
+  assertNumber(transform.rotationDegrees, 'heFocus.imageTransform.rotationDegrees');
+  assertBoolean(transform.flipHorizontal, 'heFocus.imageTransform.flipHorizontal');
+  assertBoolean(transform.flipVertical, 'heFocus.imageTransform.flipVertical');
+  assertNumber(transform.scale, 'heFocus.imageTransform.scale');
+  assertNullableString(slice.focusedImageDataUrl, 'heFocus.focusedImageDataUrl');
 };
 
 const assertAlignmentSlice = (value: unknown) => {
@@ -461,7 +631,11 @@ const assertSourceImage = (value: unknown, kind: PreprocessImageKind, requireDat
   return image as PackagedSourceImage;
 };
 
-const assertPreprocessProjectShape = (value: unknown, requireSourceDataUrls: boolean): PreprocessProject => {
+const assertPreprocessProjectShape = (
+  value: unknown,
+  requireSourceDataUrls: boolean,
+  requireHeFocus: boolean,
+): LegacyPreprocessProject => {
   assertObject(value, "project");
   const project = value as Record<string, unknown>;
 
@@ -472,10 +646,13 @@ const assertPreprocessProjectShape = (value: unknown, requireSourceDataUrls: boo
   if (typeof project.workflowVersion !== "number") {
     throw new Error('Project field "workflowVersion" is invalid or missing');
   }
-  assertString(project.currentStep, "currentStep");
+  assertPreprocessStepId(project.currentStep, 'currentStep');
 
   assertObject(project.sourceAssets, "sourceAssets");
   assertObject(project.localization, "localization");
+  if (requireHeFocus) {
+    assertObject(project.heFocus, 'heFocus');
+  }
   assertObject(project.alignment, "alignment");
   assertObject(project.cropQc, "cropQc");
   assertObject(project.chipConfig, "chipConfig");
@@ -498,24 +675,30 @@ const assertPreprocessProjectShape = (value: unknown, requireSourceDataUrls: boo
   }
 
   assertLocalizationSlice(project.localization);
+  if (project.heFocus !== undefined) {
+    assertHeFocusSlice(project.heFocus);
+  }
   assertAlignmentSlice(project.alignment);
   assertCropQcSlice(project.cropQc);
   assertChipConfigSlice(project.chipConfig);
   assertTissueSelectionSlice(project.tissueSelection);
   assertExportStateSlice(project.exportState);
 
+  const storageVersion = typeof project.storageVersion === 'number' ? project.storageVersion : 0;
   const packagedProject = {
-    ...(project as PreprocessProject),
+    ...(project as LegacyPreprocessProject),
+    storageVersion,
     sourceAssets: {
-      ...(project.sourceAssets as PreprocessProject["sourceAssets"]),
+      ...(project.sourceAssets as LegacyPreprocessProject["sourceAssets"]),
       images: {
         eosin: assertSourceImage(images.eosin, "eosin", requireSourceDataUrls),
         he: assertSourceImage(images.he, "he", requireSourceDataUrls),
       },
     },
-  } as PreprocessProject;
+    heFocus: project.heFocus as LegacyPreprocessProject['heFocus'],
+  } as LegacyPreprocessProject;
 
-  return toPackagedProject(packagedProject) as PreprocessProject;
+  return packagedProject;
 };
 
 export async function serializePreprocessProject(project: PreprocessProject): Promise<Blob> {
@@ -523,7 +706,7 @@ export async function serializePreprocessProject(project: PreprocessProject): Pr
     throw new Error("Preprocess project export is available in-browser only");
   }
 
-  const payload: PreprocessPackageV2 = {
+  const payload: PreprocessPackageV3 = {
     version: PACKAGE_VERSION,
     project: toPackagedProject(project),
   };
@@ -552,11 +735,17 @@ function deserializePreprocessProjectText(text: string): PreprocessProject {
   }
 
   const pkg = parsed as Partial<PreprocessPackage>;
-  if (pkg.version !== 1 && pkg.version !== PACKAGE_VERSION) {
+  if (pkg.version !== 1 && pkg.version !== 2 && pkg.version !== PACKAGE_VERSION) {
     throw new Error("Unsupported package version. Please re-export with the latest app.");
   }
 
-  return assertPreprocessProjectShape(pkg.project, pkg.version === 1);
+  return migratePreprocessProject(
+    assertPreprocessProjectShape(
+      pkg.project,
+      pkg.version === 1,
+      pkg.version === PACKAGE_VERSION,
+    ),
+  );
 }
 
 export async function deserializePreprocessImport(file: File | Blob): Promise<PreprocessProject> {
@@ -570,8 +759,8 @@ export async function deserializePreprocessImport(file: File | Blob): Promise<Pr
     const text = await projectEntry.async('text');
     const project = deserializePreprocessProjectText(text);
     const pkg = JSON.parse(text) as Partial<PreprocessPackage>;
-    if (pkg.version === PACKAGE_VERSION) {
-      return attachPackagedSourceBlobs(project, zip);
+    if (pkg.version !== 1) {
+      return attachPackagedAssets(project, zip);
     }
     return project;
   }
