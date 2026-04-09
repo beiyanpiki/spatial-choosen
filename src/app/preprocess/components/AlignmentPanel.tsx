@@ -1,6 +1,12 @@
 "use client";
 
 import {
+	ChevronDownIcon,
+	ChevronUpIcon,
+	CloseIcon,
+	InfoOutlineIcon,
+} from "@chakra-ui/icons";
+import {
 	Badge,
 	Box,
 	Button,
@@ -12,14 +18,8 @@ import {
 	Stack,
 	Text,
 } from "@chakra-ui/react";
-import {
-	ChevronDownIcon,
-	ChevronUpIcon,
-	CloseIcon,
-	InfoOutlineIcon,
-} from "@chakra-ui/icons";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	computeBaseView,
 	computeZoomTransform,
@@ -156,9 +156,8 @@ function LandmarkCanvas({
 		width: number;
 		height: number;
 	} | null>(null);
-	const [helpOverlayState, setHelpOverlayState] = useState<HelpOverlayState>(
-		"expanded",
-	);
+	const [helpOverlayState, setHelpOverlayState] =
+		useState<HelpOverlayState>("expanded");
 
 	useEffect(() => {
 		const node = hostElement;
@@ -290,7 +289,13 @@ function LandmarkCanvas({
 
 			onBackgroundFallback();
 		},
-		[imageKey, interactionMode, onBackgroundFallback, onBackgroundPoint, toImagePoint],
+		[
+			imageKey,
+			interactionMode,
+			onBackgroundFallback,
+			onBackgroundPoint,
+			toImagePoint,
+		],
 	);
 
 	useEffect(() => {
@@ -617,9 +622,8 @@ export function AlignmentPanel({
 	referenceImage,
 	onAlignmentChange,
 }: AlignmentPanelProps) {
-	const [interactionMode, setInteractionMode] = useState<InteractionMode>(
-		"awaiting-source",
-	);
+	const [interactionMode, setInteractionMode] =
+		useState<InteractionMode>("awaiting-source");
 	const [pendingSourcePoint, setPendingSourcePoint] =
 		useState<PreprocessPoint | null>(null);
 	const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
@@ -719,7 +723,9 @@ export function AlignmentPanel({
 
 	const mutateControlPoints = useCallback(
 		(
-			mutator: (controlPoints: AlignmentControlPoint[]) => AlignmentControlPoint[],
+			mutator: (
+				controlPoints: AlignmentControlPoint[],
+			) => AlignmentControlPoint[],
 			options?: {
 				afterApply?: (nextControlPoints: AlignmentControlPoint[]) => void;
 				preserveSelection?: boolean;
@@ -872,20 +878,18 @@ export function AlignmentPanel({
 		],
 	);
 
-	const handleSelectPair = useCallback(
-		(id: string) => {
-			setPendingSourcePoint(null);
-			setSelectedPairId(id);
-			setRepositionPairId(null);
-			setInteractionMode("selected-pair");
-		},
-		[],
-	);
+	const handleSelectPair = useCallback((id: string) => {
+		setPendingSourcePoint(null);
+		setSelectedPairId(id);
+		setRepositionPairId(null);
+		setInteractionMode("selected-pair");
+	}, []);
 
 	const selectedPair = useMemo(
 		() =>
 			selectedPairId
-				? alignment.controlPoints.find((pair) => pair.id === selectedPairId) ?? null
+				? (alignment.controlPoints.find((pair) => pair.id === selectedPairId) ??
+					null)
 				: null,
 		[selectedPairId, alignment.controlPoints],
 	);
@@ -907,7 +911,6 @@ export function AlignmentPanel({
 			? "Selected pair ready. Reposition either point, delete the pair, or continue solving while using pan and zoom directly on the canvases."
 			: "Start on the eosin canvas, using wheel zoom and drag pan as needed before placing the next reference point.";
 	}, [interactionMode, selectedPair]);
-
 
 	const sourcePoints = useMemo<EditorPoint[]>(
 		() =>
@@ -946,7 +949,7 @@ export function AlignmentPanel({
 		movingImage.height;
 
 	const solveAlignment = useCallback(
-		async (forceMode = false) => {
+		async (solveMode: "ransac" | "allPoints" = "ransac") => {
 			if (
 				!referenceImage?.width ||
 				!referenceImage.height ||
@@ -977,7 +980,7 @@ export function AlignmentPanel({
 						width: movingImage.width,
 						height: movingImage.height,
 					},
-					forceMode,
+					solveMode,
 				});
 
 				onAlignmentChange((current) => ({
@@ -1026,6 +1029,23 @@ export function AlignmentPanel({
 			referenceImage?.width,
 		],
 	);
+
+	const acceptRejectedSolve = useCallback(() => {
+		onAlignmentChange((current) => ({
+			...current,
+			solveAccepted: true,
+			failureReason: null,
+			status: computeAlignmentStatus({
+				hasReferenceImage: Boolean(referenceImage?.dataUrl),
+				hasMovingImage: Boolean(movingImage?.dataUrl),
+				solveAccepted: true,
+				failureReason: null,
+			}),
+			isStale: false,
+			updatedAt: new Date().toISOString(),
+			error: null,
+		}));
+	}, [movingImage?.dataUrl, onAlignmentChange, referenceImage?.dataUrl]);
 
 	if (!referenceImage?.dataUrl || !movingImage?.dataUrl) {
 		return (
@@ -1098,7 +1118,8 @@ export function AlignmentPanel({
 								data-testid="alignment-pair-count-badge"
 								data-pair-count={alignment.controlPoints.length}
 							>
-								Pairs {alignment.controlPoints.length} / {ALIGNMENT_TARGET_PAIRS}
+								Pairs {alignment.controlPoints.length} /{" "}
+								{ALIGNMENT_TARGET_PAIRS}
 							</Badge>
 						</Flex>
 						<Text
@@ -1162,7 +1183,9 @@ export function AlignmentPanel({
 								data-testid="alignment-selected-pair-badge"
 							>
 								Selected pair #
-								{alignment.controlPoints.findIndex((pair) => pair.id === selectedPair.id) + 1}
+								{alignment.controlPoints.findIndex(
+									(pair) => pair.id === selectedPair.id,
+								) + 1}
 							</Badge>
 						) : null}
 					</Flex>
@@ -1229,7 +1252,9 @@ export function AlignmentPanel({
 						color="gray.700"
 						_hover={{ bg: "gray.100" }}
 						onClick={clearLocalInteractionState}
-						isDisabled={interactionMode === "awaiting-source" && !pendingSourcePoint}
+						isDisabled={
+							interactionMode === "awaiting-source" && !pendingSourcePoint
+						}
 						data-testid="alignment-select-cancel"
 					>
 						Cancel
@@ -1290,16 +1315,28 @@ export function AlignmentPanel({
 						Solve alignment
 					</Button>
 					{alignment.failureReason && !alignment.solveAccepted ? (
-						<Button
-							size="sm"
-							colorScheme="red"
-							variant="outline"
-							onClick={() => void solveAlignment(true)}
-							isDisabled={!canSolve}
-							data-testid="alignment-force-solve"
-						>
-							Force continue (dangerous)
-						</Button>
+						<>
+							<Button
+								size="sm"
+								colorScheme="orange"
+								variant="outline"
+								onClick={acceptRejectedSolve}
+								isDisabled={!canSolve}
+								data-testid="alignment-accept-rejected-solve"
+							>
+								Accept rejected solve (dangerous)
+							</Button>
+							<Button
+								size="sm"
+								colorScheme="red"
+								variant="outline"
+								onClick={() => void solveAlignment("allPoints")}
+								isDisabled={!canSolve}
+								data-testid="alignment-recompute-all-points"
+							>
+								Recompute with all points (dangerous)
+							</Button>
+						</>
 					) : null}
 				</Flex>
 			</Stack>
@@ -1346,7 +1383,10 @@ export function AlignmentPanel({
 											...slice,
 											movingImageTransform: {
 												...slice.movingImageTransform,
-												scale: Math.max(0.5, slice.movingImageTransform.scale - 0.05),
+												scale: Math.max(
+													0.5,
+													slice.movingImageTransform.scale - 0.05,
+												),
 											},
 										}),
 									{ invalidateDownstream: false },
@@ -1367,7 +1407,10 @@ export function AlignmentPanel({
 											...slice,
 											movingImageTransform: {
 												...slice.movingImageTransform,
-												scale: Math.min(4, slice.movingImageTransform.scale + 0.05),
+												scale: Math.min(
+													4,
+													slice.movingImageTransform.scale + 0.05,
+												),
 											},
 										}),
 									{ invalidateDownstream: false },
@@ -1506,7 +1549,8 @@ export function AlignmentPanel({
 											...slice,
 											movingImageTransform: {
 												...slice.movingImageTransform,
-												flipHorizontal: !slice.movingImageTransform.flipHorizontal,
+												flipHorizontal:
+													!slice.movingImageTransform.flipHorizontal,
 											},
 										}),
 									{ invalidateDownstream: false },
@@ -1584,9 +1628,9 @@ export function AlignmentPanel({
 						data-testid="alignment-distribution-warning"
 					>
 						Landmark spread is narrow. Coverage ratios are
-						 {formatPercent(coverage.coverageRatioX)} width and
-						 {formatPercent(coverage.coverageRatioY)} height, below the
-						 {Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
+						{formatPercent(coverage.coverageRatioX)} width and
+						{formatPercent(coverage.coverageRatioY)} height, below the
+						{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
 					</Text>
 				) : null}
 				{runtimeError ? (
@@ -1608,10 +1652,13 @@ export function AlignmentPanel({
 								Warning: Precision loss risk
 							</Text>
 							<Text fontSize="sm" color="red.700">
-								The alignment quality checks failed ({alignment.failureReason}). Using
-								 &ldquo;Force continue&rdquo; will skip RANSAC outlier detection and compute the
-								 transformation using all control points. This may result in precision
-								 errors and inaccurate alignment. Only use this if you understand the risks.
+								The alignment quality checks failed ({alignment.failureReason}).
+								&ldquo;Accept rejected solve&rdquo; keeps the current rejected
+								RANSAC result and lets you continue anyway. &ldquo;Recompute
+								with all points&rdquo; skips outlier detection and computes a
+								new transformation from every control point, including the red
+								outliers. Both options may reduce accuracy and should only be
+								used if you understand the risks.
 							</Text>
 						</Stack>
 					</Box>
