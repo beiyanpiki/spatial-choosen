@@ -2,6 +2,7 @@ import type {
   AlignmentSlice,
   ChipConfigSlice,
   ExportStateSlice,
+  PreprocessCropAssetScale,
   PreprocessImageKind,
   PreprocessProject,
   PreprocessSourceImage,
@@ -9,6 +10,7 @@ import type {
   TissueSelectionSlice,
 } from '../../types/preprocess';
 import {
+  PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
   PREPROCESS_DB_NAME,
   PREPROCESS_DB_VERSION,
   PREPROCESS_DERIVED_IMAGE_STORE,
@@ -44,6 +46,66 @@ type StoredHeFocusSlice = Omit<PreprocessProject['heFocus'], 'focusedImageDataUr
   focusedImageDataUrl: null;
 };
 
+type StoredCropQcCanonicalAsset = {
+  dataUrl: null;
+};
+
+type StoredCropQcCanonicalAssetSet = Record<PreprocessCropAssetScale, StoredCropQcCanonicalAsset>;
+
+type StoredCropQcCanonicalCropState =
+  | {
+      cropAssets: {
+        eosin: null;
+        he: null;
+      };
+      tissue_hires_scalef: null;
+      tissue_lowres_scalef: null;
+      spot_diameter_fullres: null;
+      fiducial_diameter_fullres: null;
+    }
+  | {
+      cropAssets: {
+        eosin: StoredCropQcCanonicalAssetSet;
+        he: StoredCropQcCanonicalAssetSet;
+      };
+      tissue_hires_scalef: number;
+      tissue_lowres_scalef: number;
+      spot_diameter_fullres: number | null;
+      fiducial_diameter_fullres: number;
+    };
+
+type StoredCropQcSlice = Omit<
+  PreprocessProject['cropQc'],
+  keyof StoredCropQcCanonicalCropState | 'eosinPreviewDataUrl' | 'previewDataUrl' | 'checkerboardPreviewDataUrl' | 'checkerboardPreview'
+> & StoredCropQcCanonicalCropState & {
+  eosinPreviewDataUrl: null;
+  previewDataUrl: null;
+  checkerboardPreviewDataUrl: null;
+  checkerboardPreview: {
+    dataUrl: null;
+  };
+};
+
+type CanonicalCropQcAssets = {
+  cropAssets: {
+    eosin: NonNullable<NonNullable<PreprocessProject['cropQc']['cropAssets']>['eosin']>;
+    he: NonNullable<NonNullable<PreprocessProject['cropQc']['cropAssets']>['he']>;
+  };
+  tissue_hires_scalef: number;
+  tissue_lowres_scalef: number;
+  spot_diameter_fullres: number | null;
+  fiducial_diameter_fullres: number;
+};
+
+type HydratedCropQcSlice = PreprocessProject['cropQc'] & {
+  hydrationMissingCanonicalAssets?: boolean;
+};
+
+type DerivedCropAssetPayloadMap = Record<
+  PreprocessImageKind,
+  Record<PreprocessCropAssetScale, string | Blob | undefined>
+>;
+
 export type PreprocessProjectMeta = Omit<
   PreprocessProject,
   'sourceAssets' | 'heFocus' | 'alignment' | 'cropQc' | 'chipConfig' | 'tissueSelection' | 'exportState'
@@ -51,11 +113,7 @@ export type PreprocessProjectMeta = Omit<
   sourceAssets: StoredSourceAssetsSlice;
   heFocus: StoredHeFocusSlice;
   alignment: Omit<AlignmentSlice, 'previewDataUrl'> & { previewDataUrl: null };
-  cropQc: PreprocessProject['cropQc'] & {
-    eosinPreviewDataUrl: null;
-    previewDataUrl: null;
-    checkerboardPreviewDataUrl: null;
-  };
+  cropQc: StoredCropQcSlice;
   chipConfig: Omit<ChipConfigSlice, 'projectedSpots'> & { projectedSpots: null };
   tissueSelection: Omit<TissueSelectionSlice, 'previewDataUrl' | 'selectedSpotIds'> & {
     previewDataUrl: null;
@@ -113,7 +171,13 @@ const persistMetas = (metas: PreprocessProjectMeta[]) => {
 };
 
 const assetStoreKey = (projectId: string, kind: PreprocessImageKind) => `${projectId}:${kind}`;
-const derivedImageStoreKey = (projectId: string) => `${projectId}:he-focus`;
+const heFocusDerivedImageStoreKey = (projectId: string) => `${projectId}:he-focus`;
+const cropQcDerivedImageStoreKey = (
+  projectId: string,
+  kind: PreprocessImageKind,
+  level: PreprocessCropAssetScale,
+) => `${projectId}:crop-qc:${kind}:${level}`;
+const cropQcCheckerboardDerivedImageStoreKey = (projectId: string) => `${projectId}:crop-qc:checkerboard`;
 
 const saveStoreValue = async (storeName: string, key: string, value: string | Blob) => {
   const db = await openDb();
@@ -158,6 +222,201 @@ const stripSourcePayload = (image: PreprocessSourceImage | null): StoredSourceIm
   return rest;
 };
 
+const createStoredCropQcCanonicalAssetSet = (): StoredCropQcCanonicalAssetSet => PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.reduce(
+  (assets, level) => {
+    assets[level] = { dataUrl: null };
+    return assets;
+  },
+  {} as StoredCropQcCanonicalAssetSet,
+);
+
+const hasCanonicalCropAssets = (
+  cropQc: PreprocessProject['cropQc'],
+): cropQc is PreprocessProject['cropQc'] & CanonicalCropQcAssets => (
+  cropQc.cropAssets?.eosin !== null
+  && cropQc.cropAssets?.eosin !== undefined
+  && cropQc.cropAssets.he !== null
+  && cropQc.cropAssets.he !== undefined
+  && typeof cropQc.tissue_hires_scalef === 'number'
+  && typeof cropQc.tissue_lowres_scalef === 'number'
+  && (cropQc.spot_diameter_fullres === null || typeof cropQc.spot_diameter_fullres === 'number')
+  && typeof cropQc.fiducial_diameter_fullres === 'number'
+);
+
+const stripCropQcPayload = (cropQc: PreprocessProject['cropQc']): StoredCropQcSlice => {
+  if (hasCanonicalCropAssets(cropQc)) {
+    return {
+      ...cropQc,
+      cropAssets: {
+        eosin: createStoredCropQcCanonicalAssetSet(),
+        he: createStoredCropQcCanonicalAssetSet(),
+      },
+      tissue_hires_scalef: cropQc.tissue_hires_scalef,
+      tissue_lowres_scalef: cropQc.tissue_lowres_scalef,
+      spot_diameter_fullres: cropQc.spot_diameter_fullres,
+      fiducial_diameter_fullres: cropQc.fiducial_diameter_fullres,
+      eosinPreviewDataUrl: null,
+      previewDataUrl: null,
+      checkerboardPreviewDataUrl: null,
+      checkerboardPreview: {
+        dataUrl: null,
+      },
+    };
+  }
+
+  return {
+    ...cropQc,
+    cropAssets: {
+      eosin: null,
+      he: null,
+    },
+    tissue_hires_scalef: null,
+    tissue_lowres_scalef: null,
+    spot_diameter_fullres: null,
+    fiducial_diameter_fullres: null,
+    eosinPreviewDataUrl: null,
+    previewDataUrl: null,
+    checkerboardPreviewDataUrl: null,
+    checkerboardPreview: {
+      dataUrl: null,
+    },
+  };
+};
+
+const createEmptyDerivedCropAssetPayloadMap = (): DerivedCropAssetPayloadMap => PREPROCESS_SOURCE_IMAGE_KINDS.reduce(
+  (payloads, kind) => {
+    payloads[kind] = PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.reduce(
+      (kindPayloads, level) => {
+        kindPayloads[level] = undefined;
+        return kindPayloads;
+      },
+      {} as Record<PreprocessCropAssetScale, string | Blob | undefined>,
+    );
+    return payloads;
+  },
+  {} as DerivedCropAssetPayloadMap,
+);
+
+const hydrateCropAssetSet = async (
+  payloads: Record<PreprocessCropAssetScale, string | Blob | undefined>,
+  fallbackAssetSet: CanonicalCropQcAssets['cropAssets']['eosin'] | null | undefined,
+): Promise<CanonicalCropQcAssets['cropAssets']['eosin'] | null> => {
+  const entries = await Promise.all(
+    PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.map(async (level) => {
+      const dataUrl = await hydrateDerivedImagePayload(payloads[level] ?? fallbackAssetSet?.[level].dataUrl ?? undefined);
+      return dataUrl ? [level, { dataUrl }] as const : null;
+    }),
+  );
+
+  if (entries.some((entry) => entry === null)) {
+    return null;
+  }
+
+  return Object.fromEntries(
+    entries as Array<readonly [PreprocessCropAssetScale, { dataUrl: string }]>,
+  ) as CanonicalCropQcAssets['cropAssets']['eosin'];
+};
+
+const clearHydratedCropQc = (cropQc: StoredCropQcSlice): HydratedCropQcSlice => ({
+  ...cropQc,
+  status: 'stale',
+  isStale: true,
+  cropRect: null,
+  cropWidth: null,
+  cropHeight: null,
+  cropAssets: {
+    eosin: null,
+    he: null,
+  },
+  tissue_hires_scalef: null,
+  tissue_lowres_scalef: null,
+  spot_diameter_fullres: null,
+  fiducial_diameter_fullres: null,
+  eosinPreviewDataUrl: null,
+  previewDataUrl: null,
+  checkerboardPreviewDataUrl: null,
+  checkerboardPreview: {
+    dataUrl: null,
+  },
+  qcAccepted: false,
+  issues: [],
+  hydrationMissingCanonicalAssets: true,
+});
+
+const hydrateCropQcSlice = async (
+  projectId: string,
+  cropQc: StoredCropQcSlice,
+): Promise<HydratedCropQcSlice> => {
+  const cropAssetPayloads = createEmptyDerivedCropAssetPayloadMap();
+  const cropAssetEntries = await Promise.all(
+    PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.map(async (level) => ({
+      kind,
+      level,
+      payload: await readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcDerivedImageStoreKey(projectId, kind, level)),
+    }))),
+  );
+  const legacyCropQc = cropQc as unknown as PreprocessProject['cropQc'];
+
+  cropAssetEntries.forEach(({ kind, level, payload }) => {
+    cropAssetPayloads[kind][level] = payload;
+  });
+
+  const checkerboardPayload = await readStoreValue(
+    PREPROCESS_DERIVED_IMAGE_STORE,
+    cropQcCheckerboardDerivedImageStoreKey(projectId),
+  );
+  const [eosinCropAssets, heCropAssets, checkerboardPreviewDataUrl] = await Promise.all([
+    hydrateCropAssetSet(cropAssetPayloads.eosin, legacyCropQc.cropAssets?.eosin),
+    hydrateCropAssetSet(cropAssetPayloads.he, legacyCropQc.cropAssets?.he),
+    hydrateDerivedImagePayload(
+      checkerboardPayload ?? legacyCropQc.checkerboardPreview?.dataUrl ?? legacyCropQc.checkerboardPreviewDataUrl ?? undefined,
+    ),
+  ]);
+
+  if (eosinCropAssets && heCropAssets) {
+    return {
+      ...cropQc,
+      cropAssets: {
+        eosin: eosinCropAssets,
+        he: heCropAssets,
+      },
+      eosinPreviewDataUrl: eosinCropAssets.fullres.dataUrl,
+      previewDataUrl: heCropAssets.fullres.dataUrl,
+      checkerboardPreviewDataUrl: checkerboardPreviewDataUrl,
+      checkerboardPreview: {
+        dataUrl: checkerboardPreviewDataUrl,
+      },
+    };
+  }
+
+  const expectsCanonicalAssets = cropQc.cropAssets.eosin !== null
+    || cropQc.cropAssets.he !== null
+    || legacyCropQc.cropAssets?.eosin !== null
+    || legacyCropQc.cropAssets?.he !== null;
+
+  if (!expectsCanonicalAssets) {
+    return {
+      ...cropQc,
+      cropAssets: {
+        eosin: null,
+        he: null,
+      },
+      tissue_hires_scalef: null,
+      tissue_lowres_scalef: null,
+      spot_diameter_fullres: null,
+      fiducial_diameter_fullres: null,
+      eosinPreviewDataUrl: null,
+      previewDataUrl: null,
+      checkerboardPreviewDataUrl: null,
+      checkerboardPreview: {
+        dataUrl: null,
+      },
+    };
+  }
+
+  return clearHydratedCropQc(cropQc);
+};
+
 const toProjectMeta = (project: PreprocessProject): PreprocessProjectMeta => ({
   ...project,
   storageVersion: project.storageVersion ?? PREPROCESS_STORAGE_SCHEMA_VERSION,
@@ -176,12 +435,7 @@ const toProjectMeta = (project: PreprocessProject): PreprocessProjectMeta => ({
     ...project.alignment,
     previewDataUrl: null,
   },
-  cropQc: {
-    ...project.cropQc,
-    eosinPreviewDataUrl: null,
-    previewDataUrl: null,
-    checkerboardPreviewDataUrl: null,
-  },
+  cropQc: stripCropQcPayload(project.cropQc),
   chipConfig: {
     ...project.chipConfig,
     projectedSpots: null,
@@ -247,12 +501,13 @@ const hydrateDerivedImagePayload = async (payload: string | Blob | undefined) =>
 };
 
 const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessProject | undefined> => {
-  const [eosinDataUrl, heDataUrl, eosinThumbnailDataUrl, heThumbnailDataUrl, focusedHePayload] = await Promise.all([
+  const [eosinDataUrl, heDataUrl, eosinThumbnailDataUrl, heThumbnailDataUrl, focusedHePayload, cropQc] = await Promise.all([
     readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'eosin')),
     readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'he')),
     readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'eosin')),
     readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'he')),
-    readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, derivedImageStoreKey(meta.id)),
+    readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(meta.id)),
+    hydrateCropQcSlice(meta.id, meta.cropQc),
   ]);
 
   const eosin = hydrateSourceImage(meta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
@@ -277,6 +532,7 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
           focusedImageDataUrl,
         }
       : meta.heFocus,
+    cropQc,
   });
 };
 
@@ -300,9 +556,8 @@ const syncImageStores = async (projectId: string, image: PreprocessSourceImage |
   }
 };
 
-const syncDerivedImageStore = async (projectId: string, focusedImageDataUrl: string | null) => {
-  const key = derivedImageStoreKey(projectId);
-  const payload = focusedImageDataUrl ? await urlToBlob(focusedImageDataUrl) : undefined;
+const syncDerivedImageStore = async (key: string, dataUrl: string | null) => {
+  const payload = dataUrl ? await urlToBlob(dataUrl) : undefined;
 
   if (payload) {
     await saveStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key, payload);
@@ -310,6 +565,20 @@ const syncDerivedImageStore = async (projectId: string, focusedImageDataUrl: str
   }
 
   await deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key);
+};
+
+const syncCropQcDerivedImageStores = async (projectId: string, cropQc: PreprocessProject['cropQc']) => {
+  const syncs = PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.map((level) => syncDerivedImageStore(
+    cropQcDerivedImageStoreKey(projectId, kind, level),
+    hasCanonicalCropAssets(cropQc) ? cropQc.cropAssets[kind][level].dataUrl : null,
+  )));
+
+  syncs.push(syncDerivedImageStore(
+    cropQcCheckerboardDerivedImageStoreKey(projectId),
+    hasCanonicalCropAssets(cropQc) ? cropQc.checkerboardPreview?.dataUrl ?? null : null,
+  ));
+
+  await Promise.all(syncs);
 };
 
 export async function readPreprocessProjects(): Promise<PreprocessProject[]> {
@@ -341,7 +610,8 @@ export async function upsertPreprocessProject(project: PreprocessProject) {
 
   await Promise.all([
     ...PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),
-    syncDerivedImageStore(migratedProject.id, migratedProject.heFocus.focusedImageDataUrl),
+    syncDerivedImageStore(heFocusDerivedImageStoreKey(migratedProject.id), migratedProject.heFocus.focusedImageDataUrl),
+    syncCropQcDerivedImageStores(migratedProject.id, migratedProject.cropQc),
   ]);
 }
 
@@ -360,8 +630,13 @@ export async function deletePreprocessProject(projectId: string) {
       ...PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => [
         deleteStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(projectId, kind)),
         deleteStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(projectId, kind)),
+        ...PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.map((level) => deleteStoreValue(
+          PREPROCESS_DERIVED_IMAGE_STORE,
+          cropQcDerivedImageStoreKey(projectId, kind, level),
+        )),
       ]),
-      deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, derivedImageStoreKey(projectId)),
+      deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(projectId)),
+      deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcCheckerboardDerivedImageStoreKey(projectId)),
     ],
   );
 }

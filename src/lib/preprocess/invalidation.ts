@@ -57,10 +57,22 @@ const invalidateHeFocusSlice = (slice: HeFocusSlice): HeFocusSlice => ({
 
 const invalidateCropQcSlice = (slice: CropQcSlice): CropQcSlice => ({
   ...markStale(slice),
+  cropAssets: {
+    eosin: null,
+    he: null,
+  },
+  tissue_hires_scalef: null,
+  tissue_lowres_scalef: null,
+  spot_diameter_fullres: null,
+  fiducial_diameter_fullres: null,
   eosinPreviewDataUrl: null,
   previewDataUrl: null,
   checkerboardPreviewDataUrl: null,
+  checkerboardPreview: {
+    dataUrl: null,
+  },
   qcAccepted: false,
+  issues: [],
 });
 
 const invalidateChipConfigSlice = (slice: ChipConfigSlice): ChipConfigSlice => ({
@@ -139,11 +151,11 @@ export function invalidateOnAlignmentChange(project: PreprocessProject): Preproc
 }
 
 export function invalidateOnCropQcChange(project: PreprocessProject): PreprocessProject {
-  return invalidateFromStep(project, "cropQc");
+  return invalidateFromStep(project, 'cropQc');
 }
 
 export function invalidateOnChipConfigChange(project: PreprocessProject): PreprocessProject {
-  return invalidateFromStep(project, "chipConfig");
+  return invalidateFromStep(invalidateStep(project, 'chipConfig'), 'chipConfig');
 }
 
 export function invalidateOnTissueSelectionChange(project: PreprocessProject): PreprocessProject {

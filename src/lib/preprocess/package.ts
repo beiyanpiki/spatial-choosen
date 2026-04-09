@@ -31,10 +31,16 @@ type PreprocessPackagedProject = Omit<
     focusedImageDataUrl: null;
   };
   alignment: Omit<PreprocessProject["alignment"], "previewDataUrl"> & { previewDataUrl: null };
-  cropQc: Omit<PreprocessProject["cropQc"], "eosinPreviewDataUrl" | "previewDataUrl" | "checkerboardPreviewDataUrl"> & {
+  cropQc: Omit<
+    PreprocessProject["cropQc"],
+    "eosinPreviewDataUrl" | "previewDataUrl" | "checkerboardPreviewDataUrl" | "checkerboardPreview"
+  > & {
     eosinPreviewDataUrl: null;
     previewDataUrl: null;
     checkerboardPreviewDataUrl: null;
+    checkerboardPreview: {
+      dataUrl: null;
+    };
   };
   chipConfig: Omit<PreprocessProject["chipConfig"], "projectedSpots"> & { projectedSpots: null };
   tissueSelection: Omit<PreprocessProject["tissueSelection"], "previewDataUrl" | "selectedSpotIds"> & {
@@ -101,6 +107,9 @@ const toPackagedProject = (project: PreprocessProject): PreprocessPackagedProjec
     eosinPreviewDataUrl: null,
     previewDataUrl: null,
     checkerboardPreviewDataUrl: null,
+    checkerboardPreview: {
+      dataUrl: null,
+    },
   },
   chipConfig: {
     ...project.chipConfig,
@@ -314,6 +323,27 @@ const assertNullableString = (value: unknown, fieldName: string) => {
   }
 };
 
+const assertNonEmptyString = (value: unknown, fieldName: string) => {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Project field "${fieldName}" is invalid or missing`);
+  }
+};
+
+const assertPositiveNumber = (value: unknown, fieldName: string) => {
+  assertNumber(value, fieldName);
+  if ((value as number) <= 0) {
+    throw new Error(`Project field "${fieldName}" is invalid or missing`);
+  }
+};
+
+const assertNullablePositiveNumber = (value: unknown, fieldName: string) => {
+  if (value === null) {
+    return;
+  }
+
+  assertPositiveNumber(value, fieldName);
+};
+
 const assertPreprocessStepId = (value: unknown, fieldName: string) => {
   const allowedStepIds: readonly PreprocessStepId[] = [
     'sourceAssets',
@@ -479,6 +509,77 @@ const assertAlignmentSlice = (value: unknown) => {
   assertNullableString(slice.previewDataUrl, "alignment.previewDataUrl");
 };
 
+const assertCropQcCanonicalAsset = (value: unknown, fieldName: string) => {
+  assertObject(value, fieldName);
+  const asset = value as Record<string, unknown>;
+  assertNonEmptyString(asset.dataUrl, `${fieldName}.dataUrl`);
+};
+
+const assertCropQcCanonicalAssetSet = (value: unknown, fieldName: string) => {
+  assertObject(value, fieldName);
+  const assetSet = value as Record<string, unknown>;
+  for (const level of ['fullres', 'hires', 'lowres'] as const) {
+    assertCropQcCanonicalAsset(assetSet[level], `${fieldName}.${level}`);
+  }
+};
+
+const hasAnyCanonicalCropField = (slice: Record<string, unknown>) => (
+  'cropAssets' in slice
+  || 'checkerboardPreview' in slice
+  || 'tissue_hires_scalef' in slice
+  || 'tissue_lowres_scalef' in slice
+  || 'spot_diameter_fullres' in slice
+  || 'fiducial_diameter_fullres' in slice
+);
+
+const assertCanonicalCropQcContract = (slice: Record<string, unknown>) => {
+  assertObject(slice.cropAssets, 'cropQc.cropAssets');
+  const cropAssets = slice.cropAssets as Record<string, unknown>;
+
+  assertObject(slice.checkerboardPreview, 'cropQc.checkerboardPreview');
+  const checkerboardPreview = slice.checkerboardPreview as Record<string, unknown>;
+  assertNullableString(checkerboardPreview.dataUrl, 'cropQc.checkerboardPreview.dataUrl');
+
+  const eosinAssets = cropAssets.eosin;
+  const heAssets = cropAssets.he;
+  const hasNoAssets = eosinAssets === null && heAssets === null;
+  const hasFullAssets = eosinAssets !== null && heAssets !== null;
+
+  if (!hasNoAssets && !hasFullAssets) {
+    throw new Error('Project field "cropQc.cropAssets" is invalid or missing');
+  }
+
+  if (hasNoAssets) {
+    for (const key of [
+      'tissue_hires_scalef',
+      'tissue_lowres_scalef',
+      'spot_diameter_fullres',
+      'fiducial_diameter_fullres',
+    ] as const) {
+      if (slice[key] !== null) {
+        throw new Error(`Project field "cropQc.${key}" is invalid or missing`);
+      }
+    }
+    if (checkerboardPreview.dataUrl !== null) {
+      throw new Error('Project field "cropQc.checkerboardPreview.dataUrl" is invalid or missing');
+    }
+    return;
+  }
+
+  assertCropQcCanonicalAssetSet(eosinAssets, 'cropQc.cropAssets.eosin');
+  assertCropQcCanonicalAssetSet(heAssets, 'cropQc.cropAssets.he');
+  assertPositiveNumber(slice.tissue_hires_scalef, 'cropQc.tissue_hires_scalef');
+  assertPositiveNumber(slice.tissue_lowres_scalef, 'cropQc.tissue_lowres_scalef');
+  assertNullablePositiveNumber(slice.spot_diameter_fullres, 'cropQc.spot_diameter_fullres');
+  assertPositiveNumber(slice.fiducial_diameter_fullres, 'cropQc.fiducial_diameter_fullres');
+};
+
+const assertLegacyCropQcContract = (slice: Record<string, unknown>) => {
+  assertNullableString(slice.eosinPreviewDataUrl ?? null, 'cropQc.eosinPreviewDataUrl');
+  assertNullableString(slice.previewDataUrl ?? null, 'cropQc.previewDataUrl');
+  assertNullableString(slice.checkerboardPreviewDataUrl ?? null, 'cropQc.checkerboardPreviewDataUrl');
+};
+
 const assertCropQcSlice = (value: unknown) => {
   assertPreprocessSliceBase(value, "cropQc");
   const slice = value as Record<string, unknown>;
@@ -500,9 +601,39 @@ const assertCropQcSlice = (value: unknown) => {
     assertString(item.code, `cropQc.issues[${index}].code`);
     assertString(item.message, `cropQc.issues[${index}].message`);
   }
-  assertNullableString(slice.eosinPreviewDataUrl, "cropQc.eosinPreviewDataUrl");
-  assertNullableString(slice.previewDataUrl, "cropQc.previewDataUrl");
-  assertNullableString(slice.checkerboardPreviewDataUrl, "cropQc.checkerboardPreviewDataUrl");
+  if (hasAnyCanonicalCropField(slice)) {
+    assertCanonicalCropQcContract(slice);
+    return;
+  }
+
+  assertLegacyCropQcContract(slice);
+};
+
+const assertProjectedSpot = (value: unknown, fieldName: string) => {
+  assertObject(value, fieldName);
+  const spot = value as Record<string, unknown>;
+  assertString(spot.id, `${fieldName}.id`);
+  assertString(spot.barcode, `${fieldName}.barcode`);
+  for (const key of ['arrayRow', 'arrayCol', 'x', 'y'] as const) {
+    assertNumber(spot[key], `${fieldName}.${key}`);
+  }
+
+  const hasNewDimensions = 'width' in spot || 'height' in spot;
+  const hasLegacyDiameters = 'diameterX' in spot || 'diameterY' in spot;
+
+  if (!hasNewDimensions && !hasLegacyDiameters) {
+    throw new Error(`Project field "${fieldName}" is invalid or missing`);
+  }
+
+  if (hasNewDimensions) {
+    assertNumber(spot.width, `${fieldName}.width`);
+    assertNumber(spot.height, `${fieldName}.height`);
+  }
+
+  if (hasLegacyDiameters) {
+    assertNumber(spot.diameterX, `${fieldName}.diameterX`);
+    assertNumber(spot.diameterY, `${fieldName}.diameterY`);
+  }
 };
 
 const assertChipConfigSlice = (value: unknown) => {
@@ -519,13 +650,7 @@ const assertChipConfigSlice = (value: unknown) => {
   if (slice.projectedSpots !== null) {
     assertArray(slice.projectedSpots, "chipConfig.projectedSpots");
     for (const [index, spot] of (slice.projectedSpots as unknown[]).entries()) {
-      assertObject(spot, `chipConfig.projectedSpots[${index}]`);
-      const item = spot as Record<string, unknown>;
-      assertString(item.id, `chipConfig.projectedSpots[${index}].id`);
-      assertString(item.barcode, `chipConfig.projectedSpots[${index}].barcode`);
-      for (const key of ["arrayRow", "arrayCol", "x", "y", "diameterX", "diameterY"] as const) {
-        assertNumber(item[key], `chipConfig.projectedSpots[${index}].${key}`);
-      }
+      assertProjectedSpot(spot, `chipConfig.projectedSpots[${index}]`);
     }
   }
 };
