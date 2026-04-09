@@ -32,6 +32,8 @@ export type PreprocessRect = {
   height: number;
 };
 
+export type PreprocessCropAssetScale = "fullres" | "hires" | "lowres";
+
 export type PreprocessSliceBase = {
   status: PreprocessStepStatus;
   isStale: boolean;
@@ -164,7 +166,58 @@ export type CropQcIssue = {
   message: string;
 };
 
-export type CropQcSlice = PreprocessSliceBase & {
+export type CropQcCanonicalAsset = {
+  dataUrl: string;
+};
+
+export type CropQcCanonicalAssetSet = {
+  fullres: CropQcCanonicalAsset;
+  hires: CropQcCanonicalAsset;
+  lowres: CropQcCanonicalAsset;
+};
+
+export type CropQcCanonicalCropState =
+  | {
+      cropAssets: {
+        eosin: null;
+        he: null;
+      };
+      tissue_hires_scalef: null;
+      tissue_lowres_scalef: null;
+      spot_diameter_fullres: null;
+      fiducial_diameter_fullres: null;
+    }
+  | {
+      cropAssets: {
+        eosin: CropQcCanonicalAssetSet;
+        he: CropQcCanonicalAssetSet;
+      };
+      tissue_hires_scalef: number;
+      tissue_lowres_scalef: number;
+      spot_diameter_fullres: number | null;
+      fiducial_diameter_fullres: number;
+    };
+
+export type CropQcCheckerboardPreview = {
+  dataUrl: string | null;
+};
+
+export type DeprecatedCropQcPreviewAliases = {
+  /**
+   * @deprecated Transitional alias for `cropAssets.eosin.fullres.dataUrl`.
+   */
+  eosinPreviewDataUrl: string | null;
+  /**
+   * @deprecated Transitional alias for `cropAssets.he.fullres.dataUrl`.
+   */
+  previewDataUrl: string | null;
+  /**
+   * @deprecated Transitional alias for `checkerboardPreview.dataUrl`.
+   */
+  checkerboardPreviewDataUrl: string | null;
+};
+
+export type CropQcSliceCore = PreprocessSliceBase & DeprecatedCropQcPreviewAliases & {
   cropRect: PreprocessRect | null;
   cropWidth: number | null;
   cropHeight: number | null;
@@ -173,21 +226,67 @@ export type CropQcSlice = PreprocessSliceBase & {
   overlayOpacity: number;
   qcAccepted: boolean;
   issues: CropQcIssue[];
-  eosinPreviewDataUrl: string | null;
-  previewDataUrl: string | null;
-  checkerboardPreviewDataUrl: string | null;
 };
 
-export type ProjectedSpot = {
+export type CanonicalCropQcSlice = CropQcSliceCore & CropQcCanonicalCropState & {
+  checkerboardPreview: CropQcCheckerboardPreview;
+};
+
+/**
+ * Transitional compatibility contract for Task 1.
+ *
+ * Canonical persisted data should include the full crop asset contract, but
+ * existing cold-start project constructors may still omit those fields until
+ * later tasks rewire creation and UI consumption.
+ */
+export type CropQcSlice = CropQcSliceCore & {
+  cropAssets?: CanonicalCropQcSlice["cropAssets"];
+  tissue_hires_scalef?: CanonicalCropQcSlice["tissue_hires_scalef"];
+  tissue_lowres_scalef?: CanonicalCropQcSlice["tissue_lowres_scalef"];
+  spot_diameter_fullres?: CanonicalCropQcSlice["spot_diameter_fullres"];
+  fiducial_diameter_fullres?: CanonicalCropQcSlice["fiducial_diameter_fullres"];
+  checkerboardPreview?: CropQcCheckerboardPreview;
+};
+
+export type ProjectedSpotBase = {
   id: string;
   barcode: string;
   arrayRow: number;
   arrayCol: number;
   x: number;
   y: number;
+};
+
+export type CanonicalProjectedSpotDimensions = {
+  width: number;
+  height: number;
+};
+
+export type DeprecatedProjectedSpotDiameterAliases = {
+  /**
+   * @deprecated Transitional alias for `width`. Remove after downstream spot consumers adopt square geometry.
+   */
   diameterX: number;
+  /**
+   * @deprecated Transitional alias for `height`. Remove after downstream spot consumers adopt square geometry.
+   */
   diameterY: number;
 };
+
+export type CanonicalProjectedSpot = ProjectedSpotBase
+  & CanonicalProjectedSpotDimensions
+  & DeprecatedProjectedSpotDiameterAliases;
+
+/**
+ * Transitional compatibility contract for Task 1.
+ *
+ * `width` / `height` are the intended square-geometry fields, while
+ * `diameterX` / `diameterY` remain available only so existing downstream
+ * callers can continue compiling until the later projection/UI rewiring tasks.
+ */
+export type ProjectedSpot = ProjectedSpotBase
+  & DeprecatedProjectedSpotDiameterAliases
+  & Partial<CanonicalProjectedSpotDimensions>;
 
 export type ChipConfigSlice = PreprocessSliceBase & {
   chipType: string | null;
@@ -198,6 +297,14 @@ export type ChipConfigSlice = PreprocessSliceBase & {
   origin: PreprocessPoint | null;
   rotationDegrees: number;
   projectedSpots: ProjectedSpot[] | null;
+};
+
+export type LegacyProjectedSpot = ProjectedSpotBase
+  & DeprecatedProjectedSpotDiameterAliases
+  & Partial<CanonicalProjectedSpotDimensions>;
+
+export type LegacyChipConfigSlice = Omit<ChipConfigSlice, "projectedSpots"> & {
+  projectedSpots: Array<ProjectedSpot | LegacyProjectedSpot> | null;
 };
 
 export type TissueRegion = {
@@ -236,6 +343,21 @@ export type LegacyTissueSelectionSlice = Omit<TissueSelectionSlice, 'thresholdMo
   thresholdMode: 'dark' | 'light' | 'gray-min';
 };
 
+export type LegacyCropQcSlice = Omit<
+  CropQcSlice,
+  keyof CropQcCanonicalCropState | "checkerboardPreview"
+> & {
+  cropAssets?: CropQcSlice["cropAssets"];
+  tissue_hires_scalef?: CropQcSlice["tissue_hires_scalef"];
+  tissue_lowres_scalef?: CropQcSlice["tissue_lowres_scalef"];
+  spot_diameter_fullres?: CropQcSlice["spot_diameter_fullres"];
+  fiducial_diameter_fullres?: CropQcSlice["fiducial_diameter_fullres"];
+  checkerboardPreview?: CropQcCheckerboardPreview;
+  eosinPreviewDataUrl?: string | null;
+  previewDataUrl?: string | null;
+  checkerboardPreviewDataUrl?: string | null;
+};
+
 export type ExportArtifact = {
   id: string;
   kind: PreprocessExportFormat;
@@ -268,8 +390,10 @@ export type PreprocessProject = {
   exportState: ExportStateSlice;
 };
 
-export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "tissueSelection"> & {
+export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "cropQc" | "chipConfig" | "tissueSelection"> & {
   heFocus?: HeFocusSlice;
+  cropQc: LegacyCropQcSlice;
+  chipConfig: LegacyChipConfigSlice;
   tissueSelection: LegacyTissueSelectionSlice;
 };
 
