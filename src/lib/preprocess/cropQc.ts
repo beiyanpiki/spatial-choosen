@@ -1,5 +1,11 @@
 import { getTransformedRectCorners } from '@/lib/preprocess/imageTransforms';
-import type { AlignmentAffineMatrix, LocalizationImageTransform, PreprocessRect } from '@/types/preprocess';
+import type {
+  AlignmentAffineMatrix,
+  CropQcCanonicalAsset,
+  CropQcCanonicalAssetSet,
+  LocalizationImageTransform,
+  PreprocessRect,
+} from '@/types/preprocess';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -10,9 +16,124 @@ export type CropQcResult = {
   cropRect: PreprocessRect;
   cropWidth: number;
   cropHeight: number;
+  cropAssets: {
+    eosin: CropQcCanonicalAssetSet;
+    he: CropQcCanonicalAssetSet;
+  };
+  tissue_hires_scalef: number;
+  tissue_lowres_scalef: number;
+  spot_diameter_fullres: number | null;
+  fiducial_diameter_fullres: number;
+  checkerboardPreview: {
+    dataUrl: string;
+  };
   eosinCropDataUrl: string;
   heWarpedCropDataUrl: string;
   checkerboardDataUrl: string;
+};
+
+const HIRES_MAX_SIDE = 2000;
+const LOWRES_MAX_SIDE = 800;
+const FIDUCIAL_DIAMETER_FULLRES = 0.027;
+
+const drawCanvas = (source: CanvasImageSource, size: Size) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas context unavailable');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(source, 0, 0, size.width, size.height);
+  return canvas;
+};
+
+const cropCanvas = (
+  source: CanvasImageSource,
+  pixelRect: { x: number; y: number; width: number; height: number },
+) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = pixelRect.width;
+  canvas.height = pixelRect.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Crop canvas context unavailable');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(
+    source,
+    pixelRect.x,
+    pixelRect.y,
+    pixelRect.width,
+    pixelRect.height,
+    0,
+    0,
+    pixelRect.width,
+    pixelRect.height,
+  );
+  return canvas;
+};
+
+const getResizeDownOnlyDimensions = (source: Size, targetMaxSide: number): Size => {
+  const sourceMaxSide = Math.max(source.width, source.height);
+  if (sourceMaxSide <= targetMaxSide) {
+    return source;
+  }
+
+  const scale = targetMaxSide / sourceMaxSide;
+  if (source.width >= source.height) {
+    return {
+      width: targetMaxSide,
+      height: Math.max(1, Math.round(source.height * scale)),
+    };
+  }
+
+  return {
+    width: Math.max(1, Math.round(source.width * scale)),
+    height: targetMaxSide,
+  };
+};
+
+const toCanonicalAsset = (canvas: HTMLCanvasElement): CropQcCanonicalAsset => ({
+  dataUrl: canvas.toDataURL('image/png'),
+});
+
+const buildCanonicalAssetSet = (fullresCanvas: HTMLCanvasElement): {
+  assets: CropQcCanonicalAssetSet;
+  sizes: {
+    fullres: Size;
+    hires: Size;
+    lowres: Size;
+  };
+} => {
+  const fullresSize = { width: fullresCanvas.width, height: fullresCanvas.height };
+  const hiresSize = getResizeDownOnlyDimensions(fullresSize, HIRES_MAX_SIDE);
+  const lowresSize = getResizeDownOnlyDimensions(fullresSize, LOWRES_MAX_SIDE);
+
+  const hiresCanvas = hiresSize.width === fullresCanvas.width && hiresSize.height === fullresCanvas.height
+    ? fullresCanvas
+    : drawCanvas(fullresCanvas, hiresSize);
+  const lowresCanvas = lowresSize.width === fullresCanvas.width && lowresSize.height === fullresCanvas.height
+    ? fullresCanvas
+    : drawCanvas(fullresCanvas, lowresSize);
+
+  return {
+    assets: {
+      fullres: toCanonicalAsset(fullresCanvas),
+      hires: toCanonicalAsset(hiresCanvas),
+      lowres: toCanonicalAsset(lowresCanvas),
+    },
+    sizes: {
+      fullres: fullresSize,
+      hires: hiresSize,
+      lowres: lowresSize,
+    },
+  };
+};
+
+const getScaleFactor = (assetSize: Size, fullresSize: Size) => {
+  const emittedMaxSide = Math.max(assetSize.width, assetSize.height);
+  const fullresMaxSide = Math.max(fullresSize.width, fullresSize.height);
+  return fullresMaxSide > 0 ? emittedMaxSide / fullresMaxSide : 1;
 };
 
 const loadImage = (dataUrl: string) => new Promise<HTMLImageElement>((resolve, reject) => {
@@ -164,52 +285,38 @@ export async function runCropQc(args: {
   const normalized = normalizeRect(args.chipBounds, args.imageTransform, { width: eosin.width, height: eosin.height });
   const warpedHeCanvas = makeWarpedHe(args.cv, he.canvas, args.affineMatrix, { width: eosin.width, height: eosin.height });
 
-  const eosinCrop = document.createElement('canvas');
-  eosinCrop.width = normalized.pixelRect.width;
-  eosinCrop.height = normalized.pixelRect.height;
-  const eosinCropCtx = eosinCrop.getContext('2d');
-  if (!eosinCropCtx) throw new Error('Eosin crop context unavailable');
-  eosinCropCtx.imageSmoothingEnabled = true;
-  eosinCropCtx.imageSmoothingQuality = 'high';
-  eosinCropCtx.drawImage(
-    eosin.canvas,
-    normalized.pixelRect.x,
-    normalized.pixelRect.y,
-    normalized.pixelRect.width,
-    normalized.pixelRect.height,
-    0,
-    0,
-    normalized.pixelRect.width,
-    normalized.pixelRect.height,
-  );
-
-  const heCrop = document.createElement('canvas');
-  heCrop.width = normalized.pixelRect.width;
-  heCrop.height = normalized.pixelRect.height;
-  const heCropCtx = heCrop.getContext('2d');
-  if (!heCropCtx) throw new Error('HE crop context unavailable');
-  heCropCtx.imageSmoothingEnabled = true;
-  heCropCtx.imageSmoothingQuality = 'high';
-  heCropCtx.drawImage(
-    warpedHeCanvas,
-    normalized.pixelRect.x,
-    normalized.pixelRect.y,
-    normalized.pixelRect.width,
-    normalized.pixelRect.height,
-    0,
-    0,
-    normalized.pixelRect.width,
-    normalized.pixelRect.height,
-  );
+  const eosinCrop = cropCanvas(eosin.canvas, normalized.pixelRect);
+  const heCrop = cropCanvas(warpedHeCanvas, normalized.pixelRect);
+  const eosinAssetSet = buildCanonicalAssetSet(eosinCrop);
+  const heAssetSet = buildCanonicalAssetSet(heCrop);
+  const cropAssets = {
+    eosin: eosinAssetSet.assets,
+    he: heAssetSet.assets,
+  };
 
   const checkerboardDataUrl = makeCheckerboard(eosinCrop, heCrop);
+  const checkerboardPreview = {
+    dataUrl: checkerboardDataUrl,
+  };
+  const fullresSize = heAssetSet.sizes.fullres;
+  const tissue_hires_scalef = getScaleFactor(heAssetSet.sizes.hires, fullresSize);
+  const tissue_lowres_scalef = getScaleFactor(heAssetSet.sizes.lowres, fullresSize);
+  // Exact spot square side length depends on chip projection inputs that are not available in Crop/QC yet.
+  // Leave it pending here so chip projection can perform the first authoritative write.
+  const spot_diameter_fullres = null;
 
   return {
     cropRect: normalized.rect,
     cropWidth: normalized.pixelRect.width,
     cropHeight: normalized.pixelRect.height,
-    eosinCropDataUrl: eosinCrop.toDataURL('image/png'),
-    heWarpedCropDataUrl: heCrop.toDataURL('image/png'),
+    cropAssets,
+    tissue_hires_scalef,
+    tissue_lowres_scalef,
+    spot_diameter_fullres,
+    fiducial_diameter_fullres: FIDUCIAL_DIAMETER_FULLRES,
+    checkerboardPreview,
+    eosinCropDataUrl: cropAssets.eosin.fullres.dataUrl,
+    heWarpedCropDataUrl: cropAssets.he.fullres.dataUrl,
     checkerboardDataUrl,
   } satisfies CropQcResult;
 }
