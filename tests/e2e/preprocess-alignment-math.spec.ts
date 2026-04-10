@@ -302,3 +302,173 @@ test('dangerous continue can refit from current inliers while preserving fixed c
   expect(scaleX).toBeCloseTo(scaleY, 3);
   expect(resolvedScale).toBeCloseTo(expectedCropScale, 2);
 });
+
+test('similarity transform: should produce uniform scale (scaleX equals scaleY)', () => {
+  const angle = 30 * (Math.PI / 180);
+  const scale = 2.0;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const normalizedAffine: AlignmentAffineMatrix = [
+    scale * cos, -scale * sin, 0.5,
+    scale * sin, scale * cos, -0.3
+  ];
+
+  const controlPoints: AlignmentControlPoint[] = [
+    { id: '1', target: { x: 0.1, y: 0.1 }, source: { x: 0.2, y: 0.2 } },
+    { id: '2', target: { x: 0.9, y: 0.1 }, source: { x: 0.8, y: 0.2 } },
+    { id: '3', target: { x: 0.1, y: 0.9 }, source: { x: 0.2, y: 0.8 } },
+    { id: '4', target: { x: 0.9, y: 0.9 }, source: { x: 0.8, y: 0.8 } },
+    { id: '5', target: { x: 0.5, y: 0.2 }, source: { x: 0.6, y: 0.3 } },
+    { id: '6', target: { x: 0.2, y: 0.5 }, source: { x: 0.3, y: 0.6 } },
+    { id: '7', target: { x: 0.8, y: 0.5 }, source: { x: 0.7, y: 0.6 } }
+  ];
+
+  const result = solveAffineAlignment({
+    cv: createMockCv(normalizedAffine),
+    controlPoints,
+    chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+    referenceImageSize: { width: 1000, height: 1000 },
+    movingImageSize: { width: 1000, height: 1000 }
+  });
+
+  expect(result.solveAccepted).toBe(true);
+  expect(result.affineMatrix).not.toBeNull();
+
+  const scaleX = Math.hypot(result.affineMatrix![0], result.affineMatrix![3]);
+  const scaleY = Math.hypot(result.affineMatrix![1], result.affineMatrix![4]);
+  const scaleRatio = scaleX / scaleY;
+  expect(scaleRatio).toBeCloseTo(1.0, 2);
+
+  expect(result.transform).not.toBeNull();
+  expect(result.transform!.isUniformScale).toBe(true);
+});
+
+test('similarity transform: should not produce shear (rotation consistency check)', () => {
+  const angle = 45 * (Math.PI / 180);
+  const scale = 1.5;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const normalizedAffine: AlignmentAffineMatrix = [
+    scale * cos, -scale * sin, 0.1,
+    scale * sin, scale * cos, -0.1
+  ];
+
+  const controlPoints: AlignmentControlPoint[] = [
+    { id: '1', target: { x: 0.1, y: 0.1 }, source: { x: 0.2, y: 0.2 } },
+    { id: '2', target: { x: 0.9, y: 0.1 }, source: { x: 0.8, y: 0.2 } },
+    { id: '3', target: { x: 0.1, y: 0.9 }, source: { x: 0.2, y: 0.8 } },
+    { id: '4', target: { x: 0.9, y: 0.9 }, source: { x: 0.8, y: 0.8 } },
+    { id: '5', target: { x: 0.5, y: 0.5 }, source: { x: 0.6, y: 0.6 } },
+    { id: '6', target: { x: 0.3, y: 0.7 }, source: { x: 0.4, y: 0.7 } },
+    { id: '7', target: { x: 0.7, y: 0.3 }, source: { x: 0.7, y: 0.4 } }
+  ];
+
+  const result = solveAffineAlignment({
+    cv: createMockCv(normalizedAffine),
+    controlPoints,
+    chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+    referenceImageSize: { width: 1000, height: 1000 },
+    movingImageSize: { width: 1000, height: 1000 }
+  });
+
+  expect(result.solveAccepted).toBe(true);
+
+  if (result.solveAccepted && result.affineMatrix) {
+    const [m00, m01, , m10, m11] = result.affineMatrix;
+    const scaleX = Math.hypot(m00, m10);
+    const scaleY = Math.hypot(m01, m11);
+
+    const rotation1 = Math.atan2(m10 / scaleX, m00 / scaleX);
+    const rotation2 = Math.atan2(-m01 / scaleY, m11 / scaleY);
+
+    expect(Math.abs(rotation1 - rotation2)).toBeLessThan(0.01);
+  }
+});
+
+test('similarity transform: isUniformScale flag is set correctly', () => {
+  const controlPoints: AlignmentControlPoint[] = [
+    { id: '1', target: { x: 0.1, y: 0.1 }, source: { x: 0.2, y: 0.2 } },
+    { id: '2', target: { x: 0.9, y: 0.1 }, source: { x: 0.8, y: 0.2 } },
+    { id: '3', target: { x: 0.1, y: 0.9 }, source: { x: 0.2, y: 0.8 } },
+    { id: '4', target: { x: 0.9, y: 0.9 }, source: { x: 0.8, y: 0.8 } },
+    { id: '5', target: { x: 0.5, y: 0.2 }, source: { x: 0.6, y: 0.3 } },
+    { id: '6', target: { x: 0.2, y: 0.5 }, source: { x: 0.3, y: 0.6 } },
+    { id: '7', target: { x: 0.8, y: 0.5 }, source: { x: 0.7, y: 0.6 } }
+  ];
+
+  const angle = 15 * (Math.PI / 180);
+  const scale = 1.8;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const normalizedAffine: AlignmentAffineMatrix = [
+    scale * cos, -scale * sin, 0.2,
+    scale * sin, scale * cos, 0.1
+  ];
+
+  const result = solveAffineAlignment({
+    cv: createMockCv(normalizedAffine),
+    controlPoints,
+    chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+    referenceImageSize: { width: 1000, height: 1000 },
+    movingImageSize: { width: 1000, height: 1000 }
+  });
+
+  expect(result.solveAccepted).toBe(true);
+  expect(result.transform).not.toBeNull();
+  expect(result.transform!.isUniformScale).toBe(true);
+});
+
+test('similarity transform: has positive determinant (no reflection)', () => {
+  const angle = 60 * (Math.PI / 180);
+  const scale = 1.2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const normalizedAffine: AlignmentAffineMatrix = [
+    scale * cos, -scale * sin, 0.0,
+    scale * sin, scale * cos, 0.0
+  ];
+
+  const controlPoints: AlignmentControlPoint[] = [
+    { id: '1', target: { x: 0.1, y: 0.1 }, source: { x: 0.15, y: 0.12 } },
+    { id: '2', target: { x: 0.9, y: 0.1 }, source: { x: 0.88, y: 0.15 } },
+    { id: '3', target: { x: 0.1, y: 0.9 }, source: { x: 0.12, y: 0.88 } },
+    { id: '4', target: { x: 0.9, y: 0.9 }, source: { x: 0.88, y: 0.88 } },
+    { id: '5', target: { x: 0.5, y: 0.1 }, source: { x: 0.52, y: 0.13 } },
+    { id: '6', target: { x: 0.1, y: 0.5 }, source: { x: 0.12, y: 0.52 } },
+    { id: '7', target: { x: 0.9, y: 0.5 }, source: { x: 0.88, y: 0.52 } }
+  ];
+
+  const result = solveAffineAlignment({
+    cv: createMockCv(normalizedAffine),
+    controlPoints,
+    chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+    referenceImageSize: { width: 1000, height: 1000 },
+    movingImageSize: { width: 1000, height: 1000 }
+  });
+
+  expect(result.solveAccepted).toBe(true);
+  expect(result.affineMatrix).not.toBeNull();
+
+  const [m00, m01, , m10, m11] = result.affineMatrix!;
+  const determinant = m00 * m11 - m01 * m10;
+  expect(determinant).toBeGreaterThan(0);
+});
+
+test('similarity transform: handles insufficient control points', () => {
+  const controlPoints: AlignmentControlPoint[] = [
+    { id: '1', target: { x: 0.1, y: 0.1 }, source: { x: 0.2, y: 0.2 } },
+    { id: '2', target: { x: 0.9, y: 0.1 }, source: { x: 0.8, y: 0.2 } }
+  ];
+
+  const result = solveAffineAlignment({
+    cv: createMockCv([1, 0, 0, 0, 1, 0]),
+    controlPoints,
+    chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+    referenceImageSize: { width: 1000, height: 1000 },
+    movingImageSize: { width: 1000, height: 1000 }
+  });
+
+  expect(result.solveAccepted).toBe(false);
+  expect(result.failureReason).toBe('insufficient-pairs');
+  expect(result.transform).toBeNull();
+});
