@@ -787,7 +787,6 @@ export function solveAffineAlignment({
 	let fromMat: CvMat | null = null;
 	let toMat: CvMat | null = null;
 	let inlierMaskMat: CvMat | null = null;
-	let affineMat: CvMat | null = null;
 
 	let affineMatrix: AlignmentAffineMatrix | null = null;
 	let solveFailed = false;
@@ -1058,7 +1057,6 @@ export function solveAffineAlignment({
 			failureReason,
 		};
 	} finally {
-		affineMat?.delete();
 		inlierMaskMat?.delete();
 		fromMat?.delete();
 		toMat?.delete();
