@@ -484,6 +484,169 @@ const solveRobustSimilarityTransform = (
 	return evaluateCandidateFit(fromPoints, toPoints, refinedFit, threshold);
 };
 
+/**
+ * Check if a similarity transform matrix has uniform scale (isotropic).
+ * For similarity transforms, scaleX should equal scaleY.
+ * @param matrix - The 6-element affine matrix [m00, m01, tx, m10, m11, ty]
+ * @param tolerance - Maximum allowed ratio between scales (default 1.01 = 1% tolerance)
+ * @returns true if scale is uniform within tolerance
+ */
+const hasUniformScale = (
+	matrix: AlignmentAffineMatrix,
+	tolerance = 1.01,
+): boolean => {
+	const scaleX = Math.hypot(matrix[0], matrix[3]);
+	const scaleY = Math.hypot(matrix[1], matrix[4]);
+	const minScale = Math.max(1e-10, Math.min(scaleX, scaleY));
+	const maxScale = Math.max(scaleX, scaleY);
+	return maxScale / minScale <= tolerance;
+};
+
+/**
+ * Check if a transform matrix contains reflection (negative determinant).
+ * Similarity transforms should have positive determinant (no flips).
+ * @param matrix - The 6-element affine matrix [m00, m01, tx, m10, m11, ty]
+ * @returns true if the matrix has positive determinant (no reflection)
+ */
+const hasNoReflection = (matrix: AlignmentAffineMatrix): boolean => {
+	// For 2x2 matrix [a b; c d], determinant = ad - bc
+	// Matrix layout: [m00, m01, tx, m10, m11, ty]
+	const m00 = matrix[0];
+	const m01 = matrix[1];
+	const m10 = matrix[3];
+	const m11 = matrix[4];
+	const determinant = m00 * m11 - m01 * m10;
+	return determinant > 0;
+};
+
+/**
+ * RANSAC-style robust similarity transform solver that explicitly avoids reflections.
+ * Similar to solveRobustSimilarityTransform but forces reflected: false.
+ * @param fromPoints - Source points
+ * @param toPoints - Destination points
+ * @param threshold - Inlier threshold in pixels
+ * @returns CandidateFit with matrix, rmse, inliers, or null if failed
+ */
+const solveRobustSimilarityTransformNoReflection = (
+	fromPoints: readonly PixelPoint[],
+	toPoints: readonly PixelPoint[],
+	threshold: number,
+): CandidateFit | null => {
+	if (fromPoints.length !== toPoints.length || fromPoints.length < 2) return null;
+
+	let bestCandidate: CandidateFit | null = null;
+	let bestErrorSum = Number.POSITIVE_INFINITY;
+
+	// Iterate over all point pairs to find best transform (RANSAC-style)
+	for (let left = 0; left < fromPoints.length - 1; left += 1) {
+		for (let right = left + 1; right < fromPoints.length; right += 1) {
+			// Use only non-reflected variant to avoid flips
+			const pairFit = solveLeastSquaresSimilarityTransformVariant(
+				[fromPoints[left], fromPoints[right]],
+				[toPoints[left], toPoints[right]],
+				{ reflected: false },
+			);
+			if (!pairFit) continue;
+
+			const candidate = evaluateCandidateFit(
+				fromPoints,
+				toPoints,
+				pairFit,
+				threshold,
+			);
+
+			// Compute error sum for comparison
+			const errorSum = candidate.inlierIndices.reduce((sum, index) => {
+				const from = fromPoints[index];
+				const to = toPoints[index];
+				const projectedX =
+					candidate.matrix[0] * from.x +
+					candidate.matrix[1] * from.y +
+					candidate.matrix[2];
+				const projectedY =
+					candidate.matrix[3] * from.x +
+					candidate.matrix[4] * from.y +
+					candidate.matrix[5];
+				return sum + (projectedX - to.x) ** 2 + (projectedY - to.y) ** 2;
+			}, 0);
+
+			// Prefer more inliers, then lower error
+			if (
+				!bestCandidate ||
+				candidate.inlierIndices.length > bestCandidate.inlierIndices.length ||
+				(candidate.inlierIndices.length === bestCandidate.inlierIndices.length &&
+					errorSum < bestErrorSum)
+			) {
+				bestCandidate = candidate;
+				bestErrorSum = errorSum;
+			}
+		}
+	}
+
+	if (!bestCandidate || bestCandidate.inlierIndices.length < 2) {
+		return null;
+	}
+
+	// Refine using all inliers with least squares (non-reflected only)
+	const refinedFit = solveLeastSquaresSimilarityTransformVariant(
+		bestCandidate.inlierIndices.map((index) => fromPoints[index]),
+		bestCandidate.inlierIndices.map((index) => toPoints[index]),
+		{ reflected: false },
+	);
+
+	if (!refinedFit) {
+		return bestCandidate;
+	}
+
+	return evaluateCandidateFit(fromPoints, toPoints, refinedFit, threshold);
+};
+
+/**
+ * Solve alignment using similarity transform with strict constraints:
+ * - Uniform scale only (isotropic, no anisotropic stretching)
+ * - No reflections (positive determinant required)
+ * - Robust to outliers via RANSAC-style pair-wise iteration
+ *
+ * This is the PRIMARY similarity transform solver that should replace
+ * affine transform when similarity constraints are desired.
+ *
+ * @param fromPoints - Source control points
+ * @param toPoints - Destination control points
+ * @param threshold - Inlier threshold in pixels for RANSAC
+ * @returns Object with matrix (null if constraints violated), inlierMask, and rmse
+ */
+const solveConstrainedSimilarityTransform = (
+	fromPoints: readonly PixelPoint[],
+	toPoints: readonly PixelPoint[],
+	threshold: number,
+): { matrix: AlignmentAffineMatrix | null; inlierMask: boolean[] | null; rmse: number } => {
+	// First attempt: use robust solver without reflections
+	const candidate = solveRobustSimilarityTransformNoReflection(fromPoints, toPoints, threshold);
+
+	if (!candidate) {
+		return { matrix: null, inlierMask: null, rmse: Number.POSITIVE_INFINITY };
+	}
+
+	// Validate constraints
+	const isUniformScale = hasUniformScale(candidate.matrix);
+	const isNoReflection = hasNoReflection(candidate.matrix);
+
+	if (!isUniformScale || !isNoReflection) {
+		// Constraints violated - return null matrix but still provide diagnostics
+		return {
+			matrix: null,
+			inlierMask: candidate.inlierMask,
+			rmse: candidate.rmse,
+		};
+	}
+
+	return {
+		matrix: candidate.matrix,
+		inlierMask: candidate.inlierMask,
+		rmse: candidate.rmse,
+	};
+};
+
 const getAnisotropyRatio = (matrix: AlignmentAffineMatrix | null) => {
 	if (!matrix) return Number.POSITIVE_INFINITY;
 	const scaleX = Math.hypot(matrix[0], matrix[3]);
