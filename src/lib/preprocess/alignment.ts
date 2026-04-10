@@ -294,6 +294,101 @@ const solveLeastSquaresBestSimilarityTransform = (
 	);
 };
 
+const solveFixedScaleSimilarityTransformVariant = (
+	fromPoints: readonly PixelPoint[],
+	toPoints: readonly PixelPoint[],
+	scale: number,
+	options: { reflected: boolean },
+): AffineFit | null => {
+	if (fromPoints.length !== toPoints.length || fromPoints.length < 2) return null;
+	if (!Number.isFinite(scale) || scale <= 0) return null;
+
+	const fromCenter = fromPoints.reduce(
+		(acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y }),
+		{ x: 0, y: 0 },
+	);
+	fromCenter.x /= fromPoints.length;
+	fromCenter.y /= fromPoints.length;
+
+	const toCenter = toPoints.reduce(
+		(acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y }),
+		{ x: 0, y: 0 },
+	);
+	toCenter.x /= toPoints.length;
+	toCenter.y /= toPoints.length;
+
+	let dot = 0;
+	let cross = 0;
+	for (let index = 0; index < fromPoints.length; index += 1) {
+		const from = fromPoints[index];
+		const to = toPoints[index];
+		const dx = from.x - fromCenter.x;
+		const dy = from.y - fromCenter.y;
+		const ux = to.x - toCenter.x;
+		const uy = to.y - toCenter.y;
+
+		if (options.reflected) {
+			dot += dx * ux - dy * uy;
+			cross += dx * uy + dy * ux;
+		} else {
+			dot += dx * ux + dy * uy;
+			cross += dx * uy - dy * ux;
+		}
+	}
+
+	const rotationRadians = Math.atan2(cross, dot);
+	const cosine = Math.cos(rotationRadians);
+	const sine = Math.sin(rotationRadians);
+	const matrix: AlignmentAffineMatrix = options.reflected
+		? [
+				scale * cosine,
+				scale * sine,
+				0,
+				scale * sine,
+				-scale * cosine,
+				0,
+			]
+		: [
+				scale * cosine,
+				-scale * sine,
+				0,
+				scale * sine,
+				scale * cosine,
+				0,
+			];
+
+	matrix[2] =
+		toCenter.x - matrix[0] * fromCenter.x - matrix[1] * fromCenter.y;
+	matrix[5] =
+		toCenter.y - matrix[3] * fromCenter.x - matrix[4] * fromCenter.y;
+
+	return {
+		matrix,
+		rmse: computeReprojectionRmse(fromPoints, toPoints, matrix),
+	};
+};
+
+const solveBestFixedScaleSimilarityTransform = (
+	fromPoints: readonly PixelPoint[],
+	toPoints: readonly PixelPoint[],
+	scale: number,
+): AffineFit | null => {
+	const candidates = [
+		solveFixedScaleSimilarityTransformVariant(fromPoints, toPoints, scale, {
+			reflected: false,
+		}),
+		solveFixedScaleSimilarityTransformVariant(fromPoints, toPoints, scale, {
+			reflected: true,
+		}),
+	].filter((candidate): candidate is AffineFit => candidate !== null);
+
+	if (candidates.length === 0) return null;
+
+	return candidates.reduce((best, candidate) =>
+		candidate.rmse < best.rmse ? candidate : best,
+	);
+};
+
 const evaluateCandidateFit = (
 	fromPoints: readonly PixelPoint[],
 	toPoints: readonly PixelPoint[],
@@ -397,8 +492,34 @@ const getAnisotropyRatio = (matrix: AlignmentAffineMatrix | null) => {
 	return Math.max(scaleX, scaleY) / minScale;
 };
 
+const getAverageScale = (matrix: AlignmentAffineMatrix | null) => {
+	if (!matrix) return Number.NaN;
+	const scaleX = Math.hypot(matrix[0], matrix[3]);
+	const scaleY = Math.hypot(matrix[1], matrix[4]);
+	return (scaleX + scaleY) / 2;
+};
+
 const isApproximatelySquare = (size: { width: number; height: number }) =>
 	Math.abs(size.width - size.height) <= Math.max(1, 0.01 * Math.min(size.width, size.height));
+
+const getExpectedCropScale = (
+	chipBounds: PreprocessRect | null,
+	referenceImageSize: { width: number; height: number },
+	movingImageSize: { width: number; height: number },
+) => {
+	if (!chipBounds) return null;
+	const scaleX = (chipBounds.width * referenceImageSize.width) / movingImageSize.width;
+	const scaleY = (chipBounds.height * referenceImageSize.height) / movingImageSize.height;
+	if (
+		!Number.isFinite(scaleX) ||
+		!Number.isFinite(scaleY) ||
+		scaleX <= 0 ||
+		scaleY <= 0
+	) {
+		return null;
+	}
+	return (scaleX + scaleY) / 2;
+};
 
 const getRansacThreshold = (width: number, height: number) =>
 	clamp(0.003 * Math.min(width, height), 3, 12);
@@ -485,8 +606,9 @@ export type SolveAffineAlignmentInput = {
 	chipBounds: PreprocessRect | null;
 	referenceImageSize: { width: number; height: number };
 	movingImageSize: { width: number; height: number };
-	solveMode?: "ransac" | "allPoints";
+	solveMode?: "ransac" | "allPoints" | "inlierSubset";
 	forceMode?: boolean;
+	seedInlierMask?: readonly boolean[] | null;
 };
 
 export type SolveAffineAlignmentOutput = {
@@ -509,6 +631,7 @@ export function solveAffineAlignment({
 	movingImageSize,
 	solveMode = "ransac",
 	forceMode = false,
+	seedInlierMask = null,
 }: SolveAffineAlignmentInput): SolveAffineAlignmentOutput {
 	const effectiveSolveMode = forceMode ? "allPoints" : solveMode;
 	const pointCount = controlPoints.length;
@@ -569,6 +692,7 @@ export function solveAffineAlignment({
 	let solveFailed = false;
 	let inlierMask: boolean[] = Array.from({ length: pointCount }, () => false);
 	let inlierIndices: number[] = [];
+	let usedFixedCropScale = false;
 
 	try {
 		if (
@@ -593,6 +717,31 @@ export function solveAffineAlignment({
 				affineMatrix = fitted.matrix;
 				inlierMask = Array.from({ length: pointCount }, () => true);
 				inlierIndices = sourcePixels.map((_, index) => index);
+			} else {
+				affineMatrix = null;
+				solveFailed = true;
+			}
+		} else if (effectiveSolveMode === "inlierSubset") {
+			const validSeedMask =
+				seedInlierMask?.length === pointCount
+					? Array.from(seedInlierMask, Boolean)
+					: Array.from({ length: pointCount }, () => true);
+			const seededIndices = validSeedMask
+				.map((isInlier, index) => (isInlier ? index : -1))
+				.filter((index) => index >= 0);
+			const solveIndices = seededIndices.length >= 2
+				? seededIndices
+				: sourcePixels.map((_, index) => index);
+			const fitted = solveLeastSquaresAffineTransform(
+				solveIndices.map((index) => movingPixels[index]),
+				solveIndices.map((index) => sourcePixels[index]),
+			);
+			if (fitted) {
+				affineMatrix = fitted.matrix;
+				inlierMask = Array.from({ length: pointCount }, (_, index) =>
+					solveIndices.includes(index),
+				);
+				inlierIndices = solveIndices;
 			} else {
 				affineMatrix = null;
 				solveFailed = true;
@@ -643,17 +792,49 @@ export function solveAffineAlignment({
 			}
 		}
 
-		if (
-			effectiveSolveMode !== "allPoints" &&
-			isApproximatelySquare(movingImageSize)
-		) {
-			const similarityCandidate = solveRobustSimilarityTransform(
-				movingPixels,
-				sourcePixels,
-				ransacReprojThreshold,
+		if (isApproximatelySquare(movingImageSize)) {
+			const similaritySupportIndices =
+				inlierIndices.length >= 2
+					? inlierIndices
+					: movingPixels.map((_, index) => index);
+			const expectedCropScale = getExpectedCropScale(
+				chipBounds,
+				referenceImageSize,
+				movingImageSize,
 			);
+			const fixedScaleFit = expectedCropScale
+				? solveBestFixedScaleSimilarityTransform(
+						similaritySupportIndices.map((index) => movingPixels[index]),
+						similaritySupportIndices.map((index) => sourcePixels[index]),
+						expectedCropScale,
+					)
+				: null;
+			const similarityCandidate = fixedScaleFit
+				? null
+				: solveRobustSimilarityTransform(
+						movingPixels,
+						sourcePixels,
+						ransacReprojThreshold,
+					);
+			const currentAverageScale = getAverageScale(affineMatrix);
+			const fixedScaleFitFinite = fixedScaleFit
+				? fixedScaleFit.matrix.every((value) => Number.isFinite(value))
+				: false;
+			const shouldPreferFixedScaleSimilarity =
+				fixedScaleFitFinite &&
+				(
+					affineMatrix === null ||
+					getAnisotropyRatio(affineMatrix) > 1.2 ||
+					(expectedCropScale !== null &&
+						Math.abs(currentAverageScale - expectedCropScale) >
+							expectedCropScale * 0.05)
+				);
 
-			if (similarityCandidate) {
+			if (fixedScaleFit && shouldPreferFixedScaleSimilarity) {
+				affineMatrix = fixedScaleFit.matrix;
+				usedFixedCropScale = true;
+				solveFailed = false;
+			} else if (similarityCandidate) {
 				const similarityFinite = similarityCandidate.matrix.every((value) =>
 					Number.isFinite(value),
 				);
@@ -684,7 +865,13 @@ export function solveAffineAlignment({
 					similarityScaleRange &&
 					similarityInlierRatio &&
 					similarityRmseOk &&
-					(affineMatrix === null || getAnisotropyRatio(affineMatrix) > 1.2);
+					(
+						affineMatrix === null ||
+						getAnisotropyRatio(affineMatrix) > 1.2 ||
+						(expectedCropScale !== null &&
+							Math.abs(currentAverageScale - expectedCropScale) >
+								expectedCropScale * 0.05)
+					);
 
 				if (shouldPreferSimilarity) {
 					affineMatrix = similarityCandidate.matrix;
@@ -743,6 +930,7 @@ export function solveAffineAlignment({
 		qualityFlags.rmse =
 			reprojectionRmse !== null &&
 			reprojectionRmse <= ALIGNMENT_RMSE_MULTIPLIER * ransacReprojThreshold;
+		const effectiveRmseGate = qualityFlags.rmse || usedFixedCropScale;
 		const hasSufficientCoverage = !computeCoverageWarning(
 			controlPoints,
 			chipBounds,
@@ -750,19 +938,21 @@ export function solveAffineAlignment({
 		qualityFlags.accepted =
 			qualityFlags.minPairs &&
 			qualityFlags.inlierRatio &&
-			qualityFlags.rmse &&
+			effectiveRmseGate &&
 			qualityFlags.finiteMatrix &&
 			qualityFlags.scaleRange &&
 			hasSufficientCoverage;
 
-		const solveAccepted = effectiveSolveMode === "allPoints"
+		const solveAccepted = effectiveSolveMode === "allPoints" || effectiveSolveMode === "inlierSubset"
 			? finiteMatrix && affineMatrix !== null
 			: qualityFlags.accepted;
 
-		const failureReason = effectiveSolveMode === "allPoints"
+		const failureReason = effectiveSolveMode === "allPoints" || effectiveSolveMode === "inlierSubset"
 			? null
 			: hasSufficientCoverage
-				? resolveFailureReason(qualityFlags, solveFailed)
+				? (usedFixedCropScale && !qualityFlags.rmse
+						? null
+						: resolveFailureReason(qualityFlags, solveFailed))
 				: "insufficient-inliers";
 
 		return {

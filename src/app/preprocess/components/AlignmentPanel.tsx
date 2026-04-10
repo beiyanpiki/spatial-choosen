@@ -949,7 +949,10 @@ export function AlignmentPanel({
 		movingImage.height;
 
 	const solveAlignment = useCallback(
-		async (solveMode: "ransac" | "allPoints" = "ransac") => {
+		async (
+			solveMode: "ransac" | "allPoints" | "inlierSubset" = "ransac",
+			seedInlierMask?: readonly boolean[] | null,
+		) => {
 			if (
 				!referenceImage?.width ||
 				!referenceImage.height ||
@@ -981,6 +984,7 @@ export function AlignmentPanel({
 						height: movingImage.height,
 					},
 					solveMode,
+					seedInlierMask,
 				});
 
 				onAlignmentChange((current) => ({
@@ -1031,6 +1035,11 @@ export function AlignmentPanel({
 	);
 
 	const acceptRejectedSolve = useCallback(() => {
+		if (alignment.inlierMask?.some((isInlier) => isInlier)) {
+			void solveAlignment("inlierSubset", alignment.inlierMask);
+			return;
+		}
+
 		onAlignmentChange((current) => ({
 			...current,
 			solveAccepted: true,
@@ -1045,7 +1054,21 @@ export function AlignmentPanel({
 			updatedAt: new Date().toISOString(),
 			error: null,
 		}));
-	}, [movingImage?.dataUrl, onAlignmentChange, referenceImage?.dataUrl]);
+	}, [
+		alignment.inlierMask,
+		movingImage?.dataUrl,
+		onAlignmentChange,
+		referenceImage?.dataUrl,
+		solveAlignment,
+	]);
+
+	const hasOutlierPoints = alignment.inlierMask?.some((isInlier) => !isInlier) ?? false;
+	const showDangerousRecoveryActions = Boolean(
+		(alignment.failureReason && !alignment.solveAccepted) || hasOutlierPoints,
+	);
+	const continueCurrentSolveLabel = alignment.solveAccepted
+		? "Continue with current solve (dangerous)"
+		: "Accept rejected solve (dangerous)";
 
 	if (!referenceImage?.dataUrl || !movingImage?.dataUrl) {
 		return (
@@ -1314,7 +1337,7 @@ export function AlignmentPanel({
 					>
 						Solve alignment
 					</Button>
-					{alignment.failureReason && !alignment.solveAccepted ? (
+					{showDangerousRecoveryActions ? (
 						<>
 							<Button
 								size="sm"
@@ -1322,9 +1345,13 @@ export function AlignmentPanel({
 								variant="outline"
 								onClick={acceptRejectedSolve}
 								isDisabled={!canSolve}
-								data-testid="alignment-accept-rejected-solve"
+								data-testid={
+									alignment.solveAccepted
+										? "alignment-continue-current-solve"
+										: "alignment-accept-rejected-solve"
+								}
 							>
-								Accept rejected solve (dangerous)
+								{continueCurrentSolveLabel}
 							</Button>
 							<Button
 								size="sm"
@@ -1638,7 +1665,7 @@ export function AlignmentPanel({
 						{runtimeError}
 					</Text>
 				) : null}
-				{alignment.failureReason && !alignment.solveAccepted ? (
+				{showDangerousRecoveryActions ? (
 					<Box
 						border="1px solid"
 						borderColor="red.200"
@@ -1652,13 +1679,19 @@ export function AlignmentPanel({
 								Warning: Precision loss risk
 							</Text>
 							<Text fontSize="sm" color="red.700">
-								The alignment quality checks failed ({alignment.failureReason}).
-								&ldquo;Accept rejected solve&rdquo; keeps the current rejected
-								RANSAC result and lets you continue anyway. &ldquo;Recompute
-								with all points&rdquo; skips outlier detection and computes a
-								new transformation from every control point, including the red
-								outliers. Both options may reduce accuracy and should only be
-								used if you understand the risks.
+								{alignment.failureReason && !alignment.solveAccepted
+									? `The alignment quality checks failed (${alignment.failureReason}). `
+									: "The current solve marked some control points as outliers. "}
+								&ldquo;
+								{alignment.solveAccepted
+									? "Continue with current solve"
+									: "Accept rejected solve"}
+								&rdquo;
+								keeps the current RANSAC result. &ldquo;Recompute with all points&rdquo;
+								skips outlier detection and computes a new transformation from
+								every control point, including the red outliers. Both options
+								may reduce accuracy and should only be used if you understand
+								the risks.
 							</Text>
 						</Stack>
 					</Box>
