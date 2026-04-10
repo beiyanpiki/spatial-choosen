@@ -491,7 +491,7 @@ const solveRobustSimilarityTransform = (
  * @param tolerance - Maximum allowed ratio between scales (default 1.01 = 1% tolerance)
  * @returns true if scale is uniform within tolerance
  */
-const hasUniformScale = (
+export const hasUniformScale = (
 	matrix: AlignmentAffineMatrix,
 	tolerance = 1.01,
 ): boolean => {
@@ -508,7 +508,7 @@ const hasUniformScale = (
  * @param matrix - The 6-element affine matrix [m00, m01, tx, m10, m11, ty]
  * @returns true if the matrix has positive determinant (no reflection)
  */
-const hasNoReflection = (matrix: AlignmentAffineMatrix): boolean => {
+export const hasNoReflection = (matrix: AlignmentAffineMatrix): boolean => {
 	// For 2x2 matrix [a b; c d], determinant = ad - bc
 	// Matrix layout: [m00, m01, tx, m10, m11, ty]
 	const m00 = matrix[0];
@@ -527,7 +527,7 @@ const hasNoReflection = (matrix: AlignmentAffineMatrix): boolean => {
  * @param threshold - Inlier threshold in pixels
  * @returns CandidateFit with matrix, rmse, inliers, or null if failed
  */
-const solveRobustSimilarityTransformNoReflection = (
+export const solveRobustSimilarityTransformNoReflection = (
 	fromPoints: readonly PixelPoint[],
 	toPoints: readonly PixelPoint[],
 	threshold: number,
@@ -615,7 +615,7 @@ const solveRobustSimilarityTransformNoReflection = (
  * @param threshold - Inlier threshold in pixels for RANSAC
  * @returns Object with matrix (null if constraints violated), inlierMask, and rmse
  */
-const solveConstrainedSimilarityTransform = (
+export const solveConstrainedSimilarityTransform = (
 	fromPoints: readonly PixelPoint[],
 	toPoints: readonly PixelPoint[],
 	threshold: number,
