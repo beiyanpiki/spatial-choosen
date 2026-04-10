@@ -120,6 +120,7 @@ export type AlignmentTransform = {
   rotationDegrees: number;
   scaleX: number;
   scaleY: number;
+  isUniformScale?: boolean;
 };
 
 export type AlignmentAffineMatrix = [number, number, number, number, number, number];

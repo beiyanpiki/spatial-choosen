@@ -96,12 +96,15 @@ const deriveTransform = (matrix: AlignmentAffineMatrix): AlignmentTransform => {
 	const scaleY = Math.hypot(b, d);
 	const rotationDegrees = Math.atan2(c, a) * (180 / Math.PI);
 
+	const isUniformScale = Math.abs(scaleX - scaleY) < 0.01 * Math.max(scaleX, scaleY);
+
 	return {
 		translationX: tx,
 		translationY: ty,
 		rotationDegrees,
 		scaleX,
 		scaleY,
+		isUniformScale,
 	};
 };
 
