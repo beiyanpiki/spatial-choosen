@@ -423,7 +423,9 @@ const solveRobustSimilarityTransform = (
 	fromPoints: readonly PixelPoint[],
 	toPoints: readonly PixelPoint[],
 	threshold: number,
+	options?: { forceNoReflection?: boolean },
 ): CandidateFit | null => {
+	const { forceNoReflection = false } = options ?? {};
 	if (fromPoints.length !== toPoints.length || fromPoints.length < 2) return null;
 
 	let bestCandidate: CandidateFit | null = null;
@@ -431,10 +433,16 @@ const solveRobustSimilarityTransform = (
 
 	for (let left = 0; left < fromPoints.length - 1; left += 1) {
 		for (let right = left + 1; right < fromPoints.length; right += 1) {
-			const pairFit = solveLeastSquaresBestSimilarityTransform(
-				[fromPoints[left], fromPoints[right]],
-				[toPoints[left], toPoints[right]],
-			);
+			const pairFit = forceNoReflection
+				? solveLeastSquaresSimilarityTransformVariant(
+						[fromPoints[left], fromPoints[right]],
+						[toPoints[left], toPoints[right]],
+						{ reflected: false },
+					)
+				: solveLeastSquaresBestSimilarityTransform(
+						[fromPoints[left], fromPoints[right]],
+						[toPoints[left], toPoints[right]],
+					);
 			if (!pairFit) continue;
 
 			const candidate = evaluateCandidateFit(
@@ -443,19 +451,7 @@ const solveRobustSimilarityTransform = (
 				pairFit,
 				threshold,
 			);
-			const errorSum = candidate.inlierIndices.reduce((sum, index) => {
-				const from = fromPoints[index];
-				const to = toPoints[index];
-				const projectedX =
-					candidate.matrix[0] * from.x +
-					candidate.matrix[1] * from.y +
-					candidate.matrix[2];
-				const projectedY =
-					candidate.matrix[3] * from.x +
-					candidate.matrix[4] * from.y +
-					candidate.matrix[5];
-				return sum + (projectedX - to.x) ** 2 + (projectedY - to.y) ** 2;
-			}, 0);
+			const errorSum = candidate.rmse ** 2 * candidate.inlierIndices.length;
 
 			if (
 				!bestCandidate ||
@@ -473,10 +469,16 @@ const solveRobustSimilarityTransform = (
 		return null;
 	}
 
-	const refinedFit = solveLeastSquaresBestSimilarityTransform(
-		bestCandidate.inlierIndices.map((index) => fromPoints[index]),
-		bestCandidate.inlierIndices.map((index) => toPoints[index]),
-	);
+	const refinedFit = forceNoReflection
+		? solveLeastSquaresSimilarityTransformVariant(
+				bestCandidate.inlierIndices.map((index) => fromPoints[index]),
+				bestCandidate.inlierIndices.map((index) => toPoints[index]),
+				{ reflected: false },
+			)
+		: solveLeastSquaresBestSimilarityTransform(
+				bestCandidate.inlierIndices.map((index) => fromPoints[index]),
+				bestCandidate.inlierIndices.map((index) => toPoints[index]),
+			);
 	if (!refinedFit) {
 		return bestCandidate;
 	}
@@ -488,7 +490,7 @@ const solveRobustSimilarityTransform = (
  * Check if a similarity transform matrix has uniform scale (isotropic).
  * For similarity transforms, scaleX should equal scaleY.
  * @param matrix - The 6-element affine matrix [m00, m01, tx, m10, m11, ty]
- * @param tolerance - Maximum allowed ratio between scales (default 1.01 = 1% tolerance)
+ * @param tolerance - Maximum allowed ratio between scales (e.g., 1.01 = max 1% deviation)
  * @returns true if scale is uniform within tolerance
  */
 export const hasUniformScale = (
@@ -532,73 +534,9 @@ export const solveRobustSimilarityTransformNoReflection = (
 	toPoints: readonly PixelPoint[],
 	threshold: number,
 ): CandidateFit | null => {
-	if (fromPoints.length !== toPoints.length || fromPoints.length < 2) return null;
-
-	let bestCandidate: CandidateFit | null = null;
-	let bestErrorSum = Number.POSITIVE_INFINITY;
-
-	// Iterate over all point pairs to find best transform (RANSAC-style)
-	for (let left = 0; left < fromPoints.length - 1; left += 1) {
-		for (let right = left + 1; right < fromPoints.length; right += 1) {
-			// Use only non-reflected variant to avoid flips
-			const pairFit = solveLeastSquaresSimilarityTransformVariant(
-				[fromPoints[left], fromPoints[right]],
-				[toPoints[left], toPoints[right]],
-				{ reflected: false },
-			);
-			if (!pairFit) continue;
-
-			const candidate = evaluateCandidateFit(
-				fromPoints,
-				toPoints,
-				pairFit,
-				threshold,
-			);
-
-			// Compute error sum for comparison
-			const errorSum = candidate.inlierIndices.reduce((sum, index) => {
-				const from = fromPoints[index];
-				const to = toPoints[index];
-				const projectedX =
-					candidate.matrix[0] * from.x +
-					candidate.matrix[1] * from.y +
-					candidate.matrix[2];
-				const projectedY =
-					candidate.matrix[3] * from.x +
-					candidate.matrix[4] * from.y +
-					candidate.matrix[5];
-				return sum + (projectedX - to.x) ** 2 + (projectedY - to.y) ** 2;
-			}, 0);
-
-			// Prefer more inliers, then lower error
-			if (
-				!bestCandidate ||
-				candidate.inlierIndices.length > bestCandidate.inlierIndices.length ||
-				(candidate.inlierIndices.length === bestCandidate.inlierIndices.length &&
-					errorSum < bestErrorSum)
-			) {
-				bestCandidate = candidate;
-				bestErrorSum = errorSum;
-			}
-		}
-	}
-
-	if (!bestCandidate || bestCandidate.inlierIndices.length < 2) {
-		return null;
-	}
-
-	// Refine using all inliers with least squares (non-reflected only)
-	const refinedFit = solveLeastSquaresSimilarityTransformVariant(
-		bestCandidate.inlierIndices.map((index) => fromPoints[index]),
-		bestCandidate.inlierIndices.map((index) => toPoints[index]),
-		{ reflected: false },
-	);
-
-	if (!refinedFit) {
-		return bestCandidate;
-	}
-
-	return evaluateCandidateFit(fromPoints, toPoints, refinedFit, threshold);
+	return solveRobustSimilarityTransform(fromPoints, toPoints, threshold, {
+		forceNoReflection: true,
+	});
 };
 
 /**
