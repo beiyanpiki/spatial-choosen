@@ -805,14 +805,17 @@ export function solveAffineAlignment({
 			);
 		}
 
+		// OpenCV matrices kept for compatibility but not used by primary similarity solver
 		fromMat = cv.matFromArray(pointCount, 2, cv.CV_64F, fromArray);
 		toMat = cv.matFromArray(pointCount, 2, cv.CV_64F, toArray);
 		inlierMaskMat = new cv.Mat();
 
 		if (effectiveSolveMode === "allPoints") {
-			const fitted = solveLeastSquaresAffineTransform(
+			// Use non-robust similarity solver for all points mode
+			const fitted = solveLeastSquaresSimilarityTransformVariant(
 				movingPixels,
 				sourcePixels,
+				{ reflected: false },
 			);
 			if (fitted) {
 				affineMatrix = fitted.matrix;
@@ -833,9 +836,11 @@ export function solveAffineAlignment({
 			const solveIndices = seededIndices.length >= 2
 				? seededIndices
 				: sourcePixels.map((_, index) => index);
-			const fitted = solveLeastSquaresAffineTransform(
+			// Use similarity solver on seed inliers
+			const fitted = solveLeastSquaresSimilarityTransformVariant(
 				solveIndices.map((index) => movingPixels[index]),
 				solveIndices.map((index) => sourcePixels[index]),
+				{ reflected: false },
 			);
 			if (fitted) {
 				affineMatrix = fitted.matrix;
@@ -848,48 +853,32 @@ export function solveAffineAlignment({
 				solveFailed = true;
 			}
 		} else {
-			affineMat = cv.estimateAffine2D(
-				fromMat,
-				toMat,
-				inlierMaskMat,
-				cv.RANSAC,
-				normalizedThreshold,
-				ALIGNMENT_RANSAC_MAX_ITERS,
-				ALIGNMENT_RANSAC_CONFIDENCE,
-				ALIGNMENT_RANSAC_REFINE_ITERS,
+			// Use constrained similarity transform as primary solver (RANSAC mode)
+			const candidate = solveConstrainedSimilarityTransform(
+				movingPixels,
+				sourcePixels,
+				ransacReprojThreshold,
 			);
 
-			inlierMask = Array.from({ length: pointCount }, (_, index) => {
-				if (!inlierMaskMat) return false;
-				if (inlierMaskMat.data.length > index)
-					return inlierMaskMat.data[index] > 0;
-				return false;
-			});
-
-			if (!affineMat || affineMat.empty() || !readAffineData(affineMat)) {
+			if (!candidate || !candidate.matrix) {
+				// Similarity solve failed
 				solveFailed = true;
-			}
+				affineMatrix = null;
+				inlierMask = Array.from({ length: pointCount }, () => false);
+				inlierIndices = [];
+			} else {
+				// Extract results from constrained similarity solver
+				affineMatrix = candidate.matrix;
+				inlierMask = candidate.inlierMask ?? Array.from({ length: pointCount }, () => true);
+				inlierIndices = inlierMask
+					.map((isInlier, index) => (isInlier ? index : -1))
+					.filter((index) => index >= 0);
 
-			inlierIndices = inlierMask
-				.map((isInlier, index) => (isInlier ? index : -1))
-				.filter((index) => index >= 0);
-
-			const estimatedAffineMatrix = affineMat
-				? readAffineData(affineMat)
-				: null;
-			if (estimatedAffineMatrix) {
-				affineMatrix = denormalizeAffineMatrix(
-					estimatedAffineMatrix,
-					referenceFrame,
-					movingFrame,
-				);
+				// Fallback: if too few inliers, use all points
 				if (inlierIndices.length < 2) {
 					inlierMask = Array.from({ length: pointCount }, () => true);
 					inlierIndices = sourcePixels.map((_, index) => index);
 				}
-			} else {
-				affineMatrix = null;
-				solveFailed = true;
 			}
 		}
 
