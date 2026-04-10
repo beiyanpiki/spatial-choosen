@@ -392,6 +392,16 @@ const solveBestFixedScaleSimilarityTransform = (
 	);
 };
 
+const solveBestFixedScaleSimilarityTransformNoReflection = (
+	fromPoints: readonly PixelPoint[],
+	toPoints: readonly PixelPoint[],
+	scale: number,
+): AffineFit | null => {
+	return solveFixedScaleSimilarityTransformVariant(fromPoints, toPoints, scale, {
+		reflected: false,
+	});
+};
+
 const evaluateCandidateFit = (
 	fromPoints: readonly PixelPoint[],
 	toPoints: readonly PixelPoint[],
@@ -895,7 +905,7 @@ export function solveAffineAlignment({
 				movingImageSize,
 			);
 			const fixedScaleFit = expectedCropScale
-				? solveBestFixedScaleSimilarityTransform(
+				? solveBestFixedScaleSimilarityTransformNoReflection(
 						similaritySupportIndices.map((index) => movingPixels[index]),
 						similaritySupportIndices.map((index) => sourcePixels[index]),
 						expectedCropScale,
@@ -903,7 +913,7 @@ export function solveAffineAlignment({
 				: null;
 			const similarityCandidate = fixedScaleFit
 				? null
-				: solveRobustSimilarityTransform(
+				: solveRobustSimilarityTransformNoReflection(
 						movingPixels,
 						sourcePixels,
 						ransacReprojThreshold,
@@ -912,15 +922,17 @@ export function solveAffineAlignment({
 			const fixedScaleFitFinite = fixedScaleFit
 				? fixedScaleFit.matrix.every((value) => Number.isFinite(value))
 				: false;
-			const shouldPreferFixedScaleSimilarity =
-				fixedScaleFitFinite &&
-				(
-					affineMatrix === null ||
-					getAnisotropyRatio(affineMatrix) > 1.2 ||
-					(expectedCropScale !== null &&
-						Math.abs(currentAverageScale - expectedCropScale) >
-							expectedCropScale * 0.05)
-				);
+		const shouldPreferFixedScaleSimilarity =
+			fixedScaleFitFinite &&
+			fixedScaleFit !== null &&
+			hasNoReflection(fixedScaleFit.matrix) &&
+			(
+				affineMatrix === null ||
+				getAnisotropyRatio(affineMatrix) > 1.2 ||
+				(expectedCropScale !== null &&
+					Math.abs(currentAverageScale - expectedCropScale) >
+						expectedCropScale * 0.05)
+			);
 
 			if (fixedScaleFit && shouldPreferFixedScaleSimilarity) {
 				affineMatrix = fixedScaleFit.matrix;
@@ -952,18 +964,19 @@ export function solveAffineAlignment({
 				const similarityRmseOk =
 					similarityCandidate.rmse <=
 					ALIGNMENT_RMSE_MULTIPLIER * ransacReprojThreshold;
-				const shouldPreferSimilarity =
-					similarityFinite &&
-					similarityScaleRange &&
-					similarityInlierRatio &&
-					similarityRmseOk &&
-					(
-						affineMatrix === null ||
-						getAnisotropyRatio(affineMatrix) > 1.2 ||
-						(expectedCropScale !== null &&
-							Math.abs(currentAverageScale - expectedCropScale) >
-								expectedCropScale * 0.05)
-					);
+			const shouldPreferSimilarity =
+				similarityFinite &&
+				similarityScaleRange &&
+				similarityInlierRatio &&
+				similarityRmseOk &&
+				hasNoReflection(similarityCandidate.matrix) &&
+				(
+					affineMatrix === null ||
+					getAnisotropyRatio(affineMatrix) > 1.2 ||
+					(expectedCropScale !== null &&
+						Math.abs(currentAverageScale - expectedCropScale) >
+							expectedCropScale * 0.05)
+				);
 
 				if (shouldPreferSimilarity) {
 					affineMatrix = similarityCandidate.matrix;
