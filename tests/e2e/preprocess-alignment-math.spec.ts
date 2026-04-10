@@ -187,6 +187,10 @@ test('imported crop-box solve remains accepted for the packaged landmark set', a
   const focusedCropSize = Math.round(importedProject.heFocus.chipBounds.width * movingImage.width);
   const movingImageSize = { width: focusedCropSize, height: focusedCropSize };
   const referenceImageSize = { width: referenceImage.width, height: referenceImage.height };
+  const expectedCropScale = (
+    importedProject.localization.chipBounds.width * referenceImage.width +
+    importedProject.localization.chipBounds.height * referenceImage.height
+  ) / (movingImageSize.width + movingImageSize.height);
   const normalizedAffine = normalizeAffineMatrixForMock(
     importedProject.alignment.affineMatrix,
     referenceImageSize,
@@ -210,7 +214,91 @@ test('imported crop-box solve remains accepted for the packaged landmark set', a
 
   const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
   const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
-  const anisotropyRatio = Math.max(scaleX, scaleY) / Math.max(1e-6, Math.min(scaleX, scaleY));
+  const resolvedScale = (scaleX + scaleY) / 2;
 
-  expect(anisotropyRatio).toBeLessThan(1.2);
+  expect(scaleX).toBeCloseTo(scaleY, 3);
+  expect(resolvedScale).toBeCloseTo(expectedCropScale, 2);
+});
+
+test('all-points dangerous recompute preserves fixed crop scale for square crops', async () => {
+  const importedProject = await readImportedProject();
+  const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
+  const movingImage = importedProject.sourceAssets.images[importedProject.heFocus.targetImage];
+
+  if (!referenceImage || !movingImage || !importedProject.heFocus.chipBounds) {
+    throw new Error('Imported preprocess project is missing dangerous recompute prerequisites');
+  }
+
+  const focusedCropSize = Math.round(importedProject.heFocus.chipBounds.width * movingImage.width);
+  const movingImageSize = { width: focusedCropSize, height: focusedCropSize };
+  const referenceImageSize = { width: referenceImage.width, height: referenceImage.height };
+  const expectedCropScale = (
+    importedProject.localization.chipBounds.width * referenceImage.width +
+    importedProject.localization.chipBounds.height * referenceImage.height
+  ) / (movingImageSize.width + movingImageSize.height);
+
+  const result = solveAffineAlignment({
+    cv: createMockCv([1, 0, 0, 0, 1, 0]),
+    controlPoints: importedProject.alignment.controlPoints as AlignmentControlPoint[],
+    chipBounds: importedProject.localization.chipBounds,
+    referenceImageSize,
+    movingImageSize,
+    solveMode: 'allPoints',
+  });
+
+  expect(result.solveAccepted).toBe(true);
+  expect(result.failureReason).toBeNull();
+
+  if (!result.affineMatrix) {
+    throw new Error('Expected all-points dangerous recompute to return an affine matrix');
+  }
+
+  const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
+  const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
+  const resolvedScale = (scaleX + scaleY) / 2;
+
+  expect(scaleX).toBeCloseTo(scaleY, 3);
+  expect(resolvedScale).toBeCloseTo(expectedCropScale, 2);
+});
+
+test('dangerous continue can refit from current inliers while preserving fixed crop scale', async () => {
+  const importedProject = await readImportedProject();
+  const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
+  const movingImage = importedProject.sourceAssets.images[importedProject.heFocus.targetImage];
+
+  if (!referenceImage || !movingImage || !importedProject.heFocus.chipBounds) {
+    throw new Error('Imported preprocess project is missing dangerous continue prerequisites');
+  }
+
+  const focusedCropSize = Math.round(importedProject.heFocus.chipBounds.width * movingImage.width);
+  const movingImageSize = { width: focusedCropSize, height: focusedCropSize };
+  const referenceImageSize = { width: referenceImage.width, height: referenceImage.height };
+  const expectedCropScale = (
+    importedProject.localization.chipBounds.width * referenceImage.width +
+    importedProject.localization.chipBounds.height * referenceImage.height
+  ) / (movingImageSize.width + movingImageSize.height);
+  const subset = (importedProject.alignment.controlPoints as AlignmentControlPoint[]).slice(0, 10);
+
+  const result = solveAffineAlignment({
+    cv: createMockCv([1, 0, 0, 0, 1, 0]),
+    controlPoints: subset,
+    chipBounds: importedProject.localization.chipBounds,
+    referenceImageSize,
+    movingImageSize,
+    solveMode: 'allPoints',
+  });
+
+  expect(result.solveAccepted).toBe(true);
+  expect(result.failureReason).toBeNull();
+
+  if (!result.affineMatrix) {
+    throw new Error('Expected dangerous continue inlier refit to return an affine matrix');
+  }
+
+  const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
+  const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
+  const resolvedScale = (scaleX + scaleY) / 2;
+
+  expect(scaleX).toBeCloseTo(scaleY, 3);
+  expect(resolvedScale).toBeCloseTo(expectedCropScale, 2);
 });

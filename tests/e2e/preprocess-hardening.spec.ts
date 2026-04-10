@@ -427,10 +427,13 @@ async function seedFocusedHeSolveScenario(page: import('@playwright/test').Page)
   });
 }
 
-async function seedRejectedDangerousContinueScenario(page: import('@playwright/test').Page) {
+async function seedDangerousContinueScenario(
+  page: import('@playwright/test').Page,
+  mode: 'rejected' | 'accepted-with-outliers' = 'rejected',
+) {
   const preprocessId = await getCurrentPreprocessId(page);
 
-  return page.evaluate(({ preprocessId, preprocessStorageKey }) => {
+  return page.evaluate(({ preprocessId, preprocessStorageKey, mode }) => {
     const raw = window.localStorage.getItem(preprocessStorageKey);
     if (!raw) {
       throw new Error('No preprocess storage payload found');
@@ -544,7 +547,7 @@ async function seedRejectedDangerousContinueScenario(page: import('@playwright/t
         },
         alignment: {
           ...(project.alignment as Record<string, unknown>),
-          status: 'error',
+          status: mode === 'accepted-with-outliers' ? 'complete' : 'error',
           isStale: false,
           updatedAt: now,
           referenceImage: 'eosin',
@@ -561,13 +564,13 @@ async function seedRejectedDangerousContinueScenario(page: import('@playwright/t
             rmse: true,
             finiteMatrix: true,
             scaleRange: true,
-            accepted: false,
+            accepted: mode === 'accepted-with-outliers',
           },
-          solveAccepted: false,
-          failureReason: 'rmse-too-high',
+          solveAccepted: mode === 'accepted-with-outliers',
+          failureReason: mode === 'accepted-with-outliers' ? null : 'rmse-too-high',
           transform: null,
           previewDataUrl: null,
-          error: 'rmse-too-high',
+          error: mode === 'accepted-with-outliers' ? null : 'rmse-too-high',
         },
         cropQc: {
           ...(project.cropQc as Record<string, unknown>),
@@ -589,6 +592,7 @@ async function seedRejectedDangerousContinueScenario(page: import('@playwright/t
     window.localStorage.setItem(preprocessStorageKey, JSON.stringify(nextProjects));
   }, {
     preprocessId,
+    mode,
     preprocessStorageKey: PREPROCESS_STORAGE_KEY,
   });
 }
@@ -1184,7 +1188,7 @@ test('clustered landmarks stay blocked after solve and keep crop disabled', asyn
 
 test('rejected solve exposes separate dangerous accept and recompute actions', async ({ page }) => {
   await createProject(page, `task16-dangerous-actions-${Date.now()}`);
-  await seedRejectedDangerousContinueScenario(page);
+  await seedDangerousContinueScenario(page, 'rejected');
 
   await page.reload();
   await expect(page.getByTestId('alignment-workflow-overlay')).toBeVisible();
@@ -1206,7 +1210,7 @@ test('rejected solve exposes separate dangerous accept and recompute actions', a
 
 test('dangerous recompute uses all points instead of the rejected inlier subset', async ({ page }) => {
   await createProject(page, `task16-dangerous-recompute-${Date.now()}`);
-  await seedRejectedDangerousContinueScenario(page);
+  await seedDangerousContinueScenario(page, 'rejected');
 
   await page.reload();
   await expect(page.getByTestId('alignment-workflow-overlay')).toBeVisible();
@@ -1220,6 +1224,17 @@ test('dangerous recompute uses all points instead of the rejected inlier subset'
   await expect(page.getByTestId('preprocess-step-crop')).toBeEnabled();
   await expect(page.getByTestId('alignment-inlier-ratio')).toHaveText('100.0%');
   await expect(page.getByTestId('alignment-matrix-json')).not.toHaveText(rejectedMatrix ?? '');
+});
+
+test('accepted solve with outliers still exposes dangerous recovery actions', async ({ page }) => {
+  await createProject(page, `task16-dangerous-outliers-${Date.now()}`);
+  await seedDangerousContinueScenario(page, 'accepted-with-outliers');
+
+  await page.reload();
+  await expect(page.getByTestId('alignment-workflow-overlay')).toBeVisible();
+  await expect(page.getByTestId('alignment-status')).toContainText(/Accepted/i);
+  await expect(page.getByTestId('alignment-continue-current-solve')).toBeVisible();
+  await expect(page.getByTestId('alignment-recompute-all-points')).toBeVisible();
 });
 
 test('oversized input and synthetic quota failure surface recoverable errors', async ({ page }) => {
