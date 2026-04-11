@@ -77,8 +77,8 @@ function expectAffineClose(actual: AlignmentAffineMatrix | null, expected: Align
   });
 }
 
-async function readImportedProject(): Promise<PreprocessProject> {
-  const zipPath = path.join(process.cwd(), 'ref/123-preprocess (1).zip');
+async function readImportedProject(zipFilename = '123-preprocess (1).zip'): Promise<PreprocessProject> {
+  const zipPath = path.join(process.cwd(), 'ref', zipFilename);
   const zip = await JSZip.loadAsync(await fs.readFile(zipPath));
   const projectEntry = zip.file('project.json');
   if (!projectEntry) {
@@ -87,6 +87,67 @@ async function readImportedProject(): Promise<PreprocessProject> {
 
   const pkg = JSON.parse(await projectEntry.async('text')) as { project: PreprocessProject };
   return pkg.project;
+}
+
+function getFocusedMovingImageSize(importedProject: PreprocessProject) {
+  const movingImage = importedProject.sourceAssets.images[importedProject.heFocus.targetImage];
+
+  if (!movingImage || !importedProject.heFocus.chipBounds) {
+    throw new Error('Imported preprocess project is missing focused HE prerequisites');
+  }
+
+  const focusedCropWidth = Math.round(importedProject.heFocus.chipBounds.width * movingImage.width);
+  const focusedCropHeight = Math.round(importedProject.heFocus.chipBounds.height * movingImage.height);
+  const focusedCropSize = Math.max(1, Math.min(focusedCropWidth, focusedCropHeight));
+
+  return {
+    movingImage,
+    movingImageSize: {
+      width: focusedCropSize,
+      height: focusedCropSize,
+    },
+  };
+}
+
+function expectedCropScaleFromImportedProject(
+  importedProject: PreprocessProject,
+  movingImageSize: { width: number; height: number },
+) {
+  return (
+    (importedProject.localization.chipBounds.width *
+      importedProject.sourceAssets.images[importedProject.alignment.referenceImage].width +
+      importedProject.localization.chipBounds.height *
+        importedProject.sourceAssets.images[importedProject.alignment.referenceImage].height) /
+    (movingImageSize.width + movingImageSize.height)
+  );
+}
+
+function computeReprojectionErrors(
+  controlPoints: AlignmentControlPoint[],
+  referenceImageSize: { width: number; height: number },
+  movingImageSize: { width: number; height: number },
+  affineMatrix: AlignmentAffineMatrix,
+) {
+  return controlPoints.map((pair) => {
+    const sourceX = pair.source.x * referenceImageSize.width;
+    const sourceY = pair.source.y * referenceImageSize.height;
+    const movingX = pair.target.x * movingImageSize.width;
+    const movingY = pair.target.y * movingImageSize.height;
+    const projectedX =
+      affineMatrix[0] * movingX +
+      affineMatrix[1] * movingY +
+      affineMatrix[2];
+    const projectedY =
+      affineMatrix[3] * movingX +
+      affineMatrix[4] * movingY +
+      affineMatrix[5];
+    return Math.hypot(projectedX - sourceX, projectedY - sourceY);
+  });
+}
+
+function getInlierErrors(errors: number[], inlierMask: boolean[]) {
+  const filtered = errors.filter((_, index) => inlierMask[index]);
+  return filtered.length > 0 ? filtered : errors;
 }
 
 function normalizeAffineMatrixForMock(
@@ -175,22 +236,16 @@ test('solveAffineAlignment returns a pixel-space affine for focused HE crops', a
   expect(result.inlierMask).toEqual([true, true, true, true, true, true, true]);
 });
 
-test('imported crop-box solve remains accepted for the packaged landmark set', async () => {
+test('imported crop-box solve remains accepted with low reprojection error for the packaged landmark set', async () => {
   const importedProject = await readImportedProject();
   const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
-  const movingImage = importedProject.sourceAssets.images[importedProject.heFocus.targetImage];
+  const { movingImage, movingImageSize } = getFocusedMovingImageSize(importedProject);
 
   if (!referenceImage || !movingImage || !importedProject.heFocus.chipBounds || !importedProject.alignment.affineMatrix) {
     throw new Error('Imported preprocess project is missing alignment prerequisites');
   }
 
-  const focusedCropSize = Math.round(importedProject.heFocus.chipBounds.width * movingImage.width);
-  const movingImageSize = { width: focusedCropSize, height: focusedCropSize };
   const referenceImageSize = { width: referenceImage.width, height: referenceImage.height };
-  const expectedCropScale = (
-    importedProject.localization.chipBounds.width * referenceImage.width +
-    importedProject.localization.chipBounds.height * referenceImage.height
-  ) / (movingImageSize.width + movingImageSize.height);
   const normalizedAffine = normalizeAffineMatrixForMock(
     importedProject.alignment.affineMatrix,
     referenceImageSize,
@@ -207,35 +262,164 @@ test('imported crop-box solve remains accepted for the packaged landmark set', a
 
   expect(result.solveAccepted).toBe(true);
   expect(result.failureReason).toBeNull();
+  expect(result.qualityFlags.rmse).toBe(true);
+  expect(result.reprojectionRmse).not.toBeNull();
 
   if (!result.affineMatrix) {
     throw new Error('Expected imported packaged solve to return an affine matrix');
   }
 
+  const errors = computeReprojectionErrors(
+    importedProject.alignment.controlPoints as AlignmentControlPoint[],
+    referenceImageSize,
+    movingImageSize,
+    result.affineMatrix,
+  );
+  const inlierErrors = getInlierErrors(errors, result.inlierMask);
+  const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
+  const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
+
+  expect(scaleX).toBeCloseTo(scaleY, 3);
+  expect(result.reprojectionRmse ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(Math.max(...inlierErrors)).toBeLessThan(25);
+});
+
+test('1233 imported crop-box solve prefers landmark fit over the packaged crop-box scale', async () => {
+  const importedProject = await readImportedProject('1233-preprocess.zip');
+  const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
+  const { movingImage, movingImageSize } = getFocusedMovingImageSize(importedProject);
+
+  if (
+    !referenceImage ||
+    !movingImage ||
+    !importedProject.heFocus.chipBounds ||
+    !importedProject.alignment.affineMatrix
+  ) {
+    throw new Error('1233 imported preprocess project is missing alignment prerequisites');
+  }
+
+  const referenceImageSize = {
+    width: referenceImage.width,
+    height: referenceImage.height,
+  };
+  const expectedCropScale = expectedCropScaleFromImportedProject(
+    importedProject,
+    movingImageSize,
+  );
+  const normalizedAffine = normalizeAffineMatrixForMock(
+    importedProject.alignment.affineMatrix,
+    referenceImageSize,
+    movingImageSize,
+  );
+
+  const result = solveAffineAlignment({
+    cv: createMockCv(normalizedAffine),
+    controlPoints: importedProject.alignment.controlPoints as AlignmentControlPoint[],
+    chipBounds: importedProject.localization.chipBounds,
+    referenceImageSize,
+    movingImageSize,
+  });
+
+  expect(result.solveAccepted).toBe(true);
+  expect(result.failureReason).toBeNull();
+  expect(result.qualityFlags.rmse).toBe(true);
+  expect(result.reprojectionRmse).not.toBeNull();
+
+  if (!result.affineMatrix) {
+    throw new Error('Expected 1233 solve to return an affine matrix');
+  }
+
+  const errors = computeReprojectionErrors(
+    importedProject.alignment.controlPoints as AlignmentControlPoint[],
+    referenceImageSize,
+    movingImageSize,
+    result.affineMatrix,
+  );
+  const inlierErrors = getInlierErrors(errors, result.inlierMask);
   const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
   const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
   const resolvedScale = (scaleX + scaleY) / 2;
 
   expect(scaleX).toBeCloseTo(scaleY, 3);
-  expect(resolvedScale).toBeCloseTo(expectedCropScale, 2);
+  expect(result.reprojectionRmse ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(Math.max(...inlierErrors)).toBeLessThan(20);
+  expect(resolvedScale).toBeGreaterThan(expectedCropScale * 1.15);
 });
 
-test('all-points dangerous recompute preserves fixed crop scale for square crops', async () => {
+test('1233 imported all-points and inlier-subset paths keep the landmark-driven similarity fit', async () => {
+  const importedProject = await readImportedProject('1233-preprocess.zip');
+  const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
+  const { movingImage, movingImageSize } = getFocusedMovingImageSize(importedProject);
+
+  if (!referenceImage || !movingImage || !importedProject.heFocus.chipBounds) {
+    throw new Error('1233 imported preprocess project is missing recompute prerequisites');
+  }
+
+  const referenceImageSize = {
+    width: referenceImage.width,
+    height: referenceImage.height,
+  };
+  const expectedCropScale = expectedCropScaleFromImportedProject(
+    importedProject,
+    movingImageSize,
+  );
+  const subset = (importedProject.alignment.controlPoints as AlignmentControlPoint[]).slice(0, 10);
+
+  const allPointsResult = solveAffineAlignment({
+    cv: createMockCv([1, 0, 0, 0, 1, 0]),
+    controlPoints: importedProject.alignment.controlPoints as AlignmentControlPoint[],
+    chipBounds: importedProject.localization.chipBounds,
+    referenceImageSize,
+    movingImageSize,
+    solveMode: 'allPoints',
+  });
+
+  const inlierSubsetResult = solveAffineAlignment({
+    cv: createMockCv([1, 0, 0, 0, 1, 0]),
+    controlPoints: subset,
+    chipBounds: importedProject.localization.chipBounds,
+    referenceImageSize,
+    movingImageSize,
+    solveMode: 'inlierSubset',
+  });
+
+  for (const result of [allPointsResult, inlierSubsetResult] as const) {
+    expect(result.solveAccepted).toBe(true);
+    expect(result.failureReason).toBeNull();
+    expect(result.reprojectionRmse).not.toBeNull();
+
+    if (!result.affineMatrix) {
+      throw new Error('Expected dangerous solve mode to return an affine matrix');
+    }
+
+    const errors = computeReprojectionErrors(
+      subset,
+      referenceImageSize,
+      movingImageSize,
+      result.affineMatrix,
+    );
+    const inlierErrors = getInlierErrors(errors, result.inlierMask);
+    const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
+    const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
+    const resolvedScale = (scaleX + scaleY) / 2;
+
+    expect(scaleX).toBeCloseTo(scaleY, 3);
+    expect(result.reprojectionRmse ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+    expect(Math.max(...inlierErrors)).toBeLessThan(20);
+    expect(resolvedScale).toBeGreaterThan(expectedCropScale * 1.15);
+  }
+});
+
+test('all-points dangerous recompute keeps low reprojection error for square crops', async () => {
   const importedProject = await readImportedProject();
   const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
-  const movingImage = importedProject.sourceAssets.images[importedProject.heFocus.targetImage];
+  const { movingImage, movingImageSize } = getFocusedMovingImageSize(importedProject);
 
   if (!referenceImage || !movingImage || !importedProject.heFocus.chipBounds) {
     throw new Error('Imported preprocess project is missing dangerous recompute prerequisites');
   }
 
-  const focusedCropSize = Math.round(importedProject.heFocus.chipBounds.width * movingImage.width);
-  const movingImageSize = { width: focusedCropSize, height: focusedCropSize };
   const referenceImageSize = { width: referenceImage.width, height: referenceImage.height };
-  const expectedCropScale = (
-    importedProject.localization.chipBounds.width * referenceImage.width +
-    importedProject.localization.chipBounds.height * referenceImage.height
-  ) / (movingImageSize.width + movingImageSize.height);
 
   const result = solveAffineAlignment({
     cv: createMockCv([1, 0, 0, 0, 1, 0]),
@@ -248,35 +432,37 @@ test('all-points dangerous recompute preserves fixed crop scale for square crops
 
   expect(result.solveAccepted).toBe(true);
   expect(result.failureReason).toBeNull();
+  expect(result.reprojectionRmse).not.toBeNull();
 
   if (!result.affineMatrix) {
     throw new Error('Expected all-points dangerous recompute to return an affine matrix');
   }
 
+  const errors = computeReprojectionErrors(
+    importedProject.alignment.controlPoints as AlignmentControlPoint[],
+    referenceImageSize,
+    movingImageSize,
+    result.affineMatrix,
+  );
+  const inlierErrors = getInlierErrors(errors, result.inlierMask);
   const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
   const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
-  const resolvedScale = (scaleX + scaleY) / 2;
 
   expect(scaleX).toBeCloseTo(scaleY, 3);
-  expect(resolvedScale).toBeCloseTo(expectedCropScale, 2);
+  expect(result.reprojectionRmse ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(Math.max(...inlierErrors)).toBeLessThan(25);
 });
 
-test('dangerous continue can refit from current inliers while preserving fixed crop scale', async () => {
+test('dangerous continue can refit from current inliers with low reprojection error', async () => {
   const importedProject = await readImportedProject();
   const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
-  const movingImage = importedProject.sourceAssets.images[importedProject.heFocus.targetImage];
+  const { movingImage, movingImageSize } = getFocusedMovingImageSize(importedProject);
 
   if (!referenceImage || !movingImage || !importedProject.heFocus.chipBounds) {
     throw new Error('Imported preprocess project is missing dangerous continue prerequisites');
   }
 
-  const focusedCropSize = Math.round(importedProject.heFocus.chipBounds.width * movingImage.width);
-  const movingImageSize = { width: focusedCropSize, height: focusedCropSize };
   const referenceImageSize = { width: referenceImage.width, height: referenceImage.height };
-  const expectedCropScale = (
-    importedProject.localization.chipBounds.width * referenceImage.width +
-    importedProject.localization.chipBounds.height * referenceImage.height
-  ) / (movingImageSize.width + movingImageSize.height);
   const subset = (importedProject.alignment.controlPoints as AlignmentControlPoint[]).slice(0, 10);
 
   const result = solveAffineAlignment({
@@ -290,17 +476,82 @@ test('dangerous continue can refit from current inliers while preserving fixed c
 
   expect(result.solveAccepted).toBe(true);
   expect(result.failureReason).toBeNull();
+  expect(result.reprojectionRmse).not.toBeNull();
 
   if (!result.affineMatrix) {
     throw new Error('Expected dangerous continue inlier refit to return an affine matrix');
   }
+
+  const errors = computeReprojectionErrors(
+    subset,
+    referenceImageSize,
+    movingImageSize,
+    result.affineMatrix,
+  );
+  const inlierErrors = getInlierErrors(errors, result.inlierMask);
+  const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
+  const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
+
+  expect(scaleX).toBeCloseTo(scaleY, 3);
+  expect(result.reprojectionRmse ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(Math.max(...inlierErrors)).toBeLessThan(25);
+});
+
+test('square focused-HE solves keep low reprojection error for the 1233 fixture', async () => {
+  const importedProject = await readImportedProject('1233-preprocess.zip');
+  const referenceImage = importedProject.sourceAssets.images[importedProject.alignment.referenceImage];
+  const { movingImage, movingImageSize } = getFocusedMovingImageSize(importedProject);
+
+  if (!referenceImage || !movingImage || !importedProject.heFocus.chipBounds) {
+    throw new Error('1233 fixture is missing alignment prerequisites');
+  }
+
+  const referenceImageSize = { width: referenceImage.width, height: referenceImage.height };
+  const expectedCropScale = expectedCropScaleFromImportedProject(importedProject, movingImageSize);
+
+  const result = solveAffineAlignment({
+    cv: createMockCv([1, 0, 0, 0, 1, 0]),
+    controlPoints: importedProject.alignment.controlPoints as AlignmentControlPoint[],
+    chipBounds: importedProject.localization.chipBounds,
+    referenceImageSize,
+    movingImageSize,
+  });
+
+  expect(result.solveAccepted).toBe(true);
+  expect(result.failureReason).toBeNull();
+  expect(result.qualityFlags.rmse).toBe(true);
+  expect(result.reprojectionRmse).not.toBeNull();
+  expect(result.reprojectionRmse ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+
+  if (!result.affineMatrix) {
+    throw new Error('Expected 1233 fixture to return an affine matrix');
+  }
+
+  const errors = (importedProject.alignment.controlPoints as AlignmentControlPoint[]).map((pair) => {
+    const sourceX = pair.source.x * referenceImageSize.width;
+    const sourceY = pair.source.y * referenceImageSize.height;
+    const movingX = pair.target.x * movingImageSize.width;
+    const movingY = pair.target.y * movingImageSize.height;
+    const projectedX =
+      result.affineMatrix[0] * movingX +
+      result.affineMatrix[1] * movingY +
+      result.affineMatrix[2];
+    const projectedY =
+      result.affineMatrix[3] * movingX +
+      result.affineMatrix[4] * movingY +
+      result.affineMatrix[5];
+    return Math.hypot(projectedX - sourceX, projectedY - sourceY);
+  });
+  const inlierErrors = getInlierErrors(errors, result.inlierMask);
+
+  expect(Math.max(...inlierErrors)).toBeLessThan(20);
 
   const scaleX = Math.hypot(result.affineMatrix[0], result.affineMatrix[3]);
   const scaleY = Math.hypot(result.affineMatrix[1], result.affineMatrix[4]);
   const resolvedScale = (scaleX + scaleY) / 2;
 
   expect(scaleX).toBeCloseTo(scaleY, 3);
-  expect(resolvedScale).toBeCloseTo(expectedCropScale, 2);
+  expect(resolvedScale).toBeGreaterThan(expectedCropScale * 1.15);
 });
 
 test('similarity transform: should produce uniform scale (scaleX equals scaleY)', () => {

@@ -805,7 +805,7 @@ export function solveAffineAlignment({
 	let solveFailed = false;
 	let inlierMask: boolean[] = Array.from({ length: pointCount }, () => false);
 	let inlierIndices: number[] = [];
-	let usedFixedCropScale = false;
+	let currentCandidateRmse: number | null = null;
 
 	try {
 		if (
@@ -823,19 +823,38 @@ export function solveAffineAlignment({
 		inlierMaskMat = new cv.Mat();
 
 		if (effectiveSolveMode === "allPoints") {
-			// Use non-robust similarity solver for all points mode
-			const fitted = solveLeastSquaresSimilarityTransformVariant(
+			const constrainedCandidate = solveConstrainedSimilarityTransform(
 				movingPixels,
 				sourcePixels,
-				{ reflected: false },
+				 ransacReprojThreshold,
 			);
-			if (fitted) {
-				affineMatrix = fitted.matrix;
-				inlierMask = Array.from({ length: pointCount }, () => true);
-				inlierIndices = sourcePixels.map((_, index) => index);
+
+			if (constrainedCandidate.matrix) {
+				affineMatrix = constrainedCandidate.matrix;
+				currentCandidateRmse = constrainedCandidate.rmse;
+				inlierMask = constrainedCandidate.inlierMask ?? Array.from({ length: pointCount }, () => true);
+				inlierIndices = constrainedCandidate.inlierMask
+					? constrainedCandidate.inlierMask.map((value, index) => (value ? index : -1)).filter((index) => index >= 0)
+					: sourcePixels.map((_, index) => index);
 			} else {
-				affineMatrix = null;
-				solveFailed = true;
+				const fitted = solveLeastSquaresSimilarityTransformVariant(
+					movingPixels,
+					sourcePixels,
+					{ reflected: false },
+				);
+				if (
+					fitted &&
+					hasUniformScale(fitted.matrix) &&
+					hasNoReflection(fitted.matrix)
+				) {
+					affineMatrix = fitted.matrix;
+					currentCandidateRmse = fitted.rmse;
+					inlierMask = Array.from({ length: pointCount }, () => true);
+					inlierIndices = sourcePixels.map((_, index) => index);
+				} else {
+					affineMatrix = null;
+					solveFailed = true;
+				}
 			}
 		} else if (effectiveSolveMode === "inlierSubset") {
 			const validSeedMask =
@@ -848,21 +867,40 @@ export function solveAffineAlignment({
 			const solveIndices = seededIndices.length >= 2
 				? seededIndices
 				: sourcePixels.map((_, index) => index);
-			// Use similarity solver on seed inliers
-			const fitted = solveLeastSquaresSimilarityTransformVariant(
+			const constrainedCandidate = solveConstrainedSimilarityTransform(
 				solveIndices.map((index) => movingPixels[index]),
 				solveIndices.map((index) => sourcePixels[index]),
-				{ reflected: false },
+				 ransacReprojThreshold,
 			);
-			if (fitted) {
-				affineMatrix = fitted.matrix;
+
+			if (constrainedCandidate.matrix) {
+				affineMatrix = constrainedCandidate.matrix;
+				currentCandidateRmse = constrainedCandidate.rmse;
 				inlierMask = Array.from({ length: pointCount }, (_, index) =>
 					solveIndices.includes(index),
 				);
 				inlierIndices = solveIndices;
 			} else {
-				affineMatrix = null;
-				solveFailed = true;
+				const fitted = solveLeastSquaresSimilarityTransformVariant(
+					solveIndices.map((index) => movingPixels[index]),
+					solveIndices.map((index) => sourcePixels[index]),
+					{ reflected: false },
+				);
+				if (
+					fitted &&
+					hasUniformScale(fitted.matrix) &&
+					hasNoReflection(fitted.matrix)
+				) {
+					affineMatrix = fitted.matrix;
+					currentCandidateRmse = fitted.rmse;
+					inlierMask = Array.from({ length: pointCount }, (_, index) =>
+						solveIndices.includes(index),
+					);
+					inlierIndices = solveIndices;
+				} else {
+					affineMatrix = null;
+					solveFailed = true;
+				}
 			}
 		} else {
 			// Use constrained similarity transform as primary solver (RANSAC mode)
@@ -881,6 +919,7 @@ export function solveAffineAlignment({
 			} else {
 				// Extract results from constrained similarity solver
 				affineMatrix = candidate.matrix;
+				currentCandidateRmse = candidate.rmse;
 				inlierMask = candidate.inlierMask ?? Array.from({ length: pointCount }, () => true);
 				inlierIndices = inlierMask
 					.map((isInlier, index) => (isInlier ? index : -1))
@@ -922,9 +961,31 @@ export function solveAffineAlignment({
 			const fixedScaleFitFinite = fixedScaleFit
 				? fixedScaleFit.matrix.every((value) => Number.isFinite(value))
 				: false;
+			const fixedScaleFitScaleX = fixedScaleFit
+				? Math.hypot(fixedScaleFit.matrix[0], fixedScaleFit.matrix[3])
+				: Number.NaN;
+			const fixedScaleFitScaleY = fixedScaleFit
+				? Math.hypot(fixedScaleFit.matrix[1], fixedScaleFit.matrix[4])
+				: Number.NaN;
+			const fixedScaleFitScaleRange =
+				Number.isFinite(fixedScaleFitScaleX) &&
+				Number.isFinite(fixedScaleFitScaleY) &&
+				fixedScaleFitScaleX >= ALIGNMENT_SCALE_MIN &&
+				fixedScaleFitScaleX <= ALIGNMENT_SCALE_MAX &&
+				fixedScaleFitScaleY >= ALIGNMENT_SCALE_MIN &&
+				fixedScaleFitScaleY <= ALIGNMENT_SCALE_MAX;
+			const fixedScaleFitRmseOk = fixedScaleFit !== null &&
+				fixedScaleFit.rmse <= ALIGNMENT_RMSE_MULTIPLIER * ransacReprojThreshold;
+			const fixedScaleFitComparableToCurrent =
+				currentCandidateRmse === null ||
+				fixedScaleFit === null ||
+				fixedScaleFit.rmse <= currentCandidateRmse * 1.25;
 		const shouldPreferFixedScaleSimilarity =
 			fixedScaleFitFinite &&
 			fixedScaleFit !== null &&
+			fixedScaleFitScaleRange &&
+			fixedScaleFitRmseOk &&
+			fixedScaleFitComparableToCurrent &&
 			hasNoReflection(fixedScaleFit.matrix) &&
 			(
 				affineMatrix === null ||
@@ -936,7 +997,7 @@ export function solveAffineAlignment({
 
 			if (fixedScaleFit && shouldPreferFixedScaleSimilarity) {
 				affineMatrix = fixedScaleFit.matrix;
-				usedFixedCropScale = true;
+				currentCandidateRmse = fixedScaleFit.rmse;
 				solveFailed = false;
 			} else if (similarityCandidate) {
 				const similarityFinite = similarityCandidate.matrix.every((value) =>
@@ -980,6 +1041,7 @@ export function solveAffineAlignment({
 
 				if (shouldPreferSimilarity) {
 					affineMatrix = similarityCandidate.matrix;
+					currentCandidateRmse = similarityCandidate.rmse;
 					inlierMask = similarityCandidate.inlierMask;
 					inlierIndices = similarityCandidate.inlierIndices;
 					solveFailed = false;
@@ -1035,7 +1097,6 @@ export function solveAffineAlignment({
 		qualityFlags.rmse =
 			reprojectionRmse !== null &&
 			reprojectionRmse <= ALIGNMENT_RMSE_MULTIPLIER * ransacReprojThreshold;
-		const effectiveRmseGate = qualityFlags.rmse || usedFixedCropScale;
 		const hasSufficientCoverage = !computeCoverageWarning(
 			controlPoints,
 			chipBounds,
@@ -1043,7 +1104,7 @@ export function solveAffineAlignment({
 		qualityFlags.accepted =
 			qualityFlags.minPairs &&
 			qualityFlags.inlierRatio &&
-			effectiveRmseGate &&
+			qualityFlags.rmse &&
 			qualityFlags.finiteMatrix &&
 			qualityFlags.scaleRange &&
 			hasSufficientCoverage;
@@ -1055,9 +1116,7 @@ export function solveAffineAlignment({
 		const failureReason = effectiveSolveMode === "allPoints" || effectiveSolveMode === "inlierSubset"
 			? null
 			: hasSufficientCoverage
-				? (usedFixedCropScale && !qualityFlags.rmse
-						? null
-						: resolveFailureReason(qualityFlags, solveFailed))
+				? resolveFailureReason(qualityFlags, solveFailed)
 				: "insufficient-inliers";
 
 		return {
