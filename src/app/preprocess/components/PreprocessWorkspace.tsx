@@ -52,7 +52,7 @@ import {
 	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
 } from "@/lib/preprocess/localization";
-import { buildSourceImage } from "@/lib/preprocess/sourceImage";
+import { buildSourceImage, createThumbnailBlob } from "@/lib/preprocess/sourceImage";
 import {
 	projectSpotsForCrop,
 	resolveAuthoritativeSpotDiameterFullres,
@@ -160,6 +160,8 @@ const createFocusedHeImageRecord = async (
 	metadata?: Partial<PreprocessSourceImage> | null,
 ): Promise<PreprocessSourceImage> => {
 	const image = await loadDataUrlImage(dataUrl);
+	const thumbnailBlob = await createThumbnailBlob(dataUrl);
+	const thumbnailObjectUrl = URL.createObjectURL(thumbnailBlob);
 
 	return {
 		id: metadata?.id ?? `focused-he-${Date.now()}`,
@@ -171,7 +173,9 @@ const createFocusedHeImageRecord = async (
 		height: image.naturalHeight,
 		lastModified: metadata?.lastModified ?? Date.now(),
 		dataUrl,
-		thumbnailDataUrl: dataUrl,
+		thumbnailBlob,
+		thumbnailObjectUrl,
+		thumbnailDataUrl: thumbnailObjectUrl,
 	};
 };
 
@@ -510,6 +514,12 @@ export function PreprocessWorkspace({
 	const [isDetectingTissue, setIsDetectingTissue] = useState(false);
 	const tissueDetectionRequestTokenRef = useRef(0);
 
+	useEffect(() => () => {
+		if (focusedHeMovingImage?.thumbnailObjectUrl) {
+			URL.revokeObjectURL(focusedHeMovingImage.thumbnailObjectUrl);
+		}
+	}, [focusedHeMovingImage]);
+
 	const localizationImage = project
 		? (project.sourceAssets.images[project.localization.targetImage] ?? null)
 		: null;
@@ -528,6 +538,8 @@ export function PreprocessWorkspace({
 		: null;
 	const localizationImageDataUrl = localizationImage?.dataUrl ?? null;
 	const currentHeImageDataUrl = currentHeImageSource?.dataUrl ?? null;
+	const focusedHeImageDataUrl = project?.heFocus.focusedImageDataUrl ?? null;
+	const alignmentMovingImageKind = project?.alignment.movingImage ?? null;
 	const currentStepId = project?.currentStep ?? null;
 	const hasLocalizationChipBounds = Boolean(project?.localization.chipBounds);
 	const hasHeFocusChipBounds = Boolean(project?.heFocus.chipBounds);
@@ -869,13 +881,12 @@ export function PreprocessWorkspace({
 	]);
 
 	useEffect(() => {
-		if (!project || project.alignment.movingImage !== "he") {
+		if (alignmentMovingImageKind !== "he") {
 			setFocusedHeMovingImage(null);
 			return;
 		}
 
-		const focusedImageDataUrl = project.heFocus.focusedImageDataUrl;
-		if (!focusedImageDataUrl) {
+		if (!focusedHeImageDataUrl) {
 			setFocusedHeMovingImage(null);
 			return;
 		}
@@ -885,7 +896,7 @@ export function PreprocessWorkspace({
 		void (async () => {
 			try {
 				const focusedImage = await createFocusedHeImageRecord(
-					focusedImageDataUrl,
+					focusedHeImageDataUrl,
 					currentHeImageSource
 						? {
 							...currentHeImageSource,
@@ -893,9 +904,14 @@ export function PreprocessWorkspace({
 						}
 						: null,
 				);
-				if (!cancelled) {
-					setFocusedHeMovingImage(focusedImage);
+				if (cancelled) {
+					if (focusedImage.thumbnailObjectUrl) {
+						URL.revokeObjectURL(focusedImage.thumbnailObjectUrl);
+					}
+					return;
 				}
+
+				setFocusedHeMovingImage(focusedImage);
 			} catch (error) {
 				if (!cancelled) {
 					console.error("Failed to hydrate focused HE moving image", error);
@@ -907,7 +923,7 @@ export function PreprocessWorkspace({
 		return () => {
 			cancelled = true;
 		};
-	}, [currentHeImageSource, project?.alignment.movingImage, project?.heFocus.focusedImageDataUrl, project]);
+	}, [alignmentMovingImageKind, currentHeImageSource, focusedHeImageDataUrl]);
 
 
 	useEffect(() => {
@@ -1045,6 +1061,8 @@ export function PreprocessWorkspace({
 				chipBounds: project.localization.chipBounds,
 				imageTransform: project.localization.imageTransform,
 				affineMatrix: project.alignment.affineMatrix,
+				controlPoints: project.alignment.controlPoints,
+				inlierMask: project.alignment.inlierMask,
 			});
 
 			applyCropQcUpdate(
@@ -1060,6 +1078,8 @@ export function PreprocessWorkspace({
 					fiducial_diameter_fullres: result.fiducial_diameter_fullres,
 					checkerboardTileSize: 64,
 					checkerboardPreview: result.checkerboardPreview,
+					featureMatchesPreview: result.featureMatchesPreview,
+					featureMatchesPreviewDataUrl: result.featureMatchesDataUrl,
 					qcAccepted: false,
 					status: "ready",
 					issues: [],
@@ -1687,13 +1707,14 @@ export function PreprocessWorkspace({
 												>
 													<Stack spacing={3}>
 														<Heading size="sm">Saved focused H&amp;E preview</Heading>
-														{heFocusImageSource ? (
-															<Image
-																src={heFocusImageSource}
-																alt="Saved focused H&E preview"
-																borderRadius="lg"
-																border="1px solid"
-																borderColor="gray.200"
+									{heFocusImageSource ? (
+										<Image
+											src={heFocusImageSource}
+											alt="Saved focused H&E preview"
+											data-testid="he-focus-focused-image-preview"
+											borderRadius="lg"
+											border="1px solid"
+											borderColor="gray.200"
 																objectFit="contain"
 																bg="white"
 																maxH="280px"
@@ -1709,13 +1730,16 @@ export function PreprocessWorkspace({
 															</Flex>
 														</Stack>
 													) : project.currentStep === "alignment" ? (
-													<AlignmentPanel
-														alignment={project.alignment}
-								chipBounds={project.localization.chipBounds}
-								movingImage={alignmentMovingImage}
-								referenceImage={alignmentReferenceImage}
-								onAlignmentChange={applyAlignmentUpdate}
-							/>
+								<AlignmentPanel
+									alignment={project.alignment}
+									chipBounds={project.localization.chipBounds}
+									movingImage={alignmentMovingImage}
+									onSolveAccepted={() => {
+										onStepChange("cropQc");
+									}}
+									referenceImage={alignmentReferenceImage}
+									onAlignmentChange={applyAlignmentUpdate}
+								/>
 							) : project.currentStep === "cropQc" ? (
 								<CropQcPanel
 									cropHeight={project.cropQc.cropHeight}
@@ -1724,6 +1748,11 @@ export function PreprocessWorkspace({
 									heCropDataUrl={project.cropQc.previewDataUrl}
 									checkerboardDataUrl={
 										project.cropQc.checkerboardPreviewDataUrl
+									}
+									featureMatchesDataUrl={
+										project.cropQc.featureMatchesPreviewDataUrl
+										?? project.cropQc.featureMatchesPreview?.dataUrl
+										?? null
 									}
 									overlayOpacity={project.cropQc.overlayOpacity}
 									onOverlayOpacityChange={(value) => {

@@ -55,6 +55,7 @@ type AlignmentPanelProps = {
 	alignment: AlignmentSlice;
 	chipBounds: PreprocessRect | null;
 	movingImage: PreprocessSourceImage | null;
+	onSolveAccepted: () => void;
 	referenceImage: PreprocessSourceImage | null;
 	onAlignmentChange: (
 		updater: (current: AlignmentSlice) => AlignmentSlice,
@@ -185,6 +186,7 @@ function LandmarkCanvas({
 	);
 
 	const [zoom, setZoom] = useState(1);
+	const imageDataUrl = image.thumbnailDataUrl ?? image.dataUrl;
 	const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
 	const effectiveZoom = zoom * imageTransform.scale;
 	const viewportTransform = useMemo(
@@ -512,7 +514,7 @@ function LandmarkCanvas({
 								pointerEvents="none"
 							>
 								<img
-									src={image.dataUrl}
+									src={imageDataUrl}
 									alt={title || "Alignment source image"}
 									draggable={false}
 									style={{
@@ -619,6 +621,7 @@ export function AlignmentPanel({
 	alignment,
 	chipBounds,
 	movingImage,
+	onSolveAccepted,
 	referenceImage,
 	onAlignmentChange,
 }: AlignmentPanelProps) {
@@ -950,7 +953,7 @@ export function AlignmentPanel({
 
 	const solveAlignment = useCallback(
 		async (
-			solveMode: "ransac" | "allPoints" | "inlierSubset" = "ransac",
+			solveMode: "ransac" | "allPoints" | "inlierSubset" = "allPoints",
 			seedInlierMask?: readonly boolean[] | null,
 		) => {
 			if (
@@ -1008,6 +1011,9 @@ export function AlignmentPanel({
 					updatedAt: new Date().toISOString(),
 					error: result.failureReason,
 				}));
+				if (result.solveAccepted) {
+					onSolveAccepted();
+				}
 			} catch (error) {
 				onAlignmentChange((current) => ({
 					...current,
@@ -1028,47 +1034,12 @@ export function AlignmentPanel({
 			movingImage?.height,
 			movingImage?.width,
 			onAlignmentChange,
+			onSolveAccepted,
 			referenceImage?.dataUrl,
 			referenceImage?.height,
 			referenceImage?.width,
 		],
 	);
-
-	const acceptRejectedSolve = useCallback(() => {
-		if (alignment.inlierMask?.some((isInlier) => isInlier)) {
-			void solveAlignment("inlierSubset", alignment.inlierMask);
-			return;
-		}
-
-		onAlignmentChange((current) => ({
-			...current,
-			solveAccepted: true,
-			failureReason: null,
-			status: computeAlignmentStatus({
-				hasReferenceImage: Boolean(referenceImage?.dataUrl),
-				hasMovingImage: Boolean(movingImage?.dataUrl),
-				solveAccepted: true,
-				failureReason: null,
-			}),
-			isStale: false,
-			updatedAt: new Date().toISOString(),
-			error: null,
-		}));
-	}, [
-		alignment.inlierMask,
-		movingImage?.dataUrl,
-		onAlignmentChange,
-		referenceImage?.dataUrl,
-		solveAlignment,
-	]);
-
-	const hasOutlierPoints = alignment.inlierMask?.some((isInlier) => !isInlier) ?? false;
-	const showDangerousRecoveryActions = Boolean(
-		(alignment.failureReason && !alignment.solveAccepted) || hasOutlierPoints,
-	);
-	const continueCurrentSolveLabel = alignment.solveAccepted
-		? "Continue with current solve (dangerous)"
-		: "Accept rejected solve (dangerous)";
 
 	if (!referenceImage?.dataUrl || !movingImage?.dataUrl) {
 		return (
@@ -1337,34 +1308,6 @@ export function AlignmentPanel({
 					>
 						Solve alignment
 					</Button>
-					{showDangerousRecoveryActions ? (
-						<>
-							<Button
-								size="sm"
-								colorScheme="orange"
-								variant="outline"
-								onClick={acceptRejectedSolve}
-								isDisabled={!canSolve}
-								data-testid={
-									alignment.solveAccepted
-										? "alignment-continue-current-solve"
-										: "alignment-accept-rejected-solve"
-								}
-							>
-								{continueCurrentSolveLabel}
-							</Button>
-							<Button
-								size="sm"
-								colorScheme="red"
-								variant="outline"
-								onClick={() => void solveAlignment("allPoints")}
-								isDisabled={!canSolve}
-								data-testid="alignment-recompute-all-points"
-							>
-								Recompute with all points (dangerous)
-							</Button>
-						</>
-					) : null}
 				</Flex>
 			</Stack>
 		</Box>
@@ -1664,37 +1607,6 @@ export function AlignmentPanel({
 					<Text fontSize="sm" color="red.600" mb={3}>
 						{runtimeError}
 					</Text>
-				) : null}
-				{showDangerousRecoveryActions ? (
-					<Box
-						border="1px solid"
-						borderColor="red.200"
-						borderRadius="lg"
-						p={4}
-						bg="red.50"
-						mb={4}
-					>
-						<Stack spacing={2}>
-							<Text fontSize="sm" fontWeight="semibold" color="red.800">
-								Warning: Precision loss risk
-							</Text>
-							<Text fontSize="sm" color="red.700">
-								{alignment.failureReason && !alignment.solveAccepted
-									? `The alignment quality checks failed (${alignment.failureReason}). `
-									: "The current solve marked some control points as outliers. "}
-								&ldquo;
-								{alignment.solveAccepted
-									? "Continue with current solve"
-									: "Accept rejected solve"}
-								&rdquo;
-								keeps the current RANSAC result. &ldquo;Recompute with all points&rdquo;
-								skips outlier detection and computes a new transformation from
-								every control point, including the red outliers. Both options
-								may reduce accuracy and should only be used if you understand
-								the risks.
-							</Text>
-						</Stack>
-					</Box>
 				) : null}
 				<Flex direction={{ base: "column", xl: "row" }} gap={4} align="stretch">
 					<LandmarkCanvas

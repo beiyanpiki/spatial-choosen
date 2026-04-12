@@ -1,8 +1,340 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import ts from 'typescript';
 
 const PREPROCESS_STORAGE_KEY = 'spatial-preprocess-projects';
+const PREPROCESS_DB_NAME = 'spatial-preprocess';
+const PREPROCESS_DERIVED_IMAGE_STORE = 'preprocess-derived-images';
+
+const cropQcFeatureMatchesDerivedImageStoreKey = (projectId: string) => `${projectId}:crop-qc:feature-matches`;
+
+type CropQcHarnessPoint = {
+  id: string;
+  source: { x: number; y: number };
+  target: { x: number; y: number };
+};
+
+type CropQcHarnessOutcome = {
+  cropWidth: number;
+  cropHeight: number;
+  featureMatchesDataUrl: string | null;
+  featureMatchesPreviewDataUrl: string | null;
+  featureMatchesSize: {
+    width: number;
+    height: number;
+  } | null;
+};
+
+let cropQcHarnessScriptsPromise: Promise<{
+  cropQc: string;
+  imageTransforms: string;
+}> | null = null;
+
+function transpileBrowserModule(source: string, fileName: string) {
+  return ts.transpileModule(source, {
+    fileName,
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      isolatedModules: true,
+      esModuleInterop: true,
+    },
+  }).outputText;
+}
+
+async function loadCropQcHarnessScripts() {
+  cropQcHarnessScriptsPromise ??= (async () => {
+    const [cropQcSource, imageTransformsSource] = await Promise.all([
+      fs.readFile(path.join(process.cwd(), 'src/lib/preprocess/cropQc.ts'), 'utf8'),
+      fs.readFile(path.join(process.cwd(), 'src/lib/preprocess/imageTransforms.ts'), 'utf8'),
+    ]);
+
+    return {
+      cropQc: transpileBrowserModule(cropQcSource, 'cropQc.ts'),
+      imageTransforms: transpileBrowserModule(imageTransformsSource, 'imageTransforms.ts'),
+    };
+  })();
+
+  return cropQcHarnessScriptsPromise;
+}
+
+async function runCropQcHarness(
+  page: import('@playwright/test').Page,
+  options: {
+    controlPoints: CropQcHarnessPoint[];
+    inlierMask: boolean[] | null;
+  },
+): Promise<CropQcHarnessOutcome> {
+  const scripts = await loadCropQcHarnessScripts();
+
+  return page.evaluate(async ({ scripts, options }) => {
+    const moduleCache = new Map<string, { exports: Record<string, unknown> }>();
+
+    const loadModule = (id: string) => {
+      const cached = moduleCache.get(id);
+      if (cached) {
+        return cached.exports;
+      }
+
+      const source = id === 'cropQc'
+        ? scripts.cropQc
+        : id === 'imageTransforms'
+          ? scripts.imageTransforms
+          : null;
+      if (!source) {
+        throw new Error(`Unknown browser module: ${id}`);
+      }
+
+      const moduleContext = { exports: {} as Record<string, unknown> };
+      moduleCache.set(id, moduleContext);
+
+      const localRequire = (specifier: string) => {
+        if (specifier === '@/lib/preprocess/imageTransforms') {
+          return loadModule('imageTransforms');
+        }
+
+        throw new Error(`Unsupported require from ${id}: ${specifier}`);
+      };
+
+      new Function('require', 'module', 'exports', source)(localRequire, moduleContext, moduleContext.exports);
+      return moduleContext.exports;
+    };
+
+    const { runCropQc } = loadModule('cropQc') as {
+      runCropQc: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    };
+
+    class MockMat {
+      rows: number;
+      cols: number;
+      data64F: Float64Array;
+      data32F: Float32Array;
+      data: Uint8ClampedArray;
+      imageData: ImageData | null;
+
+      constructor(rows = 0, cols = 0, values: ArrayLike<number> = []) {
+        this.rows = rows;
+        this.cols = cols;
+        this.data64F = Float64Array.from(values);
+        this.data32F = Float32Array.from(values);
+        this.data = Uint8ClampedArray.from(values, (value) => Number(value));
+        this.imageData = null;
+      }
+
+      empty() {
+        return this.data64F.length === 0 && this.data32F.length === 0 && !this.imageData;
+      }
+
+      delete() {
+        // No-op for the browser test double.
+      }
+    }
+
+    class MockSize {
+      constructor(public width: number, public height: number) {}
+    }
+
+    class MockScalar {
+      values: [number, number, number, number];
+
+      constructor(v0: number, v1 = 0, v2 = 0, v3 = 0) {
+        this.values = [v0, v1, v2, v3];
+      }
+    }
+
+    const createMockCv = () => ({
+      Mat: MockMat,
+      matFromArray: (rows: number, cols: number, _type: number, data: ArrayLike<number>) => new MockMat(rows, cols, data),
+      matFromImageData: (imageData: ImageData) => {
+        const mat = new MockMat(imageData.height, imageData.width);
+        mat.imageData = imageData;
+        mat.data = new Uint8ClampedArray(imageData.data);
+        return mat;
+      },
+      warpAffine: (
+        src: MockMat,
+        dst: MockMat,
+        matrix: MockMat,
+        size: MockSize,
+        _interpolation: number,
+        _borderMode: number,
+        fill: MockScalar,
+      ) => {
+        if (!src.imageData) {
+          throw new Error('Missing source image data for warpAffine test double');
+        }
+
+        const values = Array.from(matrix.data64F.length > 0 ? matrix.data64F : matrix.data32F);
+        const [m00, m01, tx, m10, m11, ty] = values;
+        const determinant = m00 * m11 - m01 * m10;
+        if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-8) {
+          throw new Error('Non-invertible affine matrix in warpAffine test double');
+        }
+
+        const output = new ImageData(size.width, size.height);
+        const srcData = src.imageData.data;
+        const outData = output.data;
+        const fillColor = fill.values;
+
+        for (let y = 0; y < size.height; y += 1) {
+          for (let x = 0; x < size.width; x += 1) {
+            const srcX = (m11 * (x - tx) - m01 * (y - ty)) / determinant;
+            const srcY = (-m10 * (x - tx) + m00 * (y - ty)) / determinant;
+            const destOffset = (y * size.width + x) * 4;
+
+            if (
+              srcX < 0
+              || srcY < 0
+              || srcX > src.imageData.width - 1
+              || srcY > src.imageData.height - 1
+            ) {
+              outData[destOffset] = fillColor[0];
+              outData[destOffset + 1] = fillColor[1];
+              outData[destOffset + 2] = fillColor[2];
+              outData[destOffset + 3] = fillColor[3];
+              continue;
+            }
+
+            const sampleX = Math.max(0, Math.min(src.imageData.width - 1, Math.round(srcX)));
+            const sampleY = Math.max(0, Math.min(src.imageData.height - 1, Math.round(srcY)));
+            const srcOffset = (sampleY * src.imageData.width + sampleX) * 4;
+            outData[destOffset] = srcData[srcOffset];
+            outData[destOffset + 1] = srcData[srcOffset + 1];
+            outData[destOffset + 2] = srcData[srcOffset + 2];
+            outData[destOffset + 3] = srcData[srcOffset + 3];
+          }
+        }
+
+        dst.rows = size.height;
+        dst.cols = size.width;
+        dst.imageData = output;
+        dst.data = new Uint8ClampedArray(output.data);
+      },
+      Size: MockSize,
+      Scalar: MockScalar,
+      RANSAC: 8,
+      CV_64F: 0,
+      CV_8U: 1,
+      INTER_LINEAR: 1,
+      BORDER_CONSTANT: 0,
+    });
+
+    const fullWidth = 320;
+    const fullHeight = 240;
+    const cropSize = 140;
+    const cropOrigin = { x: 56, y: 48 };
+    const chipBounds = {
+      x: cropOrigin.x / fullWidth,
+      y: cropOrigin.y / fullHeight,
+      width: cropSize / fullWidth,
+      height: cropSize / fullHeight,
+    };
+
+    const createScenes = () => {
+      const eosinCanvas = document.createElement('canvas');
+      eosinCanvas.width = fullWidth;
+      eosinCanvas.height = fullHeight;
+      const eosinContext = eosinCanvas.getContext('2d');
+      if (!eosinContext) {
+        throw new Error('Canvas unavailable for eosin fixture');
+      }
+
+      eosinContext.fillStyle = 'rgb(224,224,224)';
+      eosinContext.fillRect(0, 0, fullWidth, fullHeight);
+      eosinContext.fillStyle = 'rgb(210,120,120)';
+      eosinContext.fillRect(cropOrigin.x, cropOrigin.y, cropSize, cropSize);
+      eosinContext.fillStyle = 'rgb(50,170,90)';
+      eosinContext.fillRect(cropOrigin.x + 18, cropOrigin.y + 22, 34, 34);
+      eosinContext.fillStyle = 'rgb(60,100,220)';
+      eosinContext.fillRect(cropOrigin.x + 82, cropOrigin.y + 86, 40, 40);
+
+      const heCanvas = document.createElement('canvas');
+      heCanvas.width = cropSize;
+      heCanvas.height = cropSize;
+      const heContext = heCanvas.getContext('2d');
+      if (!heContext) {
+        throw new Error('Canvas unavailable for HE fixture');
+      }
+
+      heContext.fillStyle = 'rgb(210,120,120)';
+      heContext.fillRect(0, 0, cropSize, cropSize);
+      heContext.fillStyle = 'rgb(50,170,90)';
+      heContext.fillRect(18, 22, 34, 34);
+      heContext.fillStyle = 'rgb(60,100,220)';
+      heContext.fillRect(82, 86, 40, 40);
+
+      return {
+        eosinDataUrl: eosinCanvas.toDataURL('image/png'),
+        heDataUrl: heCanvas.toDataURL('image/png'),
+      };
+    };
+
+    const scenes = createScenes();
+    const result = await runCropQc({
+      cv: createMockCv(),
+      eosinDataUrl: scenes.eosinDataUrl,
+      heDataUrl: scenes.heDataUrl,
+      chipBounds,
+      imageTransform: {
+        rotationDegrees: 0,
+        flipHorizontal: false,
+        flipVertical: false,
+        scale: 1,
+      },
+      affineMatrix: [1, 0, cropOrigin.x, 0, 1, cropOrigin.y],
+      controlPoints: options.controlPoints,
+      inlierMask: options.inlierMask,
+    });
+
+    const featureMatchesDataUrl = typeof result.featureMatchesDataUrl === 'string'
+      ? result.featureMatchesDataUrl
+      : null;
+    const featureMatchesPreviewDataUrl = result.featureMatchesPreview
+      && typeof result.featureMatchesPreview === 'object'
+      && typeof (result.featureMatchesPreview as { dataUrl?: unknown }).dataUrl === 'string'
+      ? (result.featureMatchesPreview as { dataUrl: string }).dataUrl
+      : null;
+
+    const featureMatchesSize = featureMatchesDataUrl
+      ? await new Promise<{ width: number; height: number }>((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+          image.onerror = () => reject(new Error('Failed to decode feature matches preview'));
+          image.src = featureMatchesDataUrl;
+        })
+      : null;
+
+    return {
+      cropWidth: typeof result.cropWidth === 'number' ? result.cropWidth : 0,
+      cropHeight: typeof result.cropHeight === 'number' ? result.cropHeight : 0,
+      featureMatchesDataUrl,
+      featureMatchesPreviewDataUrl,
+      featureMatchesSize,
+    };
+  }, {
+    scripts,
+    options,
+  });
+}
+
+function buildFocusedCropPoint(id: string, x: number, y: number): CropQcHarnessPoint {
+  const cropBounds = {
+    x: 56 / 320,
+    y: 48 / 240,
+    width: 140 / 320,
+    height: 140 / 240,
+  };
+
+  return {
+    id,
+    source: {
+      x: cropBounds.x + x * cropBounds.width,
+      y: cropBounds.y + y * cropBounds.height,
+    },
+    target: { x, y },
+  };
+}
 
 function alignmentLocators(page: import('@playwright/test').Page) {
   return {
@@ -34,6 +366,180 @@ async function getCurrentPreprocessId(page: import('@playwright/test').Page) {
   const preprocessId = url.searchParams.get('preprocess_id');
   if (!preprocessId) throw new Error('Missing preprocess_id in URL');
   return preprocessId;
+}
+
+async function readFeatureMatchesStorageState(
+  page: import('@playwright/test').Page,
+  preprocessId: string,
+) {
+  return page.evaluate(async ({
+    preprocessId,
+    preprocessStorageKey,
+    preprocessDbName,
+    preprocessDerivedImageStore,
+    derivedImageKey,
+  }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    const projects = raw ? JSON.parse(raw) as Array<Record<string, unknown>> : [];
+    const project = projects.find((entry) => entry.id === preprocessId) ?? null;
+    const cropQc = project && typeof project.cropQc === 'object' && project.cropQc !== null
+      ? project.cropQc as Record<string, unknown>
+      : null;
+    const featureMatchesPreview = cropQc?.featureMatchesPreview && typeof cropQc.featureMatchesPreview === 'object'
+      ? cropQc.featureMatchesPreview as Record<string, unknown>
+      : null;
+
+    const derivedValue = await new Promise<Blob | string | undefined>((resolve, reject) => {
+      const openRequest = window.indexedDB.open(preprocessDbName);
+      openRequest.onerror = () => reject(openRequest.error);
+      openRequest.onsuccess = () => {
+        const db = openRequest.result;
+        const tx = db.transaction(preprocessDerivedImageStore, 'readonly');
+        const request = tx.objectStore(preprocessDerivedImageStore).get(derivedImageKey);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result as Blob | string | undefined);
+      };
+    });
+
+    const derivedDataUrl = await new Promise<string | null>((resolve, reject) => {
+      if (derivedValue instanceof Blob) {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error);
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+        reader.readAsDataURL(derivedValue);
+        return;
+      }
+
+      resolve(typeof derivedValue === 'string' ? derivedValue : null);
+    });
+
+    return {
+      projectExists: Boolean(project),
+      metaAlias: cropQc?.featureMatchesPreviewDataUrl ?? null,
+      metaNested: featureMatchesPreview?.dataUrl ?? null,
+      derivedKind: derivedValue instanceof Blob ? 'blob' : typeof derivedValue === 'string' ? 'string' : null,
+      derivedSize: derivedValue instanceof Blob ? derivedValue.size : typeof derivedValue === 'string' ? derivedValue.length : 0,
+      derivedDataUrl,
+    };
+  }, {
+    preprocessId,
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+    preprocessDbName: PREPROCESS_DB_NAME,
+    preprocessDerivedImageStore: PREPROCESS_DERIVED_IMAGE_STORE,
+    derivedImageKey: cropQcFeatureMatchesDerivedImageStoreKey(preprocessId),
+  });
+}
+
+async function seedLegacyFeatureMatchesFallbackState(
+  page: import('@playwright/test').Page,
+  preprocessId: string,
+) {
+  return page.evaluate(async ({
+    preprocessId,
+    preprocessStorageKey,
+    preprocessDbName,
+    preprocessDerivedImageStore,
+    derivedImageKey,
+  }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) {
+      throw new Error('No preprocess storage payload found');
+    }
+
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const makeImage = (fill: string) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 120;
+      canvas.height = 120;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas unavailable for feature matches fallback seed');
+      context.fillStyle = fill;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/png');
+    };
+
+    const aliasDataUrl = makeImage('rgb(90,170,90)');
+    const nestedDataUrl = makeImage('rgb(80,90,210)');
+    const nextProjects = projects.map((project) => {
+      if (project.id !== preprocessId) return project;
+      const cropQc = project.cropQc as Record<string, unknown> | null | undefined;
+      if (!cropQc) {
+        throw new Error('Missing cropQc state');
+      }
+
+      return {
+        ...project,
+        cropQc: {
+          ...cropQc,
+          featureMatchesPreviewDataUrl: aliasDataUrl,
+          featureMatchesPreview: {
+            dataUrl: nestedDataUrl,
+          },
+        },
+      };
+    });
+
+    window.localStorage.setItem(preprocessStorageKey, JSON.stringify(nextProjects));
+
+    await new Promise<void>((resolve, reject) => {
+      const openRequest = window.indexedDB.open(preprocessDbName);
+      openRequest.onerror = () => reject(openRequest.error);
+      openRequest.onsuccess = () => {
+        const db = openRequest.result;
+        const tx = db.transaction(preprocessDerivedImageStore, 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+        tx.objectStore(preprocessDerivedImageStore).delete(derivedImageKey);
+      };
+    });
+
+    return {
+      aliasDataUrl,
+      nestedDataUrl,
+    };
+  }, {
+    preprocessId,
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+    preprocessDbName: PREPROCESS_DB_NAME,
+    preprocessDerivedImageStore: PREPROCESS_DERIVED_IMAGE_STORE,
+    derivedImageKey: cropQcFeatureMatchesDerivedImageStoreKey(preprocessId),
+  });
+}
+
+async function stripLegacyFeatureMatchesPreviewFields(
+  page: import('@playwright/test').Page,
+  preprocessId: string,
+) {
+  await page.evaluate(({ preprocessId, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) {
+      throw new Error('No preprocess storage payload found');
+    }
+
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const nextProjects = projects.map((project) => {
+      if (project.id !== preprocessId) return project;
+      const cropQc = project.cropQc as Record<string, unknown> | null | undefined;
+      if (!cropQc) {
+        throw new Error('Missing cropQc state');
+      }
+
+      const nextCropQc = { ...cropQc };
+      delete nextCropQc.featureMatchesPreviewDataUrl;
+      delete nextCropQc.featureMatchesPreview;
+
+      return {
+        ...project,
+        cropQc: nextCropQc,
+      };
+    });
+
+    window.localStorage.setItem(preprocessStorageKey, JSON.stringify(nextProjects));
+  }, {
+    preprocessId,
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
 }
 
 async function seedFocusedHeConsumerState(
@@ -621,8 +1127,15 @@ async function seedCompletedDownstreamState(page: import('@playwright/test').Pag
     const eosinDataUrl = makeImage(320, 240, 'rgb(180,180,180)');
     const originalHeDataUrl = makeImage(320, 240, 'rgb(40,90,220)');
     const focusedHeDataUrl = makeImage(140, 140, 'rgb(220,60,60)');
-    const cropPreviewDataUrl = makeImage(120, 120, 'rgb(220,60,60)');
+    const createCropAssetSet = (baseFill: string) => ({
+      fullres: { dataUrl: makeImage(120, 120, baseFill) },
+      hires: { dataUrl: makeImage(96, 96, baseFill) },
+      lowres: { dataUrl: makeImage(64, 64, baseFill) },
+    });
+    const eosinCropAssets = createCropAssetSet('rgb(200,80,80)');
+    const heCropAssets = createCropAssetSet('rgb(80,80,200)');
     const checkerboardDataUrl = makeImage(120, 120, 'rgb(200,120,120)');
+    const featureMatchesDataUrl = makeImage(120, 120, 'rgb(90,170,90)');
     const now = new Date().toISOString();
 
     const nextProjects = projects.map((project) => {
@@ -756,10 +1269,22 @@ async function seedCompletedDownstreamState(page: import('@playwright/test').Pag
           },
           cropWidth: 120,
           cropHeight: 120,
+          cropAssets: {
+            eosin: eosinCropAssets,
+            he: heCropAssets,
+          },
+          tissue_hires_scalef: 0.5,
+          tissue_lowres_scalef: 0.25,
+          spot_diameter_fullres: 12,
+          fiducial_diameter_fullres: 20,
           qcAccepted: true,
-          eosinPreviewDataUrl: eosinDataUrl,
-          previewDataUrl: cropPreviewDataUrl,
+          eosinPreviewDataUrl: eosinCropAssets.fullres.dataUrl,
+          previewDataUrl: heCropAssets.fullres.dataUrl,
           checkerboardPreviewDataUrl: checkerboardDataUrl,
+          featureMatchesPreviewDataUrl: featureMatchesDataUrl,
+          featureMatchesPreview: {
+            dataUrl: featureMatchesDataUrl,
+          },
           error: null,
         },
       };
@@ -824,24 +1349,76 @@ async function uploadAlignmentImages(page: import('@playwright/test').Page) {
 
 async function addTenIdentityPairs(page: import('@playwright/test').Page) {
   const points = [
-    { x: 0.24, y: 0.48 },
-    { x: 0.36, y: 0.52 },
-    { x: 0.48, y: 0.58 },
-    { x: 0.62, y: 0.64 },
-    { x: 0.28, y: 0.72 },
-    { x: 0.4, y: 0.78 },
-    { x: 0.54, y: 0.84 },
-    { x: 0.68, y: 0.56 },
-    { x: 0.58, y: 0.72 },
-    { x: 0.32, y: 0.88 },
+    { x: 0.18, y: 0.18 },
+    { x: 0.3, y: 0.24 },
+    { x: 0.42, y: 0.3 },
+    { x: 0.54, y: 0.36 },
+    { x: 0.24, y: 0.46 },
+    { x: 0.4, y: 0.54 },
+    { x: 0.58, y: 0.66 },
+    { x: 0.74, y: 0.78 },
   ];
 
-  for (const point of points) {
-    await clickAlignmentPoint(page, 'alignment-add-point-eosin', point);
-    await clickAlignmentPoint(page, 'alignment-add-point-he', point);
-  }
+  const controlPoints = points.map((point, index) => ({
+    id: `identity-${index + 1}`,
+    source: point,
+    target: point,
+  }));
 
-  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 10 / 15');
+  await page.evaluate(({ preprocessId, preprocessStorageKey, controlPoints }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) {
+      throw new Error('No preprocess storage payload found');
+    }
+
+    const now = new Date().toISOString();
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const nextProjects = projects.map((project) => {
+      if (project.id !== preprocessId) return project;
+
+      const alignment = project.alignment as Record<string, unknown>;
+      return {
+        ...project,
+        currentStep: 'alignment',
+        updatedAt: now,
+        alignment: {
+          ...alignment,
+          status: 'ready',
+          isStale: false,
+          updatedAt: now,
+          controlPoints,
+          inlierMask: null,
+          affineMatrix: null,
+          reprojectionRmse: null,
+          inlierRatio: null,
+          ransacReprojThreshold: null,
+          qualityFlags: {
+            minPairs: false,
+            inlierRatio: false,
+            rmse: false,
+            finiteMatrix: false,
+            scaleRange: false,
+            accepted: false,
+          },
+          solveAccepted: false,
+          failureReason: null,
+          transform: null,
+          previewDataUrl: null,
+          error: null,
+        },
+      };
+    });
+
+    window.localStorage.setItem(preprocessStorageKey, JSON.stringify(nextProjects));
+  }, {
+    preprocessId: await getCurrentPreprocessId(page),
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+    controlPoints,
+  });
+
+  await page.reload();
+  await expect(page.getByTestId('alignment-runtime-status-badge')).toContainText(/ready/i, { timeout: 180_000 });
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 8 / 15');
 }
 
 async function addTenClusteredPairs(page: import('@playwright/test').Page) {
@@ -981,10 +1558,8 @@ test('focused HE pair-point solve lands the warped crop in the correct eosin reg
   await expect(page.getByTestId('alignment-runtime-status-badge')).toContainText(/ready/i, { timeout: 180_000 });
   await expect(page.getByTestId('alignment-pair-count-badge')).toContainText(`Pairs ${seededScenario.pairCount} / 15`);
   await page.getByTestId('alignment-run-solve').click();
-  await expect(page.getByTestId('alignment-status')).toContainText(/Accepted/i);
+  await expect(page.getByTestId('cropqc-run')).toBeVisible();
   await expect(page.getByTestId('preprocess-step-crop')).toBeEnabled();
-
-  await page.getByTestId('preprocess-step-crop').click();
   await page.getByTestId('cropqc-run').click();
   await page.getByRole('tab', { name: 'Overlay opacity' }).click();
   const heCropPreview = page.getByAltText('Warped HE crop preview');
@@ -1001,6 +1576,179 @@ test('focused HE pair-point solve lands the warped crop in the correct eosin reg
   expect(center.b).toBeLessThan(120);
   expect(bottomRight.b).toBeGreaterThan(150);
   expect(bottomRight.r).toBeLessThan(140);
+});
+
+test('cropqc feature matches preview is generated from accepted alignment', async ({ page }) => {
+  await page.setContent('<!DOCTYPE html><html><body></body></html>');
+
+  const controlPoints = [
+    buildFocusedCropPoint('pair-1', 0.18, 0.24),
+    buildFocusedCropPoint('pair-2', 0.52, 0.46),
+    buildFocusedCropPoint('pair-3', 0.78, 0.72),
+  ];
+
+  const matchedMaskResult = await runCropQcHarness(page, {
+    controlPoints,
+    inlierMask: [true, false, true],
+  });
+  const matchedMaskRepeat = await runCropQcHarness(page, {
+    controlPoints,
+    inlierMask: [true, false, true],
+  });
+  const explicitFilteredResult = await runCropQcHarness(page, {
+    controlPoints: [controlPoints[0], controlPoints[2]],
+    inlierMask: null,
+  });
+  const fallbackMaskResult = await runCropQcHarness(page, {
+    controlPoints,
+    inlierMask: [true, false],
+  });
+  const explicitAllResult = await runCropQcHarness(page, {
+    controlPoints,
+    inlierMask: null,
+  });
+  const blankResult = await runCropQcHarness(page, {
+    controlPoints: [],
+    inlierMask: null,
+  });
+
+  expect(matchedMaskResult.featureMatchesDataUrl).toMatch(/^data:image\/png;base64,/);
+  expect(matchedMaskResult.featureMatchesPreviewDataUrl).toBe(matchedMaskResult.featureMatchesDataUrl);
+  expect(matchedMaskResult.featureMatchesSize).not.toBeNull();
+  if (!matchedMaskResult.featureMatchesSize) {
+    throw new Error('Expected feature matches preview dimensions');
+  }
+
+  expect(matchedMaskResult.featureMatchesSize.width).toBeGreaterThan(matchedMaskResult.cropWidth * 2);
+  expect(matchedMaskResult.featureMatchesSize.height).toBe(matchedMaskResult.cropHeight);
+  expect(matchedMaskResult.featureMatchesDataUrl).toBe(matchedMaskRepeat.featureMatchesDataUrl);
+  expect(matchedMaskResult.featureMatchesDataUrl).toBe(explicitFilteredResult.featureMatchesDataUrl);
+  expect(fallbackMaskResult.featureMatchesDataUrl).toBe(explicitAllResult.featureMatchesDataUrl);
+  expect(matchedMaskResult.featureMatchesDataUrl).not.toBe(blankResult.featureMatchesDataUrl);
+});
+
+test('workspace stores cropqc feature matches preview after generation', async ({ page }) => {
+  await createProject(page, `task5-cropqc-workspace-store-${Date.now()}`);
+  await seedCompletedDownstreamState(page);
+
+  const preprocessId = await getCurrentPreprocessId(page);
+  await seedLegacyFeatureMatchesFallbackState(page, preprocessId);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByTestId('preprocess-step-crop').click();
+  await page.getByTestId('cropqc-run').click();
+  await expect(page.getByTestId('cropqc-dimensions')).not.toHaveText('Not generated');
+
+  const state = await readFeatureMatchesStorageState(page, preprocessId);
+  expect(state.projectExists).toBe(true);
+  expect(state.derivedKind).toBe('blob');
+  expect(state.derivedSize).toBeGreaterThan(0);
+  expect(state.metaAlias).toBeNull();
+  expect(state.metaNested).toBeNull();
+});
+
+test('feature matches preview renders in cropqc after generation', async ({ page }) => {
+  await createProject(page, `task6-cropqc-feature-matches-ui-${Date.now()}`);
+  await seedCompletedDownstreamState(page);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByTestId('preprocess-step-crop').click();
+  await page.getByTestId('cropqc-run').click();
+  await expect(page.getByTestId('cropqc-dimensions')).not.toHaveText('Not generated');
+  await page.getByRole('tab', { name: 'Feature matches' }).click();
+
+  const preview = page.getByTestId('cropqc-feature-matches-canvas');
+  await expect(preview).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Feature matches' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByAltText('QC feature matches preview')).toBeVisible();
+  await expect(page.getByText('Feature-match preview appears after crop generation.')).toHaveCount(0);
+});
+
+test('rerunning cropqc refreshes feature matches preview', async ({ page }) => {
+  await createProject(page, `task5-cropqc-workspace-refresh-${Date.now()}`);
+  await seedCompletedDownstreamState(page);
+
+  const preprocessId = await getCurrentPreprocessId(page);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByTestId('preprocess-step-crop').click();
+  await page.getByTestId('cropqc-run').click();
+
+  const firstState = await readFeatureMatchesStorageState(page, preprocessId);
+  expect(firstState.derivedKind).toBe('blob');
+  expect(firstState.derivedSize).toBeGreaterThan(0);
+  const firstPreview = firstState.derivedDataUrl;
+
+  await page.getByTestId('preprocess-step-align').click();
+  await page.getByTestId('alignment-reset').click();
+  const refreshedPoints = [
+    { x: 0.24, y: 0.48 },
+    { x: 0.36, y: 0.52 },
+    { x: 0.48, y: 0.58 },
+    { x: 0.62, y: 0.64 },
+    { x: 0.28, y: 0.72 },
+    { x: 0.4, y: 0.78 },
+    { x: 0.54, y: 0.84 },
+    { x: 0.68, y: 0.56 },
+    { x: 0.58, y: 0.72 },
+  ];
+
+  for (const point of refreshedPoints) {
+    await clickAlignmentPoint(page, 'alignment-add-point-eosin', point);
+    await clickAlignmentPoint(page, 'alignment-add-point-he', point);
+  }
+
+  await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 9 / 15');
+  await page.getByTestId('alignment-run-solve').click();
+  await expect(page.getByTestId('cropqc-run')).toBeVisible();
+  await expect(page.getByTestId('preprocess-step-crop')).toBeEnabled();
+  await page.getByTestId('cropqc-run').click();
+  await expect(page.getByTestId('autosave-status')).toContainText(/saved/i, { timeout: 15_000 });
+
+  const refreshedState = await readFeatureMatchesStorageState(page, preprocessId);
+  expect(refreshedState.derivedKind).toBe('blob');
+  expect(refreshedState.derivedSize).toBeGreaterThan(0);
+  expect(refreshedState.derivedDataUrl).not.toBe(firstPreview);
+  expect(refreshedState.metaAlias).toBeNull();
+  expect(refreshedState.metaNested).toBeNull();
+});
+
+test('cropqc feature matches preview skips off-crop pairs', async ({ page }) => {
+  await page.setContent('<!DOCTYPE html><html><body></body></html>');
+
+  const offCropResult = await runCropQcHarness(page, {
+    controlPoints: [
+      {
+        id: 'off-crop-1',
+        source: { x: 0.04, y: 0.05 },
+        target: { x: 0.18, y: 0.24 },
+      },
+      {
+        id: 'off-crop-2',
+        source: { x: 0.92, y: 0.9 },
+        target: { x: 0.78, y: 0.72 },
+      },
+    ],
+    inlierMask: [true, true],
+  });
+  const blankResult = await runCropQcHarness(page, {
+    controlPoints: [],
+    inlierMask: null,
+  });
+
+  expect(offCropResult.featureMatchesDataUrl).toMatch(/^data:image\/png;base64,/);
+  expect(offCropResult.featureMatchesPreviewDataUrl).toBe(offCropResult.featureMatchesDataUrl);
+  expect(offCropResult.featureMatchesSize).not.toBeNull();
+  if (!offCropResult.featureMatchesSize) {
+    throw new Error('Expected feature matches preview dimensions for off-crop pairs');
+  }
+
+  expect(offCropResult.featureMatchesSize.width).toBeGreaterThan(offCropResult.cropWidth * 2);
+  expect(offCropResult.featureMatchesSize.height).toBe(offCropResult.cropHeight);
+  expect(offCropResult.featureMatchesDataUrl).toBe(blankResult.featureMatchesDataUrl);
 });
 
 test('changing HE Focus clears alignment solve state and crop outputs through invalidation', async ({ page }) => {
@@ -1035,6 +1783,178 @@ test('changing HE Focus clears alignment solve state and crop outputs through in
     preprocessId: await getCurrentPreprocessId(page),
     preprocessStorageKey: PREPROCESS_STORAGE_KEY,
   });
+});
+
+test('feature matches invalidation clears stale cropqc output', async ({ page }) => {
+  await createProject(page, `task1-feature-matches-invalidation-${Date.now()}`);
+  await seedCompletedDownstreamState(page);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByTestId('he-focus-stage-rotate-right-90').click();
+
+  await page.waitForFunction(({ preprocessId, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) return false;
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const project = projects.find((entry) => entry.id === preprocessId);
+    if (!project || typeof project.cropQc !== 'object' || project.cropQc === null) {
+      return false;
+    }
+
+    const cropQc = project.cropQc as Record<string, unknown>;
+
+    return cropQc.status === 'stale'
+      && cropQc.previewDataUrl === null;
+  }, {
+    preprocessId: await getCurrentPreprocessId(page),
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
+
+  const state = await page.evaluate(({ preprocessId, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) throw new Error('No preprocess storage payload found');
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const project = projects.find((entry) => entry.id === preprocessId);
+    if (!project || typeof project.cropQc !== 'object' || project.cropQc === null) {
+      throw new Error('Missing cropQc state');
+    }
+
+    const cropQc = project.cropQc as Record<string, unknown>;
+    const featureMatchesPreview = cropQc.featureMatchesPreview as Record<string, unknown> | undefined;
+
+    return {
+      featureMatchesPreviewDataUrl: cropQc.featureMatchesPreviewDataUrl,
+      featureMatchesPreviewDataUrlNested: featureMatchesPreview?.dataUrl ?? null,
+    };
+  }, {
+    preprocessId: await getCurrentPreprocessId(page),
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
+
+  expect(state.featureMatchesPreviewDataUrl).toBeNull();
+  expect(state.featureMatchesPreviewDataUrlNested).toBeNull();
+});
+
+test('legacy cropqc projects tolerate missing feature matches preview field', async ({ page }) => {
+  const projectName = `task3-legacy-feature-matches-${Date.now()}`;
+  const savedProjectName = `${projectName}-saved`;
+  await createProject(page, projectName);
+  await seedCompletedDownstreamState(page);
+
+  const preprocessId = await getCurrentPreprocessId(page);
+  await stripLegacyFeatureMatchesPreviewFields(page, preprocessId);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByRole('heading', { name: /task3-legacy-feature-matches-/ }).click();
+  await page.getByTestId('project-name-input').fill(savedProjectName);
+  await page.getByTestId('project-name-input').press('Enter');
+  await expect(page.getByTestId('autosave-status')).toContainText(/saved/i, { timeout: 15_000 });
+
+  const state = await page.evaluate(({ preprocessId, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) return null;
+
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const project = projects.find((entry) => entry.id === preprocessId);
+    if (!project || typeof project.cropQc !== 'object' || project.cropQc === null) {
+      return null;
+    }
+
+    const cropQc = project.cropQc as Record<string, unknown>;
+    const featureMatchesPreview = cropQc.featureMatchesPreview as Record<string, unknown> | undefined;
+
+    return {
+      hasAlias: Object.hasOwn(cropQc, 'featureMatchesPreviewDataUrl'),
+      aliasValue: cropQc.featureMatchesPreviewDataUrl,
+      hasNested: Object.hasOwn(cropQc, 'featureMatchesPreview'),
+      nestedValue: featureMatchesPreview?.dataUrl ?? null,
+    };
+  }, {
+    preprocessId,
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
+
+  expect(state).toEqual({
+    hasAlias: true,
+    aliasValue: null,
+    hasNested: true,
+    nestedValue: null,
+  });
+});
+
+test('feature matches preview rehydrates from storage', async ({ page }) => {
+  const projectName = `task2-feature-matches-storage-${Date.now()}`;
+  const firstSavedName = `${projectName}-saved-1`;
+  const secondSavedName = `${projectName}-saved-2`;
+  await createProject(page, projectName);
+  await seedCompletedDownstreamState(page);
+
+  const preprocessId = await getCurrentPreprocessId(page);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByRole('heading', { name: projectName }).click();
+  await page.getByTestId('project-name-input').fill(firstSavedName);
+  await page.getByTestId('project-name-input').press('Enter');
+  await expect(page.getByTestId('autosave-status')).toContainText(/saved/i, { timeout: 15_000 });
+
+  const firstSaveState = await readFeatureMatchesStorageState(page, preprocessId);
+  expect(firstSaveState.projectExists).toBe(true);
+  expect(firstSaveState.derivedKind).toBe('blob');
+  expect(firstSaveState.derivedSize).toBeGreaterThan(0);
+  expect(firstSaveState.metaAlias).toBeNull();
+  expect(firstSaveState.metaNested).toBeNull();
+
+  const legacyFallbackState = await seedLegacyFeatureMatchesFallbackState(page, preprocessId);
+  expect(legacyFallbackState.aliasDataUrl).not.toBe(legacyFallbackState.nestedDataUrl);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByRole('heading', { name: firstSavedName }).click();
+  await page.getByTestId('project-name-input').fill(secondSavedName);
+  await page.getByTestId('project-name-input').press('Enter');
+  await expect(page.getByTestId('autosave-status')).toContainText(/saved/i, { timeout: 15_000 });
+
+  const rehydratedState = await readFeatureMatchesStorageState(page, preprocessId);
+  expect(rehydratedState.projectExists).toBe(true);
+  expect(rehydratedState.derivedKind).toBe('blob');
+  expect(rehydratedState.derivedSize).toBeGreaterThan(0);
+  expect(rehydratedState.metaAlias).toBeNull();
+  expect(rehydratedState.metaNested).toBeNull();
+  expect(rehydratedState.derivedDataUrl).toBe(legacyFallbackState.aliasDataUrl);
+  expect(rehydratedState.derivedDataUrl).not.toBe(legacyFallbackState.nestedDataUrl);
+});
+
+test('deleting preprocess project removes feature matches preview blob', async ({ page }) => {
+  const projectName = `task2-feature-matches-delete-${Date.now()}`;
+  const savedProjectName = `${projectName}-saved`;
+  await createProject(page, projectName);
+  await seedCompletedDownstreamState(page);
+
+  const preprocessId = await getCurrentPreprocessId(page);
+
+  await page.reload();
+  await expect(page.getByTestId('he-focus-stage-rotate-right-90')).toBeVisible();
+  await page.getByRole('heading', { name: projectName }).click();
+  await page.getByTestId('project-name-input').fill(savedProjectName);
+  await page.getByTestId('project-name-input').press('Enter');
+  await expect(page.getByTestId('autosave-status')).toContainText(/saved/i, { timeout: 15_000 });
+
+  const savedState = await readFeatureMatchesStorageState(page, preprocessId);
+  expect(savedState.derivedKind).toBe('blob');
+  expect(savedState.derivedSize).toBeGreaterThan(0);
+
+  await page.goto('/preprocess');
+  await expect(page.getByTestId('preprocess-project-list')).toBeVisible();
+  await page.getByRole('button', { name: `Delete ${savedProjectName}` }).click();
+  await expect(page.getByRole('heading', { name: savedProjectName })).toHaveCount(0);
+
+  const deletedState = await readFeatureMatchesStorageState(page, preprocessId);
+  expect(deletedState.projectExists).toBe(false);
+  expect(deletedState.derivedKind).toBeNull();
+  expect(deletedState.derivedSize).toBe(0);
 });
 
 test('selected pair exposes contextual reposition and delete actions', async ({ page }) => {
@@ -1156,6 +2076,8 @@ test('repeated solve/reset stays stable and crop step remains reachable', async 
   for (let cycle = 0; cycle < 5; cycle += 1) {
     await addTenIdentityPairs(page);
     await page.getByTestId('alignment-run-solve').click();
+    await expect(page.getByTestId('cropqc-run')).toBeVisible();
+    await page.getByTestId('preprocess-step-align').click();
     await expect(page.getByTestId('alignment-status')).toContainText(/Accepted|Rejected/i);
     await page.getByTestId('alignment-reset').click();
     await expect(page.getByTestId('alignment-pair-count-badge')).toContainText('Pairs 0 / 15');
@@ -1163,8 +2085,11 @@ test('repeated solve/reset stays stable and crop step remains reachable', async 
 
   await addTenIdentityPairs(page);
   await page.getByTestId('alignment-run-solve').click();
-  await expect(page.getByTestId('alignment-status')).toContainText(/Accepted/i);
+  await expect(page.getByTestId('cropqc-run')).toBeVisible();
   await expect(page.getByTestId('preprocess-step-crop')).toBeEnabled();
+
+  await page.getByTestId('preprocess-step-align').click();
+  await expect(page.getByTestId('alignment-status')).toContainText(/Accepted/i);
 
   await page.screenshot({
     path: path.join(process.cwd(), '.sisyphus/evidence/task-12-hardening-happy.png'),
@@ -1186,55 +2111,57 @@ test('clustered landmarks stay blocked after solve and keep crop disabled', asyn
   await expect(page.getByTestId('preprocess-step-crop')).toBeDisabled();
 });
 
-test('rejected solve exposes separate dangerous accept and recompute actions', async ({ page }) => {
-  await createProject(page, `task16-dangerous-actions-${Date.now()}`);
-  await seedDangerousContinueScenario(page, 'rejected');
-
-  await page.reload();
-  await expect(page.getByTestId('alignment-workflow-overlay')).toBeVisible();
-  await expect(page.getByTestId('alignment-status')).toContainText(/Rejected/i);
-
-  await expect(page.getByTestId('alignment-accept-rejected-solve')).toBeVisible();
-  await expect(page.getByTestId('alignment-recompute-all-points')).toBeVisible();
-
-  await page.getByTestId('alignment-diagnostics-toggle').click();
-  const rejectedMatrix = await page.getByTestId('alignment-matrix-json').textContent();
-  const rejectedInlierRatio = await page.getByTestId('alignment-inlier-ratio').textContent();
-
-  await page.getByTestId('alignment-accept-rejected-solve').click();
-  await expect(page.getByTestId('alignment-status')).toContainText(/Accepted/i);
-  await expect(page.getByTestId('preprocess-step-crop')).toBeEnabled();
-  await expect(page.getByTestId('alignment-matrix-json')).toHaveText(rejectedMatrix ?? '');
-  await expect(page.getByTestId('alignment-inlier-ratio')).toHaveText(rejectedInlierRatio ?? '');
-});
-
-test('dangerous recompute uses all points instead of the rejected inlier subset', async ({ page }) => {
+test('solve alignment uses all points by default and opens crop qc', async ({ page }) => {
   await createProject(page, `task16-dangerous-recompute-${Date.now()}`);
   await seedDangerousContinueScenario(page, 'rejected');
 
   await page.reload();
   await expect(page.getByTestId('alignment-workflow-overlay')).toBeVisible();
   await expect(page.getByTestId('alignment-status')).toContainText(/Rejected/i);
+  await expect(page.getByTestId('alignment-accept-rejected-solve')).toHaveCount(0);
+  await expect(page.getByTestId('alignment-recompute-all-points')).toHaveCount(0);
 
-  await page.getByTestId('alignment-diagnostics-toggle').click();
-  const rejectedMatrix = await page.getByTestId('alignment-matrix-json').textContent();
-
-  await page.getByTestId('alignment-recompute-all-points').click();
-  await expect(page.getByTestId('alignment-status')).toContainText(/Accepted/i);
+  await page.getByTestId('alignment-run-solve').click();
+  await expect(page.getByTestId('cropqc-run')).toBeVisible();
   await expect(page.getByTestId('preprocess-step-crop')).toBeEnabled();
-  await expect(page.getByTestId('alignment-inlier-ratio')).toHaveText('100.0%');
-  await expect(page.getByTestId('alignment-matrix-json')).not.toHaveText(rejectedMatrix ?? '');
+
+  const solvedAlignment = await page.evaluate(({ preprocessId, preprocessStorageKey }) => {
+    const raw = window.localStorage.getItem(preprocessStorageKey);
+    if (!raw) throw new Error('No preprocess storage payload found');
+
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const project = projects.find((entry) => entry.id === preprocessId);
+    if (!project || typeof project.alignment !== 'object' || project.alignment === null) {
+      throw new Error('Missing alignment state');
+    }
+
+    const alignment = project.alignment as Record<string, unknown>;
+    return {
+      status: alignment.status,
+      solveAccepted: alignment.solveAccepted,
+      inlierRatio: alignment.inlierRatio,
+      affineMatrix: JSON.stringify(alignment.affineMatrix),
+    };
+  }, {
+    preprocessId: await getCurrentPreprocessId(page),
+    preprocessStorageKey: PREPROCESS_STORAGE_KEY,
+  });
+
+  expect(solvedAlignment.status).toBe('complete');
+  expect(solvedAlignment.solveAccepted).toBe(true);
+  expect(solvedAlignment.inlierRatio).not.toBeNull();
+  expect(solvedAlignment.affineMatrix).toBeTruthy();
 });
 
-test('accepted solve with outliers still exposes dangerous recovery actions', async ({ page }) => {
+test('accepted solve with outliers no longer exposes recovery actions', async ({ page }) => {
   await createProject(page, `task16-dangerous-outliers-${Date.now()}`);
   await seedDangerousContinueScenario(page, 'accepted-with-outliers');
 
   await page.reload();
   await expect(page.getByTestId('alignment-workflow-overlay')).toBeVisible();
   await expect(page.getByTestId('alignment-status')).toContainText(/Accepted/i);
-  await expect(page.getByTestId('alignment-continue-current-solve')).toBeVisible();
-  await expect(page.getByTestId('alignment-recompute-all-points')).toBeVisible();
+  await expect(page.getByTestId('alignment-continue-current-solve')).toHaveCount(0);
+  await expect(page.getByTestId('alignment-recompute-all-points')).toHaveCount(0);
 });
 
 test('oversized input and synthetic quota failure surface recoverable errors', async ({ page }) => {
