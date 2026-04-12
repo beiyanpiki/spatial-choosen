@@ -14,8 +14,9 @@ import { DEFAULT_TISSUE_PARAMS } from '@/lib/preprocess/tissueThresholds';
 import {
   deletePreprocessProject,
   getPreprocessProject,
-  readPreprocessProjects,
+  readPreprocessProjectSummaries,
   upsertPreprocessProject,
+  type PreprocessProjectSummary,
 } from '@/lib/preprocess/storage';
 import type {
   HeFocusSlice,
@@ -30,10 +31,34 @@ const collectProjectObjectUrls = (project: PreprocessProject | null) => {
   const urls = new Set<string>();
   if (!project) return urls;
 
+  const addUrl = (url: string | null | undefined) => {
+    if (typeof url === 'string' && url.startsWith('blob:')) {
+      urls.add(url);
+    }
+  };
+
   for (const image of Object.values(project.sourceAssets.images)) {
-    if (image?.objectUrl) urls.add(image.objectUrl);
-    if (image?.thumbnailObjectUrl) urls.add(image.thumbnailObjectUrl);
+    addUrl(image?.objectUrl);
+    addUrl(image?.thumbnailObjectUrl);
   }
+
+  addUrl(project.heFocus.focusedImageDataUrl);
+
+  const cropAssets = project.cropQc.cropAssets;
+  if (cropAssets?.eosin && cropAssets.he) {
+    for (const assetSet of [cropAssets.eosin, cropAssets.he]) {
+      addUrl(assetSet.fullres.dataUrl);
+      addUrl(assetSet.hires.dataUrl);
+      addUrl(assetSet.lowres.dataUrl);
+    }
+  }
+
+  addUrl(project.cropQc.checkerboardPreview?.dataUrl);
+  addUrl(project.cropQc.featureMatchesPreview?.dataUrl);
+  addUrl(project.cropQc.eosinPreviewDataUrl);
+  addUrl(project.cropQc.previewDataUrl);
+  addUrl(project.cropQc.checkerboardPreviewDataUrl);
+  addUrl(project.cropQc.featureMatchesPreviewDataUrl);
 
   return urls;
 };
@@ -65,14 +90,6 @@ const createHeFocusSlice = (status: PreprocessSliceBase['status']): HeFocusSlice
   imageTransform: createDefaultImageTransform(),
   focusedImageDataUrl: null,
 });
-
-const cloneProject = (project: PreprocessProject): PreprocessProject => {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(project);
-  }
-
-  return JSON.parse(JSON.stringify(project)) as PreprocessProject;
-};
 
 const normalizeHeFocusSlice = (slice: HeFocusSlice): HeFocusSlice => {
   const normalized = normalizeLocalizationSlice({
@@ -216,7 +233,7 @@ function PreprocessContent() {
 
   const preprocessId = searchParams.get('preprocess_id');
   const [projectName, setProjectName] = useState('');
-  const [projects, setProjects] = useState<PreprocessProject[]>([]);
+  const [projects, setProjects] = useState<PreprocessProjectSummary[]>([]);
   const [project, setProject] = useState<PreprocessProject | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
@@ -229,9 +246,44 @@ function PreprocessContent() {
   const latestSaveAttemptRef = useRef(0);
   const lastSavedProjectRef = useRef<PreprocessProject | null>(null);
   const activeObjectUrlsRef = useRef<Set<string>>(new Set());
+  const savingObjectUrlCountsRef = useRef<Map<string, number>>(new Map());
+  const deferredObjectUrlsRef = useRef<Set<string>>(new Set());
+
+  const isSavingObjectUrl = useCallback((url: string) => {
+    return (savingObjectUrlCountsRef.current.get(url) ?? 0) > 0;
+  }, []);
+
+  const retainSavingObjectUrls = useCallback((urls: Set<string>) => {
+    for (const url of urls) {
+      savingObjectUrlCountsRef.current.set(url, (savingObjectUrlCountsRef.current.get(url) ?? 0) + 1);
+    }
+  }, []);
+
+  const releaseSavingObjectUrls = useCallback((urls: Set<string>) => {
+    for (const url of urls) {
+      const nextCount = (savingObjectUrlCountsRef.current.get(url) ?? 0) - 1;
+      if (nextCount > 0) {
+        savingObjectUrlCountsRef.current.set(url, nextCount);
+      } else {
+        savingObjectUrlCountsRef.current.delete(url);
+      }
+    }
+  }, []);
+
+  const flushDeferredObjectUrls = useCallback((activeUrls?: Set<string>) => {
+    const currentActiveUrls = activeUrls ?? activeObjectUrlsRef.current;
+    for (const url of Array.from(deferredObjectUrlsRef.current)) {
+      if (currentActiveUrls.has(url) || isSavingObjectUrl(url)) {
+        continue;
+      }
+
+      URL.revokeObjectURL(url);
+      deferredObjectUrlsRef.current.delete(url);
+    }
+  }, [isSavingObjectUrl]);
 
   const refreshProjects = useCallback(async () => {
-    const list = await readPreprocessProjects();
+    const list = await readPreprocessProjectSummaries();
     setProjects(list);
     return list;
   }, []);
@@ -240,7 +292,7 @@ function PreprocessContent() {
     if (preprocessId) return;
 
     let active = true;
-    readPreprocessProjects()
+    readPreprocessProjectSummaries()
       .then((list) => {
         if (active) setProjects(list);
       })
@@ -277,15 +329,18 @@ function PreprocessContent() {
       setLoadError(null);
       try {
         const storedProject = await getPreprocessProject(preprocessId);
-        if (cancelled) return;
+        if (cancelled) {
+          revokeObjectUrls(collectProjectObjectUrls(storedProject ?? null));
+          return;
+        }
         if (!storedProject) {
           setProject(null);
           setLoadError('Preprocess project not found in this browser.');
           return;
         }
 
-        const snapshot = cloneProject(normalizeProjectForWorkspace(storedProject));
-        lastSavedProjectRef.current = cloneProject(snapshot);
+        const snapshot = normalizeProjectForWorkspace(storedProject);
+        lastSavedProjectRef.current = snapshot;
         setProject(snapshot);
         setAutosaveStatus('saved');
         setAutosaveDetail(`last saved at ${new Date(snapshot.updatedAt).toLocaleTimeString()}`);
@@ -310,25 +365,48 @@ function PreprocessContent() {
     const nextUrls = collectProjectObjectUrls(project);
     for (const url of activeObjectUrlsRef.current) {
       if (!nextUrls.has(url)) {
-        URL.revokeObjectURL(url);
+        if (isSavingObjectUrl(url)) {
+          deferredObjectUrlsRef.current.add(url);
+        } else {
+          URL.revokeObjectURL(url);
+        }
       }
     }
     activeObjectUrlsRef.current = nextUrls;
-  }, [project]);
+    flushDeferredObjectUrls(nextUrls);
+  }, [flushDeferredObjectUrls, isSavingObjectUrl, project]);
 
   useEffect(() => () => {
-    revokeObjectUrls(activeObjectUrlsRef.current);
+    for (const url of activeObjectUrlsRef.current) {
+      if (isSavingObjectUrl(url)) {
+        deferredObjectUrlsRef.current.add(url);
+      } else {
+        URL.revokeObjectURL(url);
+      }
+    }
     activeObjectUrlsRef.current = new Set();
-  }, []);
+    flushDeferredObjectUrls(activeObjectUrlsRef.current);
+  }, [flushDeferredObjectUrls, isSavingObjectUrl]);
 
   const persistProjectSnapshot = useCallback(async (snapshot: PreprocessProject) => {
     const saveAttempt = latestSaveAttemptRef.current + 1;
     latestSaveAttemptRef.current = saveAttempt;
+    const persistWithProtectedUrls = async (projectToSave: PreprocessProject) => {
+      const savingUrls = collectProjectObjectUrls(projectToSave);
+      retainSavingObjectUrls(savingUrls);
+      try {
+        await upsertPreprocessProject(projectToSave);
+      } finally {
+        releaseSavingObjectUrls(savingUrls);
+        flushDeferredObjectUrls();
+      }
+    };
+
     setAutosaveStatus('saving');
     setAutosaveDetail(null);
     try {
-      await upsertPreprocessProject(snapshot);
-      lastSavedProjectRef.current = cloneProject(snapshot);
+      await persistWithProtectedUrls(snapshot);
+      lastSavedProjectRef.current = snapshot;
       if (saveAttempt === latestSaveAttemptRef.current) {
         setAutosaveStatus('saved');
         setAutosaveDetail(`last saved at ${new Date().toLocaleTimeString()}`);
@@ -342,7 +420,7 @@ function PreprocessContent() {
             setAutosaveStatus('retrying');
             setAutosaveDetail('retrying with last good snapshot…');
           }
-          await upsertPreprocessProject(cloneProject(lastSavedProjectRef.current));
+          await persistWithProtectedUrls(lastSavedProjectRef.current);
         } catch (restoreError) {
           console.error('Failed to restore last preprocess snapshot', restoreError);
         }
@@ -358,7 +436,7 @@ function PreprocessContent() {
         });
       }
     }
-  }, [toast]);
+  }, [flushDeferredObjectUrls, releaseSavingObjectUrls, retainSavingObjectUrls, toast]);
 
   const openProject = useCallback((projectId: string) => {
     router.push(`/preprocess?preprocess_id=${encodeURIComponent(projectId)}`);
@@ -435,7 +513,7 @@ function PreprocessContent() {
         ...updater(current),
         updatedAt: new Date().toISOString(),
       };
-      void persistProjectSnapshot(cloneProject(nextSnapshot));
+      void persistProjectSnapshot(nextSnapshot);
       return nextSnapshot;
     });
   }, [persistProjectSnapshot]);
@@ -450,7 +528,7 @@ function PreprocessContent() {
         updatedAt: new Date().toISOString(),
       };
 
-      void persistProjectSnapshot(cloneProject(nextSnapshot));
+      void persistProjectSnapshot(nextSnapshot);
       return nextSnapshot;
     });
   }, [persistProjectSnapshot]);

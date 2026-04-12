@@ -14,7 +14,7 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { useRef } from 'react';
-import type { PreprocessProject } from '@/types/preprocess';
+import type { PreprocessProjectSummary } from '@/lib/preprocess/storage';
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
   year: 'numeric',
@@ -31,11 +31,11 @@ type PreprocessLandingProps = {
   onImportProject: (fileList: FileList | null) => void;
   onOpenProject: (projectId: string) => void;
   projectName: string;
-  projects: PreprocessProject[];
+  projects: PreprocessProjectSummary[];
   setProjectName: (value: string) => void;
 };
 
-const describeSources = (project: PreprocessProject) => {
+const describeSources = (project: PreprocessProjectSummary) => {
   const labels = [project.sourceAssets.images.eosin, project.sourceAssets.images.he]
     .filter((image): image is NonNullable<typeof image> => Boolean(image))
     .map((image) => image.kind.toUpperCase());
