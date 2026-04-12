@@ -10,6 +10,7 @@ type DecodedSourceImage = {
   mimeType: string;
   sourceBlob: Blob;
   sourceUrl: string;
+  thumbnailBlob?: Blob;
   width: number;
 };
 
@@ -32,6 +33,36 @@ const canvasToBlob = (canvas: HTMLCanvasElement, mimeType = 'image/png') => new 
     reject(new Error('Canvas export failed'));
   }, mimeType);
 });
+
+const disposeCanvas = (canvas: HTMLCanvasElement) => {
+  canvas.width = 0;
+  canvas.height = 0;
+};
+
+const createThumbnailBlobFromSource = async (
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  maxEdge = PREPROCESS_NUMERIC_DEFAULTS.thumbnailMaxDimension,
+) => {
+  const longestEdge = Math.max(sourceWidth, sourceHeight);
+  const scale = longestEdge > 0 ? Math.min(1, maxEdge / longestEdge) : 1;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+
+  try {
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Canvas 2D context unavailable for thumbnail creation');
+    }
+
+    context.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+    return await canvasToBlob(canvas, 'image/png');
+  } finally {
+    disposeCanvas(canvas);
+  }
+};
 
 const createThumbnailBlob = async (src: string, maxEdge = PREPROCESS_NUMERIC_DEFAULTS.thumbnailMaxDimension) => {
   const image = await loadImageElement(src);
@@ -63,11 +94,18 @@ const decodeBrowserNativeImage = async (file: File): Promise<DecodedSourceImage>
     throw error;
   }
 
+  const thumbnailBlob = await createThumbnailBlobFromSource(
+    image,
+    image.naturalWidth,
+    image.naturalHeight,
+  );
+
   return {
     height: image.naturalHeight,
     mimeType: file.type || 'application/octet-stream',
     sourceBlob,
     sourceUrl,
+    thumbnailBlob,
     width: image.naturalWidth,
   };
 };
@@ -100,15 +138,23 @@ const decodeTiffImage = async (file: File): Promise<DecodedSourceImage> => {
   }
 
   context.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
-  const sourceBlob = await canvasToBlob(canvas, 'image/png');
+  try {
+    const [sourceBlob, thumbnailBlob] = await Promise.all([
+      canvasToBlob(canvas, 'image/png'),
+      createThumbnailBlobFromSource(canvas, width, height),
+    ]);
 
-  return {
-    height,
-    mimeType: 'image/png',
-    sourceBlob,
-    sourceUrl: URL.createObjectURL(sourceBlob),
-    width,
-  };
+    return {
+      height,
+      mimeType: 'image/png',
+      sourceBlob,
+      sourceUrl: URL.createObjectURL(sourceBlob),
+      thumbnailBlob,
+      width,
+    };
+  } finally {
+    disposeCanvas(canvas);
+  }
 };
 
 export async function buildSourceImage(file: File, kind: PreprocessImageKind): Promise<PreprocessSourceImage> {
@@ -120,7 +166,7 @@ export async function buildSourceImage(file: File, kind: PreprocessImageKind): P
   const decoded = isTiffFile(file)
     ? await decodeTiffImage(file)
     : await decodeBrowserNativeImage(file);
-  const thumbnailBlob = await createThumbnailBlob(decoded.sourceUrl);
+  const thumbnailBlob = decoded.thumbnailBlob ?? await createThumbnailBlob(decoded.sourceUrl);
   const thumbnailObjectUrl = URL.createObjectURL(thumbnailBlob);
 
   return {
