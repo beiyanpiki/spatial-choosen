@@ -15,6 +15,11 @@ type Size = { width: number; height: number };
 type PixelRect = { x: number; y: number; width: number; height: number };
 type PixelPoint = { x: number; y: number };
 
+const disposeCanvas = (canvas: HTMLCanvasElement) => {
+  canvas.width = 0;
+  canvas.height = 0;
+};
+
 export type CropQcResult = {
   cropRect: PreprocessRect;
   cropWidth: number;
@@ -134,12 +139,21 @@ const buildCanonicalAssetSet = (fullresCanvas: HTMLCanvasElement): {
     ? fullresCanvas
     : drawCanvas(fullresCanvas, lowresSize);
 
+  const assets = {
+    fullres: toCanonicalAsset(fullresCanvas),
+    hires: toCanonicalAsset(hiresCanvas),
+    lowres: toCanonicalAsset(lowresCanvas),
+  } satisfies CropQcCanonicalAssetSet;
+
+  if (hiresCanvas !== fullresCanvas) {
+    disposeCanvas(hiresCanvas);
+  }
+  if (lowresCanvas !== fullresCanvas && lowresCanvas !== hiresCanvas) {
+    disposeCanvas(lowresCanvas);
+  }
+
   return {
-    assets: {
-      fullres: toCanonicalAsset(fullresCanvas),
-      hires: toCanonicalAsset(hiresCanvas),
-      lowres: toCanonicalAsset(lowresCanvas),
-    },
+    assets,
     sizes: {
       fullres: fullresSize,
       hires: hiresSize,
@@ -238,7 +252,9 @@ const makeCheckerboard = (
     }
   }
 
-  return checker.toDataURL('image/png');
+  const dataUrl = checker.toDataURL('image/png');
+  disposeCanvas(checker);
+  return dataUrl;
 };
 
 const toPixelPoint = (point: { x: number; y: number }, size: Size): PixelPoint => ({
@@ -356,14 +372,16 @@ const makeFeatureMatchesPreview = (args: {
     drawFeatureMatchMarker(context, rightPoint, color);
   }
 
-  return preview.toDataURL('image/png');
+  const dataUrl = preview.toDataURL('image/png');
+  disposeCanvas(preview);
+  return dataUrl;
 };
 
-const makeWarpedHe = (
+const makeWarpedHeCrop = (
   cv: OpenCvRuntime,
   heCanvas: HTMLCanvasElement,
   affineMatrix: AlignmentAffineMatrix,
-  referenceSize: Size,
+  pixelRect: PixelRect,
 ) => {
   const context = heCanvas.getContext('2d');
   if (!context) throw new Error('HE canvas context unavailable');
@@ -374,9 +392,16 @@ const makeWarpedHe = (
   let dst: CvMat | null = null;
   try {
     src = cv.matFromImageData(imageData);
-    matrix = cv.matFromArray(2, 3, cv.CV_64F, affineMatrix);
+    matrix = cv.matFromArray(2, 3, cv.CV_64F, [
+      affineMatrix[0],
+      affineMatrix[1],
+      affineMatrix[2] - pixelRect.x,
+      affineMatrix[3],
+      affineMatrix[4],
+      affineMatrix[5] - pixelRect.y,
+    ]);
     dst = new cv.Mat();
-    const size = new cv.Size(referenceSize.width, referenceSize.height);
+    const size = new cv.Size(pixelRect.width, pixelRect.height);
     const fill = new cv.Scalar(0, 0, 0, 255);
 
     cv.warpAffine(
@@ -390,10 +415,10 @@ const makeWarpedHe = (
     );
 
     const pixelData = new Uint8ClampedArray(dst.data);
-    const warpedImageData = new ImageData(pixelData, referenceSize.width, referenceSize.height);
+    const warpedImageData = new ImageData(pixelData, pixelRect.width, pixelRect.height);
     const canvas = document.createElement('canvas');
-    canvas.width = referenceSize.width;
-    canvas.height = referenceSize.height;
+    canvas.width = pixelRect.width;
+    canvas.height = pixelRect.height;
     const warpedContext = canvas.getContext('2d');
     if (!warpedContext) throw new Error('Warp output context unavailable');
     warpedContext.imageSmoothingEnabled = true;
@@ -421,55 +446,62 @@ export async function runCropQc(args: {
   const he = await imageToCanvas(args.heDataUrl);
 
   const normalized = normalizeRect(args.chipBounds, args.imageTransform, { width: eosin.width, height: eosin.height });
-  const warpedHeCanvas = makeWarpedHe(args.cv, he.canvas, args.affineMatrix, { width: eosin.width, height: eosin.height });
 
   const eosinCrop = cropCanvas(eosin.canvas, normalized.pixelRect);
-  const heCrop = cropCanvas(warpedHeCanvas, normalized.pixelRect);
-  const eosinAssetSet = buildCanonicalAssetSet(eosinCrop);
-  const heAssetSet = buildCanonicalAssetSet(heCrop);
-  const cropAssets = {
-    eosin: eosinAssetSet.assets,
-    he: heAssetSet.assets,
-  };
+  const heCrop = makeWarpedHeCrop(args.cv, he.canvas, args.affineMatrix, normalized.pixelRect);
 
-  const checkerboardDataUrl = makeCheckerboard(eosinCrop, heCrop);
-  const featureMatchesDataUrl = makeFeatureMatchesPreview({
-    eosinCrop,
-    heCrop,
-    pixelRect: normalized.pixelRect,
-    referenceSize: { width: eosin.width, height: eosin.height },
-    movingSize: { width: he.width, height: he.height },
-    affineMatrix: args.affineMatrix,
-    controlPoints: args.controlPoints ?? [],
-    inlierMask: args.inlierMask ?? null,
-  });
-  const checkerboardPreview = {
-    dataUrl: checkerboardDataUrl,
-  };
-  const featureMatchesPreview = {
-    dataUrl: featureMatchesDataUrl,
-  };
-  const fullresSize = heAssetSet.sizes.fullres;
-  const tissue_hires_scalef = getScaleFactor(heAssetSet.sizes.hires, fullresSize);
-  const tissue_lowres_scalef = getScaleFactor(heAssetSet.sizes.lowres, fullresSize);
-  // Exact spot square side length depends on chip projection inputs that are not available in Crop/QC yet.
-  // Leave it pending here so chip projection can perform the first authoritative write.
-  const spot_diameter_fullres = null;
+  try {
+    const eosinAssetSet = buildCanonicalAssetSet(eosinCrop);
+    const heAssetSet = buildCanonicalAssetSet(heCrop);
+    const cropAssets = {
+      eosin: eosinAssetSet.assets,
+      he: heAssetSet.assets,
+    };
 
-  return {
-    cropRect: normalized.rect,
-    cropWidth: normalized.pixelRect.width,
-    cropHeight: normalized.pixelRect.height,
-    cropAssets,
-    tissue_hires_scalef,
-    tissue_lowres_scalef,
-    spot_diameter_fullres,
-    fiducial_diameter_fullres: FIDUCIAL_DIAMETER_FULLRES,
-    checkerboardPreview,
-    featureMatchesPreview,
-    eosinCropDataUrl: cropAssets.eosin.fullres.dataUrl,
-    heWarpedCropDataUrl: cropAssets.he.fullres.dataUrl,
-    checkerboardDataUrl,
-    featureMatchesDataUrl,
-  } satisfies CropQcResult;
+    const checkerboardDataUrl = makeCheckerboard(eosinCrop, heCrop);
+    const featureMatchesDataUrl = makeFeatureMatchesPreview({
+      eosinCrop,
+      heCrop,
+      pixelRect: normalized.pixelRect,
+      referenceSize: { width: eosin.width, height: eosin.height },
+      movingSize: { width: he.width, height: he.height },
+      affineMatrix: args.affineMatrix,
+      controlPoints: args.controlPoints ?? [],
+      inlierMask: args.inlierMask ?? null,
+    });
+    const checkerboardPreview = {
+      dataUrl: checkerboardDataUrl,
+    };
+    const featureMatchesPreview = {
+      dataUrl: featureMatchesDataUrl,
+    };
+    const fullresSize = heAssetSet.sizes.fullres;
+    const tissue_hires_scalef = getScaleFactor(heAssetSet.sizes.hires, fullresSize);
+    const tissue_lowres_scalef = getScaleFactor(heAssetSet.sizes.lowres, fullresSize);
+    // Exact spot square side length depends on chip projection inputs that are not available in Crop/QC yet.
+    // Leave it pending here so chip projection can perform the first authoritative write.
+    const spot_diameter_fullres = null;
+
+    return {
+      cropRect: normalized.rect,
+      cropWidth: normalized.pixelRect.width,
+      cropHeight: normalized.pixelRect.height,
+      cropAssets,
+      tissue_hires_scalef,
+      tissue_lowres_scalef,
+      spot_diameter_fullres,
+      fiducial_diameter_fullres: FIDUCIAL_DIAMETER_FULLRES,
+      checkerboardPreview,
+      featureMatchesPreview,
+      eosinCropDataUrl: cropAssets.eosin.fullres.dataUrl,
+      heWarpedCropDataUrl: cropAssets.he.fullres.dataUrl,
+      checkerboardDataUrl,
+      featureMatchesDataUrl,
+    } satisfies CropQcResult;
+  } finally {
+    disposeCanvas(eosin.canvas);
+    disposeCanvas(he.canvas);
+    disposeCanvas(eosinCrop);
+    disposeCanvas(heCrop);
+  }
 }

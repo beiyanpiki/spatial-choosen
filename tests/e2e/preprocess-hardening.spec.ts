@@ -18,6 +18,8 @@ type CropQcHarnessPoint = {
 type CropQcHarnessOutcome = {
   cropWidth: number;
   cropHeight: number;
+  warpWidth: number;
+  warpHeight: number;
   featureMatchesDataUrl: string | null;
   featureMatchesPreviewDataUrl: string | null;
   featureMatchesSize: {
@@ -143,6 +145,8 @@ async function runCropQcHarness(
       }
     }
 
+    let lastWarpSize: { width: number; height: number } | null = null;
+
     const createMockCv = () => ({
       Mat: MockMat,
       matFromArray: (rows: number, cols: number, _type: number, data: ArrayLike<number>) => new MockMat(rows, cols, data),
@@ -164,6 +168,8 @@ async function runCropQcHarness(
         if (!src.imageData) {
           throw new Error('Missing source image data for warpAffine test double');
         }
+
+        lastWarpSize = { width: size.width, height: size.height };
 
         const values = Array.from(matrix.data64F.length > 0 ? matrix.data64F : matrix.data32F);
         const [m00, m01, tx, m10, m11, ty] = values;
@@ -308,6 +314,8 @@ async function runCropQcHarness(
     return {
       cropWidth: typeof result.cropWidth === 'number' ? result.cropWidth : 0,
       cropHeight: typeof result.cropHeight === 'number' ? result.cropHeight : 0,
+      warpWidth: lastWarpSize?.width ?? 0,
+      warpHeight: lastWarpSize?.height ?? 0,
       featureMatchesDataUrl,
       featureMatchesPreviewDataUrl,
       featureMatchesSize,
@@ -1625,6 +1633,26 @@ test('cropqc feature matches preview is generated from accepted alignment', asyn
   expect(matchedMaskResult.featureMatchesDataUrl).toBe(explicitFilteredResult.featureMatchesDataUrl);
   expect(fallbackMaskResult.featureMatchesDataUrl).toBe(explicitAllResult.featureMatchesDataUrl);
   expect(matchedMaskResult.featureMatchesDataUrl).not.toBe(blankResult.featureMatchesDataUrl);
+});
+
+test('cropqc warps HE directly into crop-sized output', async ({ page }) => {
+  await page.setContent('<!DOCTYPE html><html><body></body></html>');
+
+  const controlPoints = [
+    buildFocusedCropPoint('pair-1', 0.18, 0.24),
+    buildFocusedCropPoint('pair-2', 0.52, 0.46),
+    buildFocusedCropPoint('pair-3', 0.78, 0.72),
+  ];
+
+  const result = await runCropQcHarness(page, {
+    controlPoints,
+    inlierMask: [true, true, true],
+  });
+
+  expect(result.cropWidth).toBeGreaterThan(0);
+  expect(result.cropHeight).toBeGreaterThan(0);
+  expect(result.warpWidth).toBe(result.cropWidth);
+  expect(result.warpHeight).toBe(result.cropHeight);
 });
 
 test('workspace stores cropqc feature matches preview after generation', async ({ page }) => {
