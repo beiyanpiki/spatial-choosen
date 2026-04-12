@@ -169,6 +169,10 @@ const buildEmptyPreprocessProject = (name: string): PreprocessProject => {
       eosinPreviewDataUrl: null,
       previewDataUrl: null,
       checkerboardPreviewDataUrl: null,
+      featureMatchesPreviewDataUrl: null,
+      featureMatchesPreview: {
+        dataUrl: null,
+      },
     },
     chipConfig: {
       ...createSlice('idle'),
@@ -437,17 +441,19 @@ function PreprocessContent() {
   }, [persistProjectSnapshot]);
 
   const handleStepChange = useCallback((stepId: PreprocessStepId) => {
-    if (!project) return;
+    setProject((current) => {
+      if (!current) return current;
 
-    const nextSnapshot: PreprocessProject = {
-      ...project,
-      currentStep: stepId,
-      updatedAt: new Date().toISOString(),
-    };
+      const nextSnapshot: PreprocessProject = {
+        ...current,
+        currentStep: stepId,
+        updatedAt: new Date().toISOString(),
+      };
 
-    setProject(nextSnapshot);
-    void persistProjectSnapshot(cloneProject(nextSnapshot));
-  }, [persistProjectSnapshot, project]);
+      void persistProjectSnapshot(cloneProject(nextSnapshot));
+      return nextSnapshot;
+    });
+  }, [persistProjectSnapshot]);
 
   const handleProjectNameChange = useCallback((value: string) => {
     updateProject((current) => ({
