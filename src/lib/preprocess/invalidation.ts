@@ -71,6 +71,10 @@ const invalidateCropQcSlice = (slice: CropQcSlice): CropQcSlice => ({
   checkerboardPreview: {
     dataUrl: null,
   },
+  featureMatchesPreviewDataUrl: null,
+  featureMatchesPreview: {
+    dataUrl: null,
+  },
   qcAccepted: false,
   issues: [],
 });

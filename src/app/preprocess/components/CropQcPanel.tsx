@@ -24,6 +24,7 @@ type CropQcPanelProps = {
   eosinCropDataUrl: string | null;
   heCropDataUrl: string | null;
   checkerboardDataUrl: string | null;
+  featureMatchesDataUrl: string | null;
   overlayOpacity: number;
   onOverlayOpacityChange: (value: number) => void;
   onRunCrop: () => void;
@@ -39,6 +40,7 @@ export function CropQcPanel({
   eosinCropDataUrl,
   heCropDataUrl,
   checkerboardDataUrl,
+  featureMatchesDataUrl,
   overlayOpacity,
   onOverlayOpacityChange,
   onRunCrop,
@@ -74,6 +76,7 @@ export function CropQcPanel({
       <Tabs size='sm' variant='enclosed' isLazy>
         <TabList>
           <Tab>Tissue align</Tab>
+          <Tab>Feature matches</Tab>
           <Tab>Overlay opacity</Tab>
         </TabList>
 
@@ -103,6 +106,33 @@ export function CropQcPanel({
                 />
               ) : (
                 <Box p={4}><Text fontSize='sm' color='gray.500'>Checkerboard preview appears after crop generation.</Text></Box>
+              )}
+            </Box>
+          </TabPanel>
+
+          <TabPanel px={0} pt={4}>
+            <Box
+              border='1px solid'
+              borderColor='gray.200'
+              borderRadius='lg'
+              overflow='hidden'
+              bg='gray.50'
+              minH={{ base: '320px', lg: '400px' }}
+              h={{ base: '44vh', lg: '52vh' }}
+              maxH='480px'
+              display='flex'
+              alignItems='center'
+              justifyContent='center'
+            >
+              {featureMatchesDataUrl ? (
+                <img
+                  src={featureMatchesDataUrl}
+                  alt='QC feature matches preview'
+                  data-testid='cropqc-feature-matches-canvas'
+                  style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
+                />
+              ) : (
+                <Box p={4}><Text fontSize='sm' color='gray.500'>Feature-match preview appears after crop generation.</Text></Box>
               )}
             </Box>
           </TabPanel>

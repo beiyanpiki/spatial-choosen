@@ -3,6 +3,7 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import JSZip from 'jszip';
 import { exportPreprocessZip } from '@/lib/preprocess/exportBundle';
+import { serializePreprocessProject } from '@/lib/preprocess/package';
 import type { PreprocessProject } from '@/types/preprocess';
 
 const PREPROCESS_STORAGE_KEY = 'spatial-preprocess-projects';
@@ -159,14 +160,18 @@ async function seedProjectToExportReady(
     context.fillStyle = 'rgb(180,180,180)';
     context.fillRect(0, 0, 320, 240);
     const eosinCropDataUrl = canvas.toDataURL('image/png');
-    const eosinSourceDataUrl = canvas.toDataURL('image/png');
     context.fillStyle = 'rgb(120,120,120)';
     context.fillRect(20, 20, 280, 200);
     const alignedHeDataUrl = canvas.toDataURL('image/png');
-    const heSourceDataUrl = canvas.toDataURL('image/png');
     context.fillStyle = 'rgb(200,80,80)';
     context.fillRect(60, 40, 140, 140);
     const focusedHeDataUrl = canvas.toDataURL('image/png');
+    context.fillStyle = 'rgb(80,180,120)';
+    context.fillRect(32, 32, 256, 176);
+    const featureMatchesAliasDataUrl = canvas.toDataURL('image/png');
+    context.fillStyle = 'rgb(40,150,180)';
+    context.fillRect(48, 48, 224, 144);
+    const featureMatchesNestedDataUrl = canvas.toDataURL('image/png');
 
     const projectedSpots = Array.from({ length: 16 }, (_, index) => {
       const row = Math.floor(index / 4) + 1;
@@ -184,6 +189,8 @@ async function seedProjectToExportReady(
       };
     });
 
+    const eosinSourceDataUrl = canvas.toDataURL('image/png');
+    const heSourceDataUrl = canvas.toDataURL('image/png');
     const selected = projectedSpots.slice(0, 10).map((spot) => spot.id);
     const now = new Date().toISOString();
     const includeInlineDataUrls = storageMode === 'legacy-data-url';
@@ -206,8 +213,8 @@ async function seedProjectToExportReady(
               fileName: 'eosin.png',
               mimeType: 'image/png',
               sizeBytes: eosinSourceDataUrl.length,
-              width: 320,
-              height: 240,
+               width: 320,
+               height: 240,
               lastModified: Date.now(),
               ...(includeInlineDataUrls ? {
                 dataUrl: eosinSourceDataUrl,
@@ -220,8 +227,8 @@ async function seedProjectToExportReady(
               fileName: 'he.png',
               mimeType: 'image/png',
               sizeBytes: heSourceDataUrl.length,
-              width: 320,
-              height: 240,
+               width: 320,
+               height: 240,
               lastModified: Date.now(),
               ...(includeInlineDataUrls ? {
                 dataUrl: heSourceDataUrl,
@@ -288,6 +295,10 @@ async function seedProjectToExportReady(
           qcAccepted: true,
           eosinPreviewDataUrl: eosinCropDataUrl,
           previewDataUrl: alignedHeDataUrl,
+          featureMatchesPreviewDataUrl: featureMatchesAliasDataUrl,
+          featureMatchesPreview: {
+            dataUrl: featureMatchesNestedDataUrl,
+          },
           error: null,
         },
         chipConfig: {
@@ -429,9 +440,17 @@ test('export full preprocess ZIP with recovery payload', async ({ page }) => {
        heFocus: {
          focusedImageDataUrl: string | null;
        };
+       cropQc: {
+         featureMatchesPreviewDataUrl: string | null;
+         featureMatchesPreview: {
+           dataUrl: string | null;
+         };
+       };
      };
    };
    expect(projectPayload.project.heFocus.focusedImageDataUrl).toBeNull();
+   expect(projectPayload.project.cropQc.featureMatchesPreviewDataUrl).toBeNull();
+   expect(projectPayload.project.cropQc.featureMatchesPreview.dataUrl).toBeNull();
 
   const scalefactorsEntry = zip.file('scalefactors.json');
   if (!scalefactorsEntry) throw new Error('Missing scalefactors.json in export zip');
@@ -452,6 +471,209 @@ test('export full preprocess ZIP with recovery payload', async ({ page }) => {
     path.join(process.cwd(), '.sisyphus/evidence/task-10-export-happy.txt'),
     `download=${download.suggestedFilename()}\nentries=${entries.join(',')}\nheader=${firstLine}\n`,
   );
+});
+
+test('cropqc feature matches preview stays null in packaged project metadata', async () => {
+  const baseDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII=';
+  const now = new Date().toISOString();
+  const project: PreprocessProject = {
+    id: 'export-feature-matches-packaging',
+    name: 'Feature Matches Packaging',
+    createdAt: now,
+    updatedAt: now,
+    workflowVersion: 1,
+    storageVersion: 2,
+    currentStep: 'exportState',
+    sourceAssets: {
+      status: 'ready',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      activeImage: 'eosin',
+      oversizedImageWarning: null,
+      images: {
+        eosin: {
+          id: 'source-eosin',
+          kind: 'eosin',
+          fileName: 'eosin.png',
+          mimeType: 'image/png',
+          sizeBytes: 67,
+          width: 1,
+          height: 1,
+          lastModified: null,
+          dataUrl: baseDataUrl,
+          thumbnailDataUrl: baseDataUrl,
+        },
+        he: {
+          id: 'source-he',
+          kind: 'he',
+          fileName: 'he.png',
+          mimeType: 'image/png',
+          sizeBytes: 67,
+          width: 1,
+          height: 1,
+          lastModified: null,
+          dataUrl: baseDataUrl,
+          thumbnailDataUrl: baseDataUrl,
+        },
+      },
+    },
+    localization: {
+      status: 'complete',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      targetImage: 'eosin',
+      chipType: '50um',
+      method: 'manual',
+      chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+      handles: [],
+      boxColor: 'green',
+      imageTransform: { rotationDegrees: 0, flipHorizontal: false, flipVertical: false, scale: 1 },
+    },
+    heFocus: {
+      status: 'complete',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      targetImage: 'he',
+      chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+      handles: [],
+      imageTransform: { rotationDegrees: 0, flipHorizontal: false, flipVertical: false, scale: 1 },
+      focusedImageDataUrl: baseDataUrl,
+    },
+    alignment: {
+      status: 'complete',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      referenceImage: 'eosin',
+      movingImage: 'he',
+      movingImageTransform: { rotationDegrees: 0, flipHorizontal: false, flipVertical: false, scale: 1 },
+      overlayOpacity: 0.5,
+      controlPoints: [],
+      inlierMask: null,
+      affineMatrix: null,
+      reprojectionRmse: null,
+      inlierRatio: null,
+      ransacReprojThreshold: null,
+      qualityFlags: { minPairs: true, inlierRatio: true, rmse: true, finiteMatrix: true, scaleRange: true, accepted: true },
+      solveAccepted: true,
+      failureReason: null,
+      transform: null,
+      previewDataUrl: baseDataUrl,
+    },
+    cropQc: {
+      status: 'complete',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      cropRect: { x: 0, y: 0, width: 1, height: 1 },
+      cropWidth: 1,
+      cropHeight: 1,
+      paddingRatio: 0.02,
+      checkerboardTileSize: 64,
+      overlayOpacity: 0.5,
+      qcAccepted: true,
+      issues: [],
+      cropAssets: {
+        eosin: {
+          fullres: { dataUrl: baseDataUrl },
+          hires: { dataUrl: baseDataUrl },
+          lowres: { dataUrl: baseDataUrl },
+        },
+        he: {
+          fullres: { dataUrl: baseDataUrl },
+          hires: { dataUrl: baseDataUrl },
+          lowres: { dataUrl: baseDataUrl },
+        },
+      },
+      tissue_hires_scalef: 0.5,
+      tissue_lowres_scalef: 0.25,
+      spot_diameter_fullres: 12,
+      fiducial_diameter_fullres: 20,
+      eosinPreviewDataUrl: baseDataUrl,
+      previewDataUrl: baseDataUrl,
+      checkerboardPreviewDataUrl: baseDataUrl,
+      featureMatchesPreviewDataUrl: baseDataUrl,
+      checkerboardPreview: {
+        dataUrl: baseDataUrl,
+      },
+      featureMatchesPreview: {
+        dataUrl: baseDataUrl,
+      },
+    },
+    chipConfig: {
+      status: 'complete',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      chipType: '50um',
+      rows: 1,
+      columns: 1,
+      pitchX: 50,
+      pitchY: 50,
+      origin: { x: 0, y: 0 },
+      rotationDegrees: 0,
+      projectedSpots: [
+        { id: 'spot-1', barcode: 'spot-1', arrayRow: 1, arrayCol: 1, x: 0.5, y: 0.5, width: 0.12, height: 0.12, diameterX: 0.12, diameterY: 0.12 },
+      ],
+    },
+    tissueSelection: {
+      status: 'complete',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      mode: 'polygon',
+      thresholdMode: 'light',
+      activationThreshold: 140,
+      blockThreshold: 180,
+      dbscanEps: 0.03,
+      dbscanMinSamples: 3,
+      minConnectedSpotCount: 8,
+      autoSelectedSpotIds: ['spot-1'],
+      forcedInSpotIds: [],
+      forcedOutSpotIds: [],
+      overrideNotice: null,
+      paritySummary: { selectedCount: 1, selectedPercent: 100, maskCoverage: 100 },
+      warning: null,
+      regions: [],
+      selectedRegionId: null,
+      previewDataUrl: null,
+      selectedSpotIds: ['spot-1'],
+    },
+    exportState: {
+      status: 'ready',
+      isStale: false,
+      updatedAt: now,
+      error: null,
+      requestedFormats: [],
+      lastExportedAt: null,
+      artifacts: [],
+    },
+  };
+
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+  (globalThis as typeof globalThis & { window: unknown }).window = {};
+
+  try {
+    const output = await serializePreprocessProject(project);
+    const projectPayload = JSON.parse(await output.text()) as {
+      project: {
+        cropQc: {
+          featureMatchesPreviewDataUrl: string | null;
+          featureMatchesPreview: {
+            dataUrl: string | null;
+          };
+        };
+      };
+    };
+
+    expect(projectPayload.project.cropQc.featureMatchesPreviewDataUrl).toBeNull();
+    expect(projectPayload.project.cropQc.featureMatchesPreview.dataUrl).toBeNull();
+  } finally {
+    (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  }
 });
 
 test('export includes the chip-sized tissue matrix csv', async ({ page }) => {
@@ -688,6 +910,7 @@ test('recovery import restores a blob-backed project from exported zip', async (
    expect(storedState.hasDerivedStore).toBe(true);
    expect(storedState.derivedAssetKind).toBe('blob');
    expect(storedState.derivedAssetSize).toBeGreaterThan(0);
+
 });
 
 test('deleting a preprocess project removes the focused HE derived asset store entry', async ({ page }) => {

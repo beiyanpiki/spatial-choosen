@@ -1,6 +1,7 @@
 import { getTransformedRectCorners } from '@/lib/preprocess/imageTransforms';
 import type {
   AlignmentAffineMatrix,
+  AlignmentControlPoint,
   CropQcCanonicalAsset,
   CropQcCanonicalAssetSet,
   LocalizationImageTransform,
@@ -11,6 +12,8 @@ import type { CvMat, OpenCvRuntime } from './loadOpenCv';
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 type Size = { width: number; height: number };
+type PixelRect = { x: number; y: number; width: number; height: number };
+type PixelPoint = { x: number; y: number };
 
 export type CropQcResult = {
   cropRect: PreprocessRect;
@@ -27,14 +30,29 @@ export type CropQcResult = {
   checkerboardPreview: {
     dataUrl: string;
   };
+  featureMatchesPreview: {
+    dataUrl: string;
+  };
   eosinCropDataUrl: string;
   heWarpedCropDataUrl: string;
   checkerboardDataUrl: string;
+  featureMatchesDataUrl: string;
 };
 
 const HIRES_MAX_SIDE = 2000;
 const LOWRES_MAX_SIDE = 800;
 const FIDUCIAL_DIAMETER_FULLRES = 0.027;
+const FEATURE_MATCHES_GAP = 24;
+const FEATURE_MATCHES_COLORS = [
+  '#ff5252',
+  '#2dd4bf',
+  '#6366f1',
+  '#f59e0b',
+  '#14b8a6',
+  '#ec4899',
+  '#3b82f6',
+  '#84cc16',
+] as const;
 
 const drawCanvas = (source: CanvasImageSource, size: Size) => {
   const canvas = document.createElement('canvas');
@@ -50,7 +68,7 @@ const drawCanvas = (source: CanvasImageSource, size: Size) => {
 
 const cropCanvas = (
   source: CanvasImageSource,
-  pixelRect: { x: number; y: number; width: number; height: number },
+  pixelRect: PixelRect,
 ) => {
   const canvas = document.createElement('canvas');
   canvas.width = pixelRect.width;
@@ -160,7 +178,7 @@ const normalizeRect = (
   chipBounds: PreprocessRect,
   transform: LocalizationImageTransform,
   imageSize: Size,
-): { rect: PreprocessRect; pixelRect: { x: number; y: number; width: number; height: number } } => {
+): { rect: PreprocessRect; pixelRect: PixelRect } => {
   const corners = getTransformedRectCorners(chipBounds, transform);
   const xs = corners.map((corner) => corner.x);
   const ys = corners.map((corner) => corner.y);
@@ -223,6 +241,124 @@ const makeCheckerboard = (
   return checker.toDataURL('image/png');
 };
 
+const toPixelPoint = (point: { x: number; y: number }, size: Size): PixelPoint => ({
+  x: point.x * size.width,
+  y: point.y * size.height,
+});
+
+const applyAffineToPoint = (
+  point: PixelPoint,
+  affineMatrix: AlignmentAffineMatrix,
+): PixelPoint => ({
+  x: affineMatrix[0] * point.x + affineMatrix[1] * point.y + affineMatrix[2],
+  y: affineMatrix[3] * point.x + affineMatrix[4] * point.y + affineMatrix[5],
+});
+
+const isPointInsidePixelRect = (point: PixelPoint, pixelRect: PixelRect) => (
+  point.x >= pixelRect.x
+  && point.y >= pixelRect.y
+  && point.x < pixelRect.x + pixelRect.width
+  && point.y < pixelRect.y + pixelRect.height
+);
+
+const toCropLocalPoint = (point: PixelPoint, pixelRect: PixelRect): PixelPoint => ({
+  x: point.x - pixelRect.x,
+  y: point.y - pixelRect.y,
+});
+
+const getFeatureMatchCandidates = (
+  controlPoints: AlignmentControlPoint[],
+  inlierMask: boolean[] | null,
+) => {
+  const useMask = Array.isArray(inlierMask) && inlierMask.length === controlPoints.length;
+
+  return controlPoints.flatMap((controlPoint, index) => {
+    if (useMask && !inlierMask[index]) {
+      return [];
+    }
+
+    return [controlPoint];
+  });
+};
+
+const drawFeatureMatchMarker = (
+  context: CanvasRenderingContext2D,
+  point: PixelPoint,
+  color: string,
+) => {
+  context.beginPath();
+  context.arc(point.x, point.y, 3, 0, Math.PI * 2);
+  context.fillStyle = color;
+  context.fill();
+  context.lineWidth = 1;
+  context.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  context.stroke();
+};
+
+const makeFeatureMatchesPreview = (args: {
+  eosinCrop: HTMLCanvasElement;
+  heCrop: HTMLCanvasElement;
+  pixelRect: PixelRect;
+  referenceSize: Size;
+  movingSize: Size;
+  affineMatrix: AlignmentAffineMatrix;
+  controlPoints: AlignmentControlPoint[];
+  inlierMask: boolean[] | null;
+}) => {
+  const preview = document.createElement('canvas');
+  preview.width = args.eosinCrop.width + args.heCrop.width + FEATURE_MATCHES_GAP;
+  preview.height = Math.max(args.eosinCrop.height, args.heCrop.height);
+  const context = preview.getContext('2d');
+  if (!context) throw new Error('Feature matches context unavailable');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, preview.width, preview.height);
+  context.drawImage(args.eosinCrop, 0, 0);
+  context.drawImage(args.heCrop, args.eosinCrop.width + FEATURE_MATCHES_GAP, 0);
+
+  const separatorX = args.eosinCrop.width + FEATURE_MATCHES_GAP / 2;
+  context.beginPath();
+  context.moveTo(separatorX, 0);
+  context.lineTo(separatorX, preview.height);
+  context.lineWidth = 1;
+  context.strokeStyle = 'rgba(15, 23, 42, 0.12)';
+  context.stroke();
+
+  const candidates = getFeatureMatchCandidates(args.controlPoints, args.inlierMask);
+  let drawableIndex = 0;
+
+  for (const candidate of candidates) {
+    const referencePoint = toPixelPoint(candidate.source, args.referenceSize);
+    const movingPoint = toPixelPoint(candidate.target, args.movingSize);
+    const warpedMovingPoint = applyAffineToPoint(movingPoint, args.affineMatrix);
+    if (!isPointInsidePixelRect(referencePoint, args.pixelRect) || !isPointInsidePixelRect(warpedMovingPoint, args.pixelRect)) {
+      continue;
+    }
+
+    const leftPoint = toCropLocalPoint(referencePoint, args.pixelRect);
+    const rightLocalPoint = toCropLocalPoint(warpedMovingPoint, args.pixelRect);
+    const rightPoint = {
+      x: args.eosinCrop.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
+      y: rightLocalPoint.y,
+    };
+    const color = FEATURE_MATCHES_COLORS[drawableIndex % FEATURE_MATCHES_COLORS.length];
+    drawableIndex += 1;
+
+    context.beginPath();
+    context.moveTo(leftPoint.x, leftPoint.y);
+    context.lineTo(rightPoint.x, rightPoint.y);
+    context.lineWidth = 1.5;
+    context.strokeStyle = color;
+    context.stroke();
+
+    drawFeatureMatchMarker(context, leftPoint, color);
+    drawFeatureMatchMarker(context, rightPoint, color);
+  }
+
+  return preview.toDataURL('image/png');
+};
+
 const makeWarpedHe = (
   cv: OpenCvRuntime,
   heCanvas: HTMLCanvasElement,
@@ -278,6 +414,8 @@ export async function runCropQc(args: {
   chipBounds: PreprocessRect;
   imageTransform: LocalizationImageTransform;
   affineMatrix: AlignmentAffineMatrix;
+  controlPoints?: AlignmentControlPoint[];
+  inlierMask?: boolean[] | null;
 }) {
   const eosin = await imageToCanvas(args.eosinDataUrl);
   const he = await imageToCanvas(args.heDataUrl);
@@ -295,8 +433,21 @@ export async function runCropQc(args: {
   };
 
   const checkerboardDataUrl = makeCheckerboard(eosinCrop, heCrop);
+  const featureMatchesDataUrl = makeFeatureMatchesPreview({
+    eosinCrop,
+    heCrop,
+    pixelRect: normalized.pixelRect,
+    referenceSize: { width: eosin.width, height: eosin.height },
+    movingSize: { width: he.width, height: he.height },
+    affineMatrix: args.affineMatrix,
+    controlPoints: args.controlPoints ?? [],
+    inlierMask: args.inlierMask ?? null,
+  });
   const checkerboardPreview = {
     dataUrl: checkerboardDataUrl,
+  };
+  const featureMatchesPreview = {
+    dataUrl: featureMatchesDataUrl,
   };
   const fullresSize = heAssetSet.sizes.fullres;
   const tissue_hires_scalef = getScaleFactor(heAssetSet.sizes.hires, fullresSize);
@@ -315,8 +466,10 @@ export async function runCropQc(args: {
     spot_diameter_fullres,
     fiducial_diameter_fullres: FIDUCIAL_DIAMETER_FULLRES,
     checkerboardPreview,
+    featureMatchesPreview,
     eosinCropDataUrl: cropAssets.eosin.fullres.dataUrl,
     heWarpedCropDataUrl: cropAssets.he.fullres.dataUrl,
     checkerboardDataUrl,
+    featureMatchesDataUrl,
   } satisfies CropQcResult;
 }

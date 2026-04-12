@@ -28,7 +28,7 @@ export const PREPROCESS_NUMERIC_DEFAULTS = {
   cropPaddingRatio: 0.02,
   defaultRotationDegrees: 0,
   defaultScale: 1,
-  thumbnailMaxDimension: 1024,
+  thumbnailMaxDimension: 1000,
 } as const;
 
 export const PREPROCESS_OVERSIZED_IMAGE_LIMITS = {

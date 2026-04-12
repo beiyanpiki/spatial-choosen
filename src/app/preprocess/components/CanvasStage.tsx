@@ -140,7 +140,7 @@ export function CanvasStage({
   const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
   const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize | null>(null);
-  const imageDataUrl = image?.dataUrl ?? null;
+  const imageDataUrl = image?.thumbnailDataUrl ?? image?.dataUrl ?? null;
 
   useEffect(() => {
     if (!imageDataUrl) return;

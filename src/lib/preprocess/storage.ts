@@ -21,6 +21,7 @@ import {
   PREPROCESS_THUMBNAIL_STORE,
 } from './constants';
 import { migratePreprocessProject } from './migrations';
+import { createThumbnailBlob } from './sourceImage';
 
 declare global {
   interface Window {
@@ -76,13 +77,23 @@ type StoredCropQcCanonicalCropState =
 
 type StoredCropQcSlice = Omit<
   PreprocessProject['cropQc'],
-  keyof StoredCropQcCanonicalCropState | 'eosinPreviewDataUrl' | 'previewDataUrl' | 'checkerboardPreviewDataUrl' | 'checkerboardPreview'
+  | keyof StoredCropQcCanonicalCropState
+  | 'eosinPreviewDataUrl'
+  | 'previewDataUrl'
+  | 'checkerboardPreviewDataUrl'
+  | 'checkerboardPreview'
+  | 'featureMatchesPreviewDataUrl'
+  | 'featureMatchesPreview'
 > & StoredCropQcCanonicalCropState & {
   eosinPreviewDataUrl: null;
   previewDataUrl: null;
   checkerboardPreviewDataUrl: null;
   checkerboardPreview: {
-    dataUrl: null;
+    dataUrl: string | null;
+  };
+  featureMatchesPreviewDataUrl: string | null;
+  featureMatchesPreview: {
+    dataUrl: string | null;
   };
 };
 
@@ -121,6 +132,11 @@ export type PreprocessProjectMeta = Omit<
   };
   exportState: Omit<ExportStateSlice, 'artifacts'> & { artifacts: [] };
 };
+
+export type PreprocessProjectSummary = Pick<
+  PreprocessProjectMeta,
+  'id' | 'name' | 'createdAt' | 'updatedAt' | 'currentStep' | 'sourceAssets'
+>;
 
 const isBrowser = () => typeof window !== 'undefined';
 
@@ -178,6 +194,7 @@ const cropQcDerivedImageStoreKey = (
   level: PreprocessCropAssetScale,
 ) => `${projectId}:crop-qc:${kind}:${level}`;
 const cropQcCheckerboardDerivedImageStoreKey = (projectId: string) => `${projectId}:crop-qc:checkerboard`;
+const cropQcFeatureMatchesDerivedImageStoreKey = (projectId: string) => `${projectId}:crop-qc:feature-matches`;
 
 const saveStoreValue = async (storeName: string, key: string, value: string | Blob) => {
   const db = await openDb();
@@ -261,6 +278,10 @@ const stripCropQcPayload = (cropQc: PreprocessProject['cropQc']): StoredCropQcSl
       checkerboardPreview: {
         dataUrl: null,
       },
+      featureMatchesPreviewDataUrl: null,
+      featureMatchesPreview: {
+        dataUrl: null,
+      },
     };
   }
 
@@ -278,6 +299,10 @@ const stripCropQcPayload = (cropQc: PreprocessProject['cropQc']): StoredCropQcSl
     previewDataUrl: null,
     checkerboardPreviewDataUrl: null,
     checkerboardPreview: {
+      dataUrl: null,
+    },
+    featureMatchesPreviewDataUrl: null,
+    featureMatchesPreview: {
       dataUrl: null,
     },
   };
@@ -338,6 +363,10 @@ const clearHydratedCropQc = (cropQc: StoredCropQcSlice): HydratedCropQcSlice => 
   checkerboardPreview: {
     dataUrl: null,
   },
+  featureMatchesPreviewDataUrl: null,
+  featureMatchesPreview: {
+    dataUrl: null,
+  },
   qcAccepted: false,
   issues: [],
   hydrationMissingCanonicalAssets: true,
@@ -348,30 +377,33 @@ const hydrateCropQcSlice = async (
   cropQc: StoredCropQcSlice,
 ): Promise<HydratedCropQcSlice> => {
   const cropAssetPayloads = createEmptyDerivedCropAssetPayloadMap();
-  const cropAssetEntries = await Promise.all(
-    PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.map(async (level) => ({
-      kind,
-      level,
-      payload: await readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcDerivedImageStoreKey(projectId, kind, level)),
-    }))),
-  );
   const legacyCropQc = cropQc as unknown as PreprocessProject['cropQc'];
 
-  cropAssetEntries.forEach(({ kind, level, payload }) => {
-    cropAssetPayloads[kind][level] = payload;
-  });
+  for (const kind of PREPROCESS_SOURCE_IMAGE_KINDS) {
+    for (const level of PREPROCESS_CANONICAL_CROP_ASSET_LEVELS) {
+      cropAssetPayloads[kind][level] = await readStoreValue(
+        PREPROCESS_DERIVED_IMAGE_STORE,
+        cropQcDerivedImageStoreKey(projectId, kind, level),
+      );
+    }
+  }
 
   const checkerboardPayload = await readStoreValue(
     PREPROCESS_DERIVED_IMAGE_STORE,
     cropQcCheckerboardDerivedImageStoreKey(projectId),
   );
-  const [eosinCropAssets, heCropAssets, checkerboardPreviewDataUrl] = await Promise.all([
-    hydrateCropAssetSet(cropAssetPayloads.eosin, legacyCropQc.cropAssets?.eosin),
-    hydrateCropAssetSet(cropAssetPayloads.he, legacyCropQc.cropAssets?.he),
-    hydrateDerivedImagePayload(
-      checkerboardPayload ?? legacyCropQc.checkerboardPreview?.dataUrl ?? legacyCropQc.checkerboardPreviewDataUrl ?? undefined,
-    ),
-  ]);
+  const featureMatchesPayload = await readStoreValue(
+    PREPROCESS_DERIVED_IMAGE_STORE,
+    cropQcFeatureMatchesDerivedImageStoreKey(projectId),
+  );
+  const eosinCropAssets = await hydrateCropAssetSet(cropAssetPayloads.eosin, legacyCropQc.cropAssets?.eosin);
+  const heCropAssets = await hydrateCropAssetSet(cropAssetPayloads.he, legacyCropQc.cropAssets?.he);
+  const checkerboardPreviewDataUrl = await hydrateDerivedImagePayload(
+    checkerboardPayload ?? legacyCropQc.checkerboardPreviewDataUrl ?? legacyCropQc.checkerboardPreview?.dataUrl ?? undefined,
+  );
+  const featureMatchesPreviewDataUrl = await hydrateDerivedImagePayload(
+    featureMatchesPayload ?? legacyCropQc.featureMatchesPreviewDataUrl ?? legacyCropQc.featureMatchesPreview?.dataUrl ?? undefined,
+  );
 
   if (eosinCropAssets && heCropAssets) {
     return {
@@ -385,6 +417,10 @@ const hydrateCropQcSlice = async (
       checkerboardPreviewDataUrl: checkerboardPreviewDataUrl,
       checkerboardPreview: {
         dataUrl: checkerboardPreviewDataUrl,
+      },
+      featureMatchesPreviewDataUrl,
+      featureMatchesPreview: {
+        dataUrl: featureMatchesPreviewDataUrl,
       },
     };
   }
@@ -409,6 +445,10 @@ const hydrateCropQcSlice = async (
       previewDataUrl: null,
       checkerboardPreviewDataUrl: null,
       checkerboardPreview: {
+        dataUrl: null,
+      },
+      featureMatchesPreviewDataUrl: null,
+      featureMatchesPreview: {
         dataUrl: null,
       },
     };
@@ -469,26 +509,49 @@ const hydrateSourcePayload = (payload: string | Blob | undefined) => {
   };
 };
 
-const hydrateSourceImage = (
+const hydrateSourceImage = async (
   meta: StoredSourceImage | null,
   storedSource: string | Blob | undefined,
   storedThumbnail: string | Blob | undefined,
-): PreprocessSourceImage | null => {
-  if (!meta) return null;
+): Promise<{
+  image: PreprocessSourceImage | null;
+  thumbnailRegenerated: boolean;
+}> => {
+  if (!meta) return { image: null, thumbnailRegenerated: false };
 
   const legacyMeta = meta as LegacyStoredSourceImage;
   const source = hydrateSourcePayload(storedSource ?? legacyMeta.dataUrl);
-  if (!source) return null;
+  if (!source) return { image: null, thumbnailRegenerated: false };
   const thumbnail = hydrateSourcePayload(storedThumbnail ?? legacyMeta.thumbnailDataUrl);
 
+  let thumbnailBlob = thumbnail?.blob;
+  let thumbnailObjectUrl = thumbnail?.objectUrl;
+  let thumbnailDataUrl = thumbnail?.displayUrl;
+  let thumbnailRegenerated = false;
+
+  if (!thumbnailDataUrl && source.displayUrl) {
+    try {
+      const generatedBlob = await createThumbnailBlob(source.displayUrl);
+      thumbnailBlob = generatedBlob;
+      thumbnailObjectUrl = URL.createObjectURL(generatedBlob);
+      thumbnailDataUrl = thumbnailObjectUrl;
+      thumbnailRegenerated = true;
+    } catch (error) {
+      void error;
+    }
+  }
+
   return {
-    ...meta,
-    sourceBlob: source.blob,
-    thumbnailBlob: thumbnail?.blob,
-    objectUrl: source.objectUrl,
-    thumbnailObjectUrl: thumbnail?.objectUrl,
-    dataUrl: source.displayUrl,
-    thumbnailDataUrl: thumbnail?.displayUrl,
+    image: {
+      ...meta,
+      sourceBlob: source.blob,
+      thumbnailBlob,
+      objectUrl: source.objectUrl,
+      thumbnailObjectUrl,
+      dataUrl: source.displayUrl,
+      thumbnailDataUrl,
+    },
+    thumbnailRegenerated,
   };
 };
 
@@ -501,23 +564,31 @@ const hydrateDerivedImagePayload = async (payload: string | Blob | undefined) =>
 };
 
 const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessProject | undefined> => {
-  const [eosinDataUrl, heDataUrl, eosinThumbnailDataUrl, heThumbnailDataUrl, focusedHePayload, cropQc] = await Promise.all([
-    readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'eosin')),
-    readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'he')),
-    readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'eosin')),
-    readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'he')),
-    readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(meta.id)),
-    hydrateCropQcSlice(meta.id, meta.cropQc),
-  ]);
+  const eosinDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'eosin'));
+  const heDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'he'));
+  const eosinThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'eosin'));
+  const heThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'he'));
+  const focusedHePayload = await readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(meta.id));
+  const cropQc = await hydrateCropQcSlice(meta.id, meta.cropQc);
 
-  const eosin = hydrateSourceImage(meta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
-  const he = hydrateSourceImage(meta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
+  const eosinResult = await hydrateSourceImage(meta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
+  const heResult = await hydrateSourceImage(meta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
+  const eosin = eosinResult.image;
+  const he = heResult.image;
   const focusedImageDataUrl = await hydrateDerivedImagePayload(focusedHePayload ?? meta.heFocus?.focusedImageDataUrl ?? undefined);
 
   if (meta.sourceAssets.images.eosin && !eosin) return undefined;
   if (meta.sourceAssets.images.he && !he) return undefined;
 
-  return migratePreprocessProject({
+  const writes: Promise<void>[] = [];
+  if (eosinResult.thumbnailRegenerated && eosin) {
+    writes.push(syncImageStores(meta.id, eosin, 'eosin'));
+  }
+  if (heResult.thumbnailRegenerated && he) {
+    writes.push(syncImageStores(meta.id, he, 'he'));
+  }
+
+  const project = migratePreprocessProject({
     ...meta,
     sourceAssets: {
       ...meta.sourceAssets,
@@ -534,6 +605,12 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
       : meta.heFocus,
     cropQc,
   });
+
+  if (writes.length > 0) {
+    await Promise.all(writes);
+  }
+
+  return project;
 };
 
 const readMetas = async (): Promise<PreprocessProjectMeta[]> => readRawProjects() as PreprocessProjectMeta[];
@@ -568,23 +645,42 @@ const syncDerivedImageStore = async (key: string, dataUrl: string | null) => {
 };
 
 const syncCropQcDerivedImageStores = async (projectId: string, cropQc: PreprocessProject['cropQc']) => {
-  const syncs = PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.map((level) => syncDerivedImageStore(
-    cropQcDerivedImageStoreKey(projectId, kind, level),
-    hasCanonicalCropAssets(cropQc) ? cropQc.cropAssets[kind][level].dataUrl : null,
-  )));
+  for (const kind of PREPROCESS_SOURCE_IMAGE_KINDS) {
+    for (const level of PREPROCESS_CANONICAL_CROP_ASSET_LEVELS) {
+      await syncDerivedImageStore(
+        cropQcDerivedImageStoreKey(projectId, kind, level),
+        hasCanonicalCropAssets(cropQc) ? cropQc.cropAssets[kind][level].dataUrl : null,
+      );
+    }
+  }
 
-  syncs.push(syncDerivedImageStore(
+  await syncDerivedImageStore(
     cropQcCheckerboardDerivedImageStoreKey(projectId),
     hasCanonicalCropAssets(cropQc) ? cropQc.checkerboardPreview?.dataUrl ?? null : null,
-  ));
+  );
 
-  await Promise.all(syncs);
+  await syncDerivedImageStore(
+    cropQcFeatureMatchesDerivedImageStoreKey(projectId),
+    hasCanonicalCropAssets(cropQc) ? cropQc.featureMatchesPreview?.dataUrl ?? null : null,
+  );
 };
 
 export async function readPreprocessProjects(): Promise<PreprocessProject[]> {
   const metas = await readMetas();
   const hydrated = await Promise.all(metas.map((meta) => hydrateProject(meta)));
   return hydrated.filter((project): project is PreprocessProject => Boolean(project));
+}
+
+export async function readPreprocessProjectSummaries(): Promise<PreprocessProjectSummary[]> {
+  const metas = await readMetas();
+  return metas.map((meta) => ({
+    id: meta.id,
+    name: meta.name,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    currentStep: meta.currentStep,
+    sourceAssets: meta.sourceAssets,
+  }));
 }
 
 export async function upsertPreprocessProject(project: PreprocessProject) {
@@ -637,6 +733,7 @@ export async function deletePreprocessProject(projectId: string) {
       ]),
       deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(projectId)),
       deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcCheckerboardDerivedImageStoreKey(projectId)),
+      deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcFeatureMatchesDerivedImageStoreKey(projectId)),
     ],
   );
 }

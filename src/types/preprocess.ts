@@ -216,6 +216,10 @@ export type DeprecatedCropQcPreviewAliases = {
    * @deprecated Transitional alias for `checkerboardPreview.dataUrl`.
    */
   checkerboardPreviewDataUrl: string | null;
+  /**
+   * @deprecated Transitional alias for `featureMatchesPreview.dataUrl`.
+   */
+  featureMatchesPreviewDataUrl: string | null;
 };
 
 export type CropQcSliceCore = PreprocessSliceBase & DeprecatedCropQcPreviewAliases & {
@@ -231,6 +235,7 @@ export type CropQcSliceCore = PreprocessSliceBase & DeprecatedCropQcPreviewAlias
 
 export type CanonicalCropQcSlice = CropQcSliceCore & CropQcCanonicalCropState & {
   checkerboardPreview: CropQcCheckerboardPreview;
+  featureMatchesPreview: CropQcCheckerboardPreview;
 };
 
 /**
@@ -247,6 +252,7 @@ export type CropQcSlice = CropQcSliceCore & {
   spot_diameter_fullres?: CanonicalCropQcSlice["spot_diameter_fullres"];
   fiducial_diameter_fullres?: CanonicalCropQcSlice["fiducial_diameter_fullres"];
   checkerboardPreview?: CropQcCheckerboardPreview;
+  featureMatchesPreview?: CropQcCheckerboardPreview;
 };
 
 export type ProjectedSpotBase = {

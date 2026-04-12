@@ -117,6 +117,33 @@ async function seedProjectWithManySpots(page: import('@playwright/test').Page, c
   return preprocessId;
 }
 
+test('feature matches default state', async ({ page }) => {
+  await page.goto('/preprocess');
+  await page.getByPlaceholder('Tumor preprocess set A').fill(`feature-matches-default-${Date.now()}`);
+  await page.getByTestId('preprocess-create-project').click();
+  await expect(page).toHaveURL(/preprocess_id=/);
+
+  const state = await page.evaluate(() => {
+    const raw = window.localStorage.getItem('spatial-preprocess-projects');
+    if (!raw) throw new Error('No preprocess storage payload found');
+
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+    const project = projects[0];
+    if (!project) throw new Error('Missing seeded project');
+
+    const cropQc = project.cropQc as Record<string, unknown>;
+    const featureMatchesPreview = cropQc.featureMatchesPreview as Record<string, unknown> | undefined;
+
+    return {
+      featureMatchesPreviewDataUrl: cropQc.featureMatchesPreviewDataUrl,
+      featureMatchesPreviewDataUrlNested: featureMatchesPreview?.dataUrl ?? null,
+    };
+  });
+
+  expect(state.featureMatchesPreviewDataUrl).toBeNull();
+  expect(state.featureMatchesPreviewDataUrlNested).toBeNull();
+});
+
 test('chip config renders full spot set (no truncation)', async ({ page }) => {
   await page.goto('/preprocess');
   await page.getByPlaceholder('Tumor preprocess set A').fill(`chip-full-${Date.now()}`);
@@ -444,4 +471,77 @@ test('tissue align preview is enlarged', async ({ page }) => {
     path: path.join(process.cwd(), '.sisyphus/evidence/tissue-align-preview-enlarged.png'),
     fullPage: true,
   });
+});
+
+test('feature matches tab shows placeholder before generation', async ({ page }) => {
+  await page.goto('/preprocess');
+  await page.getByPlaceholder('Tumor preprocess set A').fill(`feature-matches-placeholder-${Date.now()}`);
+  await page.getByTestId('preprocess-create-project').click();
+  await expect(page).toHaveURL(/preprocess_id=/);
+
+  const url = new URL(page.url());
+  const preprocessId = url.searchParams.get('preprocess_id');
+  if (!preprocessId) throw new Error('Missing preprocess_id in URL');
+
+  await page.evaluate((id) => {
+    const key = 'spatial-preprocess-projects';
+    const raw = window.localStorage.getItem(key);
+    if (!raw) throw new Error('No preprocess storage payload found');
+    const projects = JSON.parse(raw) as Array<Record<string, unknown>>;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 320;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas unavailable for test seed');
+    context.fillStyle = 'rgb(170,170,170)';
+    context.fillRect(0, 0, 320, 320);
+    const checkerboardDataUrl = canvas.toDataURL('image/png');
+
+    const now = new Date().toISOString();
+    const next = projects.map((project) => {
+      if (project.id !== id) return project;
+      return {
+        ...project,
+        currentStep: 'cropQc',
+        updatedAt: now,
+        localization: {
+          ...(project.localization as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          chipBounds: { x: 0.2, y: 0.2, width: 0.6, height: 0.6 },
+        },
+        alignment: {
+          ...(project.alignment as Record<string, unknown>),
+          status: 'complete',
+          isStale: false,
+          updatedAt: now,
+          solveAccepted: true,
+          error: null,
+        },
+        cropQc: {
+          ...(project.cropQc as Record<string, unknown>),
+          status: 'ready',
+          isStale: false,
+          updatedAt: now,
+          cropWidth: 320,
+          cropHeight: 320,
+          qcAccepted: false,
+          checkerboardPreviewDataUrl: checkerboardDataUrl,
+          featureMatchesPreviewDataUrl: null,
+          featureMatchesPreview: { dataUrl: null },
+          error: null,
+        },
+      };
+    });
+    window.localStorage.setItem(key, JSON.stringify(next));
+  }, preprocessId);
+
+  await page.reload();
+  await page.getByTestId('preprocess-step-crop').click();
+  await page.getByRole('tab', { name: 'Feature matches' }).click();
+
+  await expect(page.getByText('Feature-match preview appears after crop generation.')).toBeVisible();
+  await expect(page.getByTestId('cropqc-feature-matches-canvas')).toHaveCount(0);
 });

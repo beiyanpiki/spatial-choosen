@@ -33,12 +33,21 @@ type PreprocessPackagedProject = Omit<
   alignment: Omit<PreprocessProject["alignment"], "previewDataUrl"> & { previewDataUrl: null };
   cropQc: Omit<
     PreprocessProject["cropQc"],
-    "eosinPreviewDataUrl" | "previewDataUrl" | "checkerboardPreviewDataUrl" | "checkerboardPreview"
+    | "eosinPreviewDataUrl"
+    | "previewDataUrl"
+    | "checkerboardPreviewDataUrl"
+    | "featureMatchesPreviewDataUrl"
+    | "checkerboardPreview"
+    | "featureMatchesPreview"
   > & {
     eosinPreviewDataUrl: null;
     previewDataUrl: null;
     checkerboardPreviewDataUrl: null;
     checkerboardPreview: {
+      dataUrl: null;
+    };
+    featureMatchesPreviewDataUrl: null;
+    featureMatchesPreview: {
       dataUrl: null;
     };
   };
@@ -108,6 +117,10 @@ const toPackagedProject = (project: PreprocessProject): PreprocessPackagedProjec
     previewDataUrl: null,
     checkerboardPreviewDataUrl: null,
     checkerboardPreview: {
+      dataUrl: null,
+    },
+    featureMatchesPreviewDataUrl: null,
+    featureMatchesPreview: {
       dataUrl: null,
     },
   },
@@ -526,6 +539,7 @@ const assertCropQcCanonicalAssetSet = (value: unknown, fieldName: string) => {
 const hasAnyCanonicalCropField = (slice: Record<string, unknown>) => (
   'cropAssets' in slice
   || 'checkerboardPreview' in slice
+  || 'featureMatchesPreview' in slice
   || 'tissue_hires_scalef' in slice
   || 'tissue_lowres_scalef' in slice
   || 'spot_diameter_fullres' in slice
@@ -539,6 +553,10 @@ const assertCanonicalCropQcContract = (slice: Record<string, unknown>) => {
   assertObject(slice.checkerboardPreview, 'cropQc.checkerboardPreview');
   const checkerboardPreview = slice.checkerboardPreview as Record<string, unknown>;
   assertNullableString(checkerboardPreview.dataUrl, 'cropQc.checkerboardPreview.dataUrl');
+  assertNullableString(slice.featureMatchesPreviewDataUrl, 'cropQc.featureMatchesPreviewDataUrl');
+  assertObject(slice.featureMatchesPreview, 'cropQc.featureMatchesPreview');
+  const featureMatchesPreview = slice.featureMatchesPreview as Record<string, unknown>;
+  assertNullableString(featureMatchesPreview.dataUrl, 'cropQc.featureMatchesPreview.dataUrl');
 
   const eosinAssets = cropAssets.eosin;
   const heAssets = cropAssets.he;
@@ -563,6 +581,9 @@ const assertCanonicalCropQcContract = (slice: Record<string, unknown>) => {
     if (checkerboardPreview.dataUrl !== null) {
       throw new Error('Project field "cropQc.checkerboardPreview.dataUrl" is invalid or missing');
     }
+    if (featureMatchesPreview.dataUrl !== null) {
+      throw new Error('Project field "cropQc.featureMatchesPreview.dataUrl" is invalid or missing');
+    }
     return;
   }
 
@@ -572,12 +593,16 @@ const assertCanonicalCropQcContract = (slice: Record<string, unknown>) => {
   assertPositiveNumber(slice.tissue_lowres_scalef, 'cropQc.tissue_lowres_scalef');
   assertNullablePositiveNumber(slice.spot_diameter_fullres, 'cropQc.spot_diameter_fullres');
   assertPositiveNumber(slice.fiducial_diameter_fullres, 'cropQc.fiducial_diameter_fullres');
+  if (featureMatchesPreview.dataUrl !== null) {
+    throw new Error('Project field "cropQc.featureMatchesPreview.dataUrl" is invalid or missing');
+  }
 };
 
 const assertLegacyCropQcContract = (slice: Record<string, unknown>) => {
   assertNullableString(slice.eosinPreviewDataUrl ?? null, 'cropQc.eosinPreviewDataUrl');
   assertNullableString(slice.previewDataUrl ?? null, 'cropQc.previewDataUrl');
   assertNullableString(slice.checkerboardPreviewDataUrl ?? null, 'cropQc.checkerboardPreviewDataUrl');
+  assertNullableString(slice.featureMatchesPreviewDataUrl ?? null, 'cropQc.featureMatchesPreviewDataUrl');
 };
 
 const assertCropQcSlice = (value: unknown) => {
