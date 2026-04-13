@@ -66,7 +66,6 @@ export function TissueSelectionPanel({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDrawing, setIsDrawing] = useState(false);
-  const [currentPoints, setCurrentPoints] = useState<PreprocessPoint[]>([]);
   const [, setIsPanning] = useState(false);
   const [canvasRefresh, setCanvasRefresh] = useState(0);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -75,10 +74,22 @@ export function TissueSelectionPanel({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const loadedImageRef = useRef<HTMLImageElement | null>(null);
   const pathRef = useRef<PreprocessPoint[]>([]);
+  const canvasRefreshFrameRef = useRef<number | null>(null);
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
   const drawingActiveRef = useRef(false);
   const panningActiveRef = useRef(false);
   const [hostRect, setHostRect] = useState<DOMRect | null>(null);
+
+  const requestCanvasRefresh = useCallback(() => {
+    if (canvasRefreshFrameRef.current !== null) {
+      return;
+    }
+
+    canvasRefreshFrameRef.current = window.requestAnimationFrame(() => {
+      canvasRefreshFrameRef.current = null;
+      setCanvasRefresh((value) => value + 1);
+    });
+  }, []);
 
   useEffect(() => {
     if (!eosinCropDataUrl) {
@@ -92,9 +103,15 @@ export function TissueSelectionPanel({
     image.onload = () => {
       loadedImageRef.current = image;
       setImageDimensions({ width: image.width, height: image.height });
-      setCanvasRefresh((v) => v + 1);
+      requestCanvasRefresh();
     };
-  }, [eosinCropDataUrl]);
+  }, [eosinCropDataUrl, requestCanvasRefresh]);
+
+  useEffect(() => () => {
+    if (canvasRefreshFrameRef.current !== null) {
+      window.cancelAnimationFrame(canvasRefreshFrameRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -126,6 +143,8 @@ export function TissueSelectionPanel({
       ? selectedRegionIds
       : [selectedRegionId];
   }, [selectedRegionId, selectedRegionIds]);
+  const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
+  const selectedRegionIdSet = useMemo(() => new Set(effectiveSelectedRegionIds), [effectiveSelectedRegionIds]);
 
   const computeBaseViewCb = useCallback(
     () => computeBaseView(hostRect, ratio),
@@ -338,11 +357,11 @@ export function TissueSelectionPanel({
     drawingActiveRef.current = false;
     panningActiveRef.current = false;
     pathRef.current = [];
-    setCurrentPoints([]);
     setIsDrawing(false);
     setIsPanning(false);
     panStartRef.current = null;
-  }, []);
+    requestCanvasRefresh();
+  }, [requestCanvasRefresh]);
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -393,17 +412,17 @@ export function TissueSelectionPanel({
         }
         pathRef.current = [point];
         drawingActiveRef.current = true;
-        setCurrentPoints([point]);
         setIsDrawing(true);
+        requestCanvasRefresh();
         return;
       }
 
       pathRef.current = [point];
       drawingActiveRef.current = true;
-      setCurrentPoints([point]);
       setIsDrawing(true);
+      requestCanvasRefresh();
     },
-    [disabled, effectiveSelectedRegionIds, screenToImage, activeTool, findRegionAtPoint, regions, resetInteractionState, selectRegionByIndex, toast],
+    [activeTool, disabled, effectiveSelectedRegionIds, findRegionAtPoint, regions, requestCanvasRefresh, resetInteractionState, screenToImage, selectRegionByIndex, toast],
   );
 
   const handlePointerMove = useCallback(
@@ -422,10 +441,10 @@ export function TissueSelectionPanel({
       }
       const point = screenToImage(event);
       if (!drawingActiveRef.current || (activeTool !== 'draw' && activeTool !== 'erase') || !point) return;
-      pathRef.current = [...pathRef.current, point];
-      setCurrentPoints([...pathRef.current]);
+      pathRef.current.push(point);
+      requestCanvasRefresh();
     },
-    [disabled, resetInteractionState, screenToImage, activeTool],
+    [activeTool, disabled, requestCanvasRefresh, resetInteractionState, screenToImage],
   );
 
   const handlePointerUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -451,9 +470,9 @@ export function TissueSelectionPanel({
       commitRegion(pathRef.current);
     }
     pathRef.current = [];
-    setCurrentPoints([]);
+    requestCanvasRefresh();
     event.currentTarget.releasePointerCapture(event.pointerId);
-  }, [disabled, activeTool, punchOut, commitRegion, resetInteractionState]);
+  }, [activeTool, commitRegion, disabled, punchOut, requestCanvasRefresh, resetInteractionState]);
 
   const applyZoom = useCallback(
     (rawZoom: number, anchorNorm?: Point, anchorScreen?: Point) => {
@@ -512,7 +531,6 @@ export function TissueSelectionPanel({
       );
     }
 
-    const selectedSpotSet = new Set(selectedSpotIds);
     projectedSpots.forEach((spot) => {
       const normalizedSpotWidth = spot.width ?? spot.diameterX ?? 0;
       const normalizedSpotHeight = spot.height ?? spot.diameterY ?? normalizedSpotWidth;
@@ -520,7 +538,7 @@ export function TissueSelectionPanel({
       const spotHeight = Math.max(1, normalizedSpotHeight * transform.height);
       const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
       const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
-      const selected = selectedSpotSet.has(spot.id);
+      const selected = selectedSpotIdSet.has(spot.id);
       ctx.fillStyle = selected ? 'rgba(46,204,113,0.35)' : 'rgba(231,76,60,0.2)';
       ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
       ctx.strokeStyle = selected ? 'rgba(39,174,96,0.8)' : 'rgba(192,57,43,0.7)';
@@ -529,7 +547,7 @@ export function TissueSelectionPanel({
 
     regions.forEach((region) => {
       const paths = getRegionPaths(region);
-      const isSelected = effectiveSelectedRegionIds.includes(region.id);
+      const isSelected = selectedRegionIdSet.has(region.id);
       if (paths.length === 0) return;
       ctx.beginPath();
       paths.forEach((ring) => {
@@ -555,6 +573,7 @@ export function TissueSelectionPanel({
       ctx.stroke();
     });
 
+    const currentPoints = pathRef.current;
     if (isDrawing && currentPoints.length > 0) {
       ctx.beginPath();
       const first = currentPoints[0];
@@ -577,11 +596,10 @@ export function TissueSelectionPanel({
     hostRect,
     canvasRefresh,
     projectedSpots,
-    selectedSpotIds,
+    selectedSpotIdSet,
     regions,
-    effectiveSelectedRegionIds,
+    selectedRegionIdSet,
     isDrawing,
-    currentPoints,
     activeTool,
     getTransformCb,
     getRegionPaths,
@@ -681,9 +699,9 @@ export function TissueSelectionPanel({
                   <HStack
                     key={region.id}
                     p={3}
-                    bg={effectiveSelectedRegionIds.includes(region.id) ? 'brand.50' : 'white'}
+                    bg={selectedRegionIdSet.has(region.id) ? 'brand.50' : 'white'}
                     border='1px solid'
-                    borderColor={effectiveSelectedRegionIds.includes(region.id) ? 'brand.200' : 'gray.200'}
+                    borderColor={selectedRegionIdSet.has(region.id) ? 'brand.200' : 'gray.200'}
                     borderRadius='lg'
                     cursor={disabled ? 'not-allowed' : 'pointer'}
                     opacity={disabled ? 0.6 : 1}
