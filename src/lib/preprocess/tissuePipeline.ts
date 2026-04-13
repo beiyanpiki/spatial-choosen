@@ -1,5 +1,6 @@
 import type { ProjectedSpot } from '@/types/preprocess';
 import { getProjectedSpotLowresBounds } from './spotProjection';
+import { applyConnectedSpotCleanup, applyDensityFilter } from './tissueCleanup';
 import { normalizeTissueParams, type TissueParams } from './tissueThresholds';
 
 const SPOT_BATCH_YIELD_INTERVAL = 250;
@@ -8,25 +9,15 @@ type SchedulerLike = {
   yield?: () => Promise<void>;
 };
 
-const grayscaleMinAt = (data: Uint8ClampedArray, width: number, height: number, x: number, y: number) => {
-  const px = Math.max(0, Math.min(width - 1, x));
-  const py = Math.max(0, Math.min(height - 1, y));
-  const offset = (py * width + px) * 4;
-  const r = data[offset] ?? 0;
-  const g = data[offset + 1] ?? 0;
-  const b = data[offset + 2] ?? 0;
-  return Math.min(r, g, b);
-};
-
 const computeActivePixelRatio = (args: {
-  data: Uint8ClampedArray;
+  activePixelIntegralImage: Uint32Array;
+  integralStride: number;
   imageWidth: number;
   imageHeight: number;
   cropWidth: number;
   cropHeight: number;
   tissueLowresScaleFactor: number;
   spot: ProjectedSpot;
-  blockThreshold: number;
 }) => {
   const bounds = getProjectedSpotLowresBounds({
     spot: args.spot,
@@ -39,19 +30,34 @@ const computeActivePixelRatio = (args: {
   const startY = Math.max(0, Math.min(args.imageHeight, bounds.startY));
   const endY = Math.max(startY, Math.min(args.imageHeight, bounds.endY));
 
-  let totalPixels = 0;
-  let activePixels = 0;
+  const totalPixels = (endX - startX) * (endY - startY);
+  const activePixels = args.activePixelIntegralImage[endY * args.integralStride + endX]
+    - args.activePixelIntegralImage[startY * args.integralStride + endX]
+    - args.activePixelIntegralImage[endY * args.integralStride + startX]
+    + args.activePixelIntegralImage[startY * args.integralStride + startX];
 
-  for (let py = startY; py < endY; py += 1) {
-    for (let px = startX; px < endX; px += 1) {
-      totalPixels += 1;
-      if (grayscaleMinAt(args.data, args.imageWidth, args.imageHeight, px, py) <= args.blockThreshold) {
-        activePixels += 1;
+  return totalPixels > 0 ? activePixels / totalPixels : 0;
+};
+
+const buildActivePixelIntegralImage = (data: Uint8ClampedArray, width: number, height: number, blockThreshold: number) => {
+  const stride = width + 1;
+  const integral = new Uint32Array((height + 1) * stride);
+
+  for (let py = 0; py < height; py += 1) {
+    let rowSum = 0;
+    for (let px = 0; px < width; px += 1) {
+      const offset = (py * width + px) * 4;
+      const r = data[offset] ?? 0;
+      const g = data[offset + 1] ?? 0;
+      const b = data[offset + 2] ?? 0;
+      if (Math.min(r, g, b) <= blockThreshold) {
+        rowSum += 1;
       }
+      integral[(py + 1) * stride + (px + 1)] = integral[py * stride + (px + 1)] + rowSum;
     }
   }
 
-  return totalPixels > 0 ? activePixels / totalPixels : 0;
+  return { integral, stride };
 };
 
 const yieldToMainThread = async () => {
@@ -107,7 +113,13 @@ export async function runTissueAutoSelection(args: {
 }) {
   const params = normalizeTissueParams(args.params);
   const imageData = await loadImageData(args.eosinLowresCropDataUrl);
-  const selectedIds: string[] = [];
+  const { integral, stride } = buildActivePixelIntegralImage(
+    imageData.data,
+    imageData.width,
+    imageData.height,
+    params.blockThreshold,
+  );
+  const candidateIds: string[] = [];
 
   for (let index = 0; index < args.projectedSpots.length; index += 1) {
     const spot = args.projectedSpots[index];
@@ -116,18 +128,18 @@ export async function runTissueAutoSelection(args: {
     }
 
     const activePixelRatio = computeActivePixelRatio({
-      data: imageData.data,
+      activePixelIntegralImage: integral,
+      integralStride: stride,
       imageWidth: imageData.width,
       imageHeight: imageData.height,
       cropWidth: args.cropWidth,
       cropHeight: args.cropHeight,
       tissueLowresScaleFactor: args.tissueLowresScaleFactor,
       spot,
-      blockThreshold: params.blockThreshold,
     });
 
     if (activePixelRatio >= params.activationThreshold) {
-      selectedIds.push(spot.id);
+      candidateIds.push(spot.id);
     }
 
     const processedSpotCount = index + 1;
@@ -138,6 +150,29 @@ export async function runTissueAutoSelection(args: {
       await yieldToMainThread();
     }
   }
+
+  let selectedIdSet = new Set(candidateIds);
+
+  if (selectedIdSet.size > 0 && params.minConnectedSpotCount > 1) {
+    selectedIdSet = applyConnectedSpotCleanup({
+      projectedSpots: args.projectedSpots,
+      selectedIds: selectedIdSet,
+      minConnectedSpotCount: params.minConnectedSpotCount,
+    });
+  }
+
+  if (selectedIdSet.size > 0 && params.dbscanMinSamples > 1) {
+    selectedIdSet = applyDensityFilter({
+      projectedSpots: args.projectedSpots,
+      candidateIds: selectedIdSet,
+      eps: params.dbscanEps,
+      minSamples: params.dbscanMinSamples,
+    });
+  }
+
+  const selectedIds = args.projectedSpots
+    .filter((spot) => selectedIdSet.has(spot.id))
+    .map((spot) => spot.id);
 
   const selectedCount = selectedIds.length;
   const selectedPercent = args.projectedSpots.length > 0 ? (selectedCount / args.projectedSpots.length) * 100 : 0;
