@@ -23,7 +23,7 @@ import {
 	Text,
 	useToast,
 } from "@chakra-ui/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeAlignmentSlice } from "@/lib/preprocess/alignment";
 import {
 	type ChipConfigManifest,
@@ -57,6 +57,7 @@ import {
 	projectSpotsForCrop,
 	resolveAuthoritativeSpotDiameterFullres,
 } from "@/lib/preprocess/spotProjection";
+import { buildManualTissueSelectionState } from "@/lib/preprocess/projectUpdates";
 import { runTissueAutoSelection } from "@/lib/preprocess/tissuePipeline";
 import {
 	AUTO_TISSUE_REGION_ID,
@@ -94,6 +95,7 @@ type PreprocessWorkspaceProps = {
 	onBackToLanding: () => void;
 	onProjectMutate: (
 		updater: (current: PreprocessProject) => PreprocessProject,
+		persistOptions?: { mode?: "full" | "metadata"; strategy?: "immediate" | "debounced" },
 	) => void;
 	onProjectNameChange: (value: string) => void;
 	onStepChange: (stepId: PreprocessStepId) => void;
@@ -133,7 +135,7 @@ const normalizeHeFocusSlice = (
 		? clampNormalizedSquareRect(slice.chipBounds, imageAspectRatio)
 		: null;
 
-	return {
+																							return {
 		...slice,
 		chipBounds: nextRect,
 		handles: nextRect ? buildLocalizationHandles(nextRect) : [],
@@ -332,9 +334,7 @@ const buildTissueAutoDetectionPatch = async (args: {
 		selectedSpotIds: result.selectedIds,
 	});
 	const nextRegions = defaultRegion ? [defaultRegion] : [];
-	const nextSelectedSpotIds = nextRegions.length > 0
-		? deriveSelectedSpotIdsFromRegions(nextRegions, args.projectedSpots)
-		: result.selectedIds;
+	const nextSelectedSpotIds = result.selectedIds;
 
 	return {
 		result,
@@ -1137,7 +1137,7 @@ export function PreprocessWorkspace({
 							? error.message
 							: "Failed to load chip manifests";
 					setChipConfigError(message);
-					onProjectMutate((current) => ({
+																								onProjectMutate((current) => ({
 						...current,
 						chipConfig: {
 							...current.chipConfig,
@@ -1195,7 +1195,7 @@ export function PreprocessWorkspace({
 				isStale: false,
 				updatedAt: new Date().toISOString(),
 			},
-		}));
+		}), { mode: "metadata" });
 
 		try {
 			const tissuePatch = await buildTissueAutoDetectionPatch({
@@ -1251,7 +1251,7 @@ export function PreprocessWorkspace({
 						error: null,
 					},
 				};
-			});
+			}, { mode: "metadata" });
 		} catch (error) {
 			if (tissueDetectionRequestTokenRef.current !== requestToken) {
 				return;
@@ -1285,7 +1285,7 @@ export function PreprocessWorkspace({
 						error: null,
 					},
 				};
-			});
+			}, { mode: "metadata" });
 		} finally {
 			if (tissueDetectionRequestTokenRef.current === requestToken) {
 				setIsDetectingTissue(false);
@@ -1297,6 +1297,31 @@ export function PreprocessWorkspace({
 		? placeholderCopyByStep[project.currentStep]
 		: placeholderCopyByStep.sourceAssets;
 	const isTissueInteractionDisabled = isDetectingTissue;
+	const tissueProjectedSpots = useMemo(
+		() => project?.chipConfig.projectedSpots ?? [],
+		[project?.chipConfig.projectedSpots],
+	);
+	const tissueSelectedSpotIds = useMemo(() => {
+		if (!project) {
+			return [];
+		}
+
+		if (project.tissueSelection.selectedSpotIds) {
+			return project.tissueSelection.selectedSpotIds;
+		}
+
+		if (project.tissueSelection.regions.length > 0) {
+			return deriveSelectedSpotIdsFromRegions(
+				project.tissueSelection.regions,
+				tissueProjectedSpots,
+			);
+		}
+
+		return project.tissueSelection.autoSelectedSpotIds;
+	}, [
+		project,
+		tissueProjectedSpots,
+	]);
 
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
@@ -1802,79 +1827,55 @@ export function PreprocessWorkspace({
 								<Box position="relative">
 									<Flex direction={{ base: "column", xl: "row" }} gap={5} align="stretch">
 										<Box flex="1" minW={0}>
-											<TissueSelectionPanel
-												eosinCropDataUrl={project.cropQc.eosinPreviewDataUrl}
-												projectedSpots={project.chipConfig.projectedSpots ?? []}
-												selectedSpotIds={(() => {
-													const regions = project.tissueSelection.regions;
-													const projectedSpots =
-														project.chipConfig.projectedSpots ?? [];
-													if (regions.length > 0) {
-														return deriveSelectedSpotIdsFromRegions(
-															regions,
-															projectedSpots,
-														);
-													}
-													return project.tissueSelection.autoSelectedSpotIds;
-												})()}
+													<TissueSelectionPanel
+														eosinCropDataUrl={project.cropQc.eosinPreviewDataUrl}
+														projectedSpots={tissueProjectedSpots}
+														selectedSpotIds={tissueSelectedSpotIds}
 												regions={project.tissueSelection.regions}
 												selectedRegionId={project.tissueSelection.selectedRegionId}
 												showControls={false}
 												tool={tissueTool}
 												disabled={isTissueInteractionDisabled}
 												onToolChange={setTissueTool}
-												onRegionsChange={(nextRegions) => {
-													onProjectMutate((current) => {
-														const projectedSpots =
-															current.chipConfig.projectedSpots ?? [];
-														const finalSelectedSpotIds =
-															nextRegions.length > 0
-																? deriveSelectedSpotIdsFromRegions(
-																		nextRegions,
-																		projectedSpots,
-																  )
-																: [];
-														const totalSpots = projectedSpots.length;
-														const paritySummary = buildSelectedCountSummary(
-															finalSelectedSpotIds,
-															totalSpots,
-														);
+													onRegionsChange={(nextRegions) => {
+														onProjectMutate((current) => {
+														const projectedSpots = current.chipConfig.projectedSpots ?? [];
+														const updatedAt = new Date().toISOString();
 														return {
 															...current,
-															tissueSelection: {
-																...current.tissueSelection,
-																mode: "polygon",
-																regions: nextRegions,
-																selectedSpotIds: finalSelectedSpotIds,
-																paritySummary,
-																overrideNotice: null,
-																status: "complete",
-																isStale: false,
-																updatedAt: new Date().toISOString(),
-																warning: null,
-																error: null,
-															},
+															tissueSelection: buildManualTissueSelectionState({
+																current: current.tissueSelection,
+																projectedSpots,
+																nextRegions,
+																updatedAt,
+															}),
 															exportState: {
 																...current.exportState,
 																status: "stale",
 																isStale: true,
-																updatedAt: new Date().toISOString(),
+																updatedAt,
 																lastExportedAt: null,
 																artifacts: [],
 																error: null,
 															},
-														};
-													});
-												}}
-												onSelectedRegionIdChange={(id) => {
-													onProjectMutate((current) => ({
-														...current,
-														tissueSelection: {
-															...current.tissueSelection,
-															selectedRegionId: id,
-														},
-													}));
-												}}
+																		};
+															}, { mode: "metadata", strategy: "debounced" });
+														}}
+													onSelectedRegionIdChange={(id) => {
+														onProjectMutate((current) => {
+															if (current.tissueSelection.selectedRegionId === id) {
+																return current;
+															}
+
+															return {
+																...current,
+																tissueSelection: {
+																	...current.tissueSelection,
+																	selectedRegionId: id,
+																},
+															};
+														}, { mode: "metadata", strategy: "debounced" });
+														}}
 											/>
 										</Box>
 										<Stack w={{ base: "100%", xl: "320px" }} spacing={4} flexShrink={0}>
@@ -2056,12 +2057,12 @@ export function PreprocessWorkspace({
 																			},
 																			exportState: {
 																				...current.exportState,
-																				status: "stale",
-																				isStale: true,
-																				updatedAt: new Date().toISOString(),
-																			},
-																		}));
-																	}}
+																									status: "stale",
+																									isStale: true,
+																									updatedAt: new Date().toISOString(),
+																								},
+																						}), { mode: "metadata", strategy: "debounced" });
+																			}}
 																	data-testid="tissue-activation-threshold-slider"
 																>
 																	<SliderTrack>
@@ -2077,7 +2078,7 @@ export function PreprocessWorkspace({
 																	value={activationThresholdValue}
 																	onChange={(event) => {
 																		const next = Number(event.target.value);
-																		onProjectMutate((current) => ({
+																				onProjectMutate((current) => ({
 																			...current,
 																			tissueSelection: {
 																				...current.tissueSelection,
@@ -2092,12 +2093,12 @@ export function PreprocessWorkspace({
 																			},
 																			exportState: {
 																				...current.exportState,
-																				status: "stale",
-																				isStale: true,
-																				updatedAt: new Date().toISOString(),
-																			},
-																		}));
-																	}}
+																							status: "stale",
+																							isStale: true,
+																							updatedAt: new Date().toISOString(),
+																						},
+																						}), { mode: "metadata", strategy: "debounced" });
+																			}}
 																	data-testid="tissue-activation-threshold-input"
 																/>
 															</Stack>
@@ -2111,7 +2112,7 @@ export function PreprocessWorkspace({
 																	step={1}
 																	value={project.tissueSelection.blockThreshold}
 																	onChange={(value) => {
-																		onProjectMutate((current) => ({
+																				onProjectMutate((current) => ({
 																			...current,
 																			tissueSelection: {
 																				...current.tissueSelection,
@@ -2123,12 +2124,12 @@ export function PreprocessWorkspace({
 																			},
 																			exportState: {
 																				...current.exportState,
-																				status: "stale",
-																				isStale: true,
-																				updatedAt: new Date().toISOString(),
-																			},
-																		}));
-																	}}
+																							status: "stale",
+																							isStale: true,
+																							updatedAt: new Date().toISOString(),
+																						},
+																						}), { mode: "metadata", strategy: "debounced" });
+																			}}
 																	data-testid="tissue-block-threshold-slider"
 																>
 																	<SliderTrack>
@@ -2144,7 +2145,7 @@ export function PreprocessWorkspace({
 																	value={project.tissueSelection.blockThreshold}
 																	onChange={(event) => {
 																		const next = Number(event.target.value);
-																		onProjectMutate((current) => ({
+																				onProjectMutate((current) => ({
 																			...current,
 																			tissueSelection: {
 																				...current.tissueSelection,
@@ -2158,12 +2159,12 @@ export function PreprocessWorkspace({
 																			},
 																			exportState: {
 																				...current.exportState,
-																				status: "stale",
-																				isStale: true,
-																				updatedAt: new Date().toISOString(),
-																			},
-																		}));
-																	}}
+																							status: "stale",
+																							isStale: true,
+																							updatedAt: new Date().toISOString(),
+																						},
+																						}), { mode: "metadata", strategy: "debounced" });
+																			}}
 																	data-testid="tissue-block-threshold-input"
 																/>
 															</Stack>
@@ -2182,7 +2183,7 @@ export function PreprocessWorkspace({
 														</Button>
 														<Stack spacing={1}>
 															<Text fontSize="sm" color="gray.600" data-testid="tissue-selected-count">
-																Selected spots: {project.tissueSelection.selectedSpotIds?.length ?? 0}
+																Selected spots: {tissueSelectedSpotIds.length}
 															</Text>
 															{project.tissueSelection.warning ? (
 																<Text fontSize="sm" color="orange.700" data-testid="tissue-detection-warning">
@@ -2249,48 +2250,36 @@ export function PreprocessWorkspace({
 															data-testid="tissue-delete-selected"
 															onClick={() => {
 																const selectedId = project.tissueSelection.selectedRegionId;
-																if (!selectedId) return;
-																onProjectMutate((current) => {
-																	const nextRegions = current.tissueSelection.regions.filter(
-																		(region) => region.id !== selectedId,
-																	);
-																	const projectedSpots = current.chipConfig.projectedSpots ?? [];
-																	const finalSelectedSpotIds =
-																		nextRegions.length > 0
-																			? deriveSelectedSpotIdsFromRegions(nextRegions, projectedSpots)
-																			: [];
-
-																	const paritySummary = buildSelectedCountSummary(
-																		finalSelectedSpotIds,
-																		projectedSpots.length,
-																	);
-																	return {
-																		...current,
-																		tissueSelection: {
-																			...current.tissueSelection,
-																			regions: nextRegions,
-																			selectedRegionId: nextRegions[0]?.id ?? null,
-																			selectedSpotIds: finalSelectedSpotIds,
-																			paritySummary,
-																			overrideNotice: null,
-																			status: "complete",
-																			isStale: false,
-																			updatedAt: new Date().toISOString(),
-																			warning: null,
-																			error: null,
-																		},
-																		exportState: {
-																			...current.exportState,
-																			status: "stale",
-																			isStale: true,
-																			updatedAt: new Date().toISOString(),
-																			lastExportedAt: null,
-																			artifacts: [],
-																			error: null,
-																		},
-																	};
-																});
-															}}
+															if (!selectedId) return;
+															onProjectMutate((current) => {
+																const nextRegions = current.tissueSelection.regions.filter(
+																	(region) => region.id !== selectedId,
+																);
+																const projectedSpots = current.chipConfig.projectedSpots ?? [];
+																const updatedAt = new Date().toISOString();
+																return {
+																	...current,
+																	tissueSelection: {
+																		...buildManualTissueSelectionState({
+																			current: current.tissueSelection,
+																			projectedSpots,
+																			nextRegions,
+																			updatedAt,
+																		}),
+																		selectedRegionId: nextRegions[0]?.id ?? null,
+																	},
+																	exportState: {
+																		...current.exportState,
+																		status: "stale",
+																		isStale: true,
+																		updatedAt,
+																		lastExportedAt: null,
+																		artifacts: [],
+																		error: null,
+																								},
+																							};
+																						}, { mode: "metadata", strategy: "debounced" });
+																			}}
 														>
 															Delete selected
 														</Button>
@@ -2314,17 +2303,23 @@ export function PreprocessWorkspace({
 																	cursor={isTissueInteractionDisabled ? "not-allowed" : "pointer"}
 																	opacity={isTissueInteractionDisabled ? 0.6 : 1}
 																	data-testid={`tissue-region-row-${region.id}`}
-																	onClick={() => {
-																		if (isTissueInteractionDisabled) {
-																			return;
-																		}
-																		onProjectMutate((current) => ({
-																			...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				selectedRegionId: region.id,
-																			},
-																		}));
+																onClick={() => {
+																	if (isTissueInteractionDisabled) {
+																		return;
+																	}
+																onProjectMutate((current) => {
+																if (current.tissueSelection.selectedRegionId === region.id) {
+																	return current;
+																}
+
+																return {
+																	...current,
+																	tissueSelection: {
+																		...current.tissueSelection,
+																		selectedRegionId: region.id,
+																	},
+																};
+															}, { mode: "metadata", strategy: "debounced" });
 																	}}
 																>
 																	<Box w="12px" h="12px" borderRadius="sm" bg={region.color} />
