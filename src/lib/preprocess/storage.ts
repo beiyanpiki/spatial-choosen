@@ -138,6 +138,8 @@ export type PreprocessProjectSummary = Pick<
   'id' | 'name' | 'createdAt' | 'updatedAt' | 'currentStep' | 'sourceAssets'
 >;
 
+export type PreprocessPersistMode = 'full' | 'metadata';
+
 const isBrowser = () => typeof window !== 'undefined';
 
 const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
@@ -615,6 +617,20 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
 
 const readMetas = async (): Promise<PreprocessProjectMeta[]> => readRawProjects() as PreprocessProjectMeta[];
 
+export const upsertPreprocessProjectMetadata = (project: PreprocessProject) => {
+  const metas = readRawProjects() as PreprocessProjectMeta[];
+  const migratedProject = migratePreprocessProject(project);
+  const meta = toProjectMeta(migratedProject);
+  const index = metas.findIndex((entry) => entry.id === project.id);
+  if (index >= 0) {
+    metas[index] = meta;
+  } else {
+    metas.unshift(meta);
+  }
+  persistMetas(metas);
+  return migratedProject;
+};
+
 const syncImageStores = async (projectId: string, image: PreprocessSourceImage | null, kind: PreprocessImageKind) => {
   const key = assetStoreKey(projectId, kind);
   const sourcePayload = image?.sourceBlob ?? (image?.dataUrl?.startsWith('data:') ? await urlToBlob(image.dataUrl) : undefined);
@@ -683,7 +699,10 @@ export async function readPreprocessProjectSummaries(): Promise<PreprocessProjec
   }));
 }
 
-export async function upsertPreprocessProject(project: PreprocessProject) {
+export async function upsertPreprocessProject(
+  project: PreprocessProject,
+  options?: { mode?: PreprocessPersistMode },
+) {
   if (
     typeof window !== 'undefined'
     && process.env.NODE_ENV !== 'production'
@@ -693,16 +712,11 @@ export async function upsertPreprocessProject(project: PreprocessProject) {
     throw new DOMException('Synthetic preprocess quota failure', 'QuotaExceededError');
   }
 
-  const metas = await readMetas();
-  const migratedProject = migratePreprocessProject(project);
-  const meta = toProjectMeta(migratedProject);
-  const index = metas.findIndex((entry) => entry.id === project.id);
-  if (index >= 0) {
-    metas[index] = meta;
-  } else {
-    metas.unshift(meta);
+  const migratedProject = upsertPreprocessProjectMetadata(project);
+
+  if ((options?.mode ?? 'full') === 'metadata') {
+    return;
   }
-  persistMetas(metas);
 
   await Promise.all([
     ...PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),

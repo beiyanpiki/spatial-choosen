@@ -10,12 +10,15 @@ import {
 } from '@/lib/preprocess/localization';
 import { migratePreprocessProject } from '@/lib/preprocess/migrations';
 import { deserializePreprocessImport } from '@/lib/preprocess/package';
+import { buildUpdatedProjectSnapshot } from '@/lib/preprocess/projectUpdates';
 import { DEFAULT_TISSUE_PARAMS } from '@/lib/preprocess/tissueThresholds';
 import {
   deletePreprocessProject,
   getPreprocessProject,
   readPreprocessProjectSummaries,
+  type PreprocessPersistMode,
   upsertPreprocessProject,
+  upsertPreprocessProjectMetadata,
   type PreprocessProjectSummary,
 } from '@/lib/preprocess/storage';
 import type {
@@ -70,6 +73,14 @@ const revokeObjectUrls = (urls: Iterable<string>) => {
 };
 
 const WORKFLOW_VERSION = 2;
+const METADATA_AUTOSAVE_DEBOUNCE_MS = 300;
+
+type PersistStrategy = 'immediate' | 'debounced';
+
+type PersistOptions = {
+  mode?: PreprocessPersistMode;
+  strategy?: PersistStrategy;
+};
 
 const createSlice = (status: PreprocessSliceBase['status']): PreprocessSliceBase => ({
   status,
@@ -245,9 +256,19 @@ function PreprocessContent() {
 
   const latestSaveAttemptRef = useRef(0);
   const lastSavedProjectRef = useRef<PreprocessProject | null>(null);
+  const pendingSnapshotRef = useRef<PreprocessProject | null>(null);
+  const pendingPersistModeRef = useRef<PreprocessPersistMode>('metadata');
+  const pendingPersistTimerRef = useRef<number | null>(null);
   const activeObjectUrlsRef = useRef<Set<string>>(new Set());
   const savingObjectUrlCountsRef = useRef<Map<string, number>>(new Map());
   const deferredObjectUrlsRef = useRef<Set<string>>(new Set());
+
+  const clearPendingPersistTimer = useCallback(() => {
+    if (pendingPersistTimerRef.current !== null) {
+      window.clearTimeout(pendingPersistTimerRef.current);
+      pendingPersistTimerRef.current = null;
+    }
+  }, []);
 
   const isSavingObjectUrl = useCallback((url: string) => {
     return (savingObjectUrlCountsRef.current.get(url) ?? 0) > 0;
@@ -388,14 +409,17 @@ function PreprocessContent() {
     flushDeferredObjectUrls(activeObjectUrlsRef.current);
   }, [flushDeferredObjectUrls, isSavingObjectUrl]);
 
-  const persistProjectSnapshot = useCallback(async (snapshot: PreprocessProject) => {
+  const persistProjectSnapshot = useCallback(async (
+    snapshot: PreprocessProject,
+    mode: PreprocessPersistMode = 'full',
+  ) => {
     const saveAttempt = latestSaveAttemptRef.current + 1;
     latestSaveAttemptRef.current = saveAttempt;
     const persistWithProtectedUrls = async (projectToSave: PreprocessProject) => {
       const savingUrls = collectProjectObjectUrls(projectToSave);
       retainSavingObjectUrls(savingUrls);
       try {
-        await upsertPreprocessProject(projectToSave);
+        await upsertPreprocessProject(projectToSave, { mode });
       } finally {
         releaseSavingObjectUrls(savingUrls);
         flushDeferredObjectUrls();
@@ -437,6 +461,81 @@ function PreprocessContent() {
       }
     }
   }, [flushDeferredObjectUrls, releaseSavingObjectUrls, retainSavingObjectUrls, toast]);
+
+  const flushPendingProjectSnapshot = useCallback((synchronousMetadata = false) => {
+    const pendingSnapshot = pendingSnapshotRef.current;
+    if (!pendingSnapshot) {
+      clearPendingPersistTimer();
+      return;
+    }
+
+    const mode = pendingPersistModeRef.current;
+    pendingSnapshotRef.current = null;
+    clearPendingPersistTimer();
+
+    if (synchronousMetadata && mode === 'metadata') {
+      latestSaveAttemptRef.current += 1;
+      lastSavedProjectRef.current = pendingSnapshot;
+      upsertPreprocessProjectMetadata(pendingSnapshot);
+      return;
+    }
+
+    void persistProjectSnapshot(pendingSnapshot, mode);
+  }, [clearPendingPersistTimer, persistProjectSnapshot]);
+
+  const previousPreprocessIdRef = useRef<string | null>(preprocessId);
+
+  useEffect(() => {
+    if (previousPreprocessIdRef.current !== preprocessId) {
+      flushPendingProjectSnapshot(true);
+      previousPreprocessIdRef.current = preprocessId;
+    }
+  }, [flushPendingProjectSnapshot, preprocessId]);
+
+  const scheduleProjectPersist = useCallback((
+    snapshot: PreprocessProject,
+    options?: PersistOptions,
+  ) => {
+    const mode = options?.mode ?? 'full';
+    const strategy = options?.strategy ?? 'immediate';
+
+    if (strategy === 'debounced' && mode === 'metadata') {
+      pendingSnapshotRef.current = snapshot;
+      pendingPersistModeRef.current = mode;
+      setAutosaveStatus('saving');
+      setAutosaveDetail('saving changes…');
+      clearPendingPersistTimer();
+      pendingPersistTimerRef.current = window.setTimeout(() => {
+        flushPendingProjectSnapshot();
+      }, METADATA_AUTOSAVE_DEBOUNCE_MS);
+      return;
+    }
+
+    pendingSnapshotRef.current = null;
+    clearPendingPersistTimer();
+    void persistProjectSnapshot(snapshot, mode);
+  }, [clearPendingPersistTimer, flushPendingProjectSnapshot, persistProjectSnapshot]);
+
+  useEffect(() => {
+    const flushOnExit = () => {
+      flushPendingProjectSnapshot(true);
+    };
+    const flushOnHidden = () => {
+      if (document.visibilityState === 'hidden') {
+        flushOnExit();
+      }
+    };
+
+    window.addEventListener('pagehide', flushOnExit);
+    window.addEventListener('beforeunload', flushOnExit);
+    document.addEventListener('visibilitychange', flushOnHidden);
+    return () => {
+      window.removeEventListener('pagehide', flushOnExit);
+      window.removeEventListener('beforeunload', flushOnExit);
+      document.removeEventListener('visibilitychange', flushOnHidden);
+      flushPendingProjectSnapshot(true);
+    };
+  }, [flushPendingProjectSnapshot]);
 
   const openProject = useCallback((projectId: string) => {
     router.push(`/preprocess?preprocess_id=${encodeURIComponent(projectId)}`);
@@ -506,17 +605,22 @@ function PreprocessContent() {
 
   const updateProject = useCallback((
     updater: (current: PreprocessProject) => PreprocessProject,
+    persistOptions?: PersistOptions,
   ) => {
     setProject((current) => {
       if (!current) return current;
-      const nextSnapshot: PreprocessProject = {
-        ...updater(current),
-        updatedAt: new Date().toISOString(),
-      };
-      void persistProjectSnapshot(nextSnapshot);
+      const nextSnapshot = buildUpdatedProjectSnapshot(
+        current,
+        updater,
+        new Date().toISOString(),
+      );
+      if (nextSnapshot === current) {
+        return current;
+      }
+      scheduleProjectPersist(nextSnapshot, persistOptions);
       return nextSnapshot;
     });
-  }, [persistProjectSnapshot]);
+  }, [scheduleProjectPersist]);
 
   const handleStepChange = useCallback((stepId: PreprocessStepId) => {
     setProject((current) => {
@@ -528,10 +632,10 @@ function PreprocessContent() {
         updatedAt: new Date().toISOString(),
       };
 
-      void persistProjectSnapshot(nextSnapshot);
+      scheduleProjectPersist(nextSnapshot);
       return nextSnapshot;
     });
-  }, [persistProjectSnapshot]);
+  }, [scheduleProjectPersist]);
 
   const handleProjectNameChange = useCallback((value: string) => {
     updateProject((current) => ({
