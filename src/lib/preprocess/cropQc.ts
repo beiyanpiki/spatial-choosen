@@ -1,4 +1,3 @@
-import { getTransformedRectCorners } from '@/lib/preprocess/imageTransforms';
 import type {
   AlignmentAffineMatrix,
   AlignmentControlPoint,
@@ -48,6 +47,7 @@ const HIRES_MAX_SIDE = 2000;
 const LOWRES_MAX_SIDE = 800;
 const FIDUCIAL_DIAMETER_FULLRES = 0.027;
 const FEATURE_MATCHES_GAP = 24;
+const FEATURE_MATCH_VISUAL_SIZE = 4;
 const FEATURE_MATCHES_COLORS = [
   '#ff5252',
   '#2dd4bf',
@@ -190,17 +190,12 @@ const imageToCanvas = async (dataUrl: string) => {
 
 const normalizeRect = (
   chipBounds: PreprocessRect,
-  transform: LocalizationImageTransform,
   imageSize: Size,
 ): { rect: PreprocessRect; pixelRect: PixelRect } => {
-  const corners = getTransformedRectCorners(chipBounds, transform);
-  const xs = corners.map((corner) => corner.x);
-  const ys = corners.map((corner) => corner.y);
-
-  const minX = clamp(Math.min(...xs), 0, 1);
-  const maxX = clamp(Math.max(...xs), 0, 1);
-  const minY = clamp(Math.min(...ys), 0, 1);
-  const maxY = clamp(Math.max(...ys), 0, 1);
+  const minX = clamp(chipBounds.x, 0, 1);
+  const maxX = clamp(chipBounds.x + chipBounds.width, 0, 1);
+  const minY = clamp(chipBounds.y, 0, 1);
+  const maxY = clamp(chipBounds.y + chipBounds.height, 0, 1);
 
   const widthNorm = Math.max(1 / Math.max(1, imageSize.width), maxX - minX);
   const heightNorm = Math.max(1 / Math.max(1, imageSize.height), maxY - minY);
@@ -270,13 +265,6 @@ const applyAffineToPoint = (
   y: affineMatrix[3] * point.x + affineMatrix[4] * point.y + affineMatrix[5],
 });
 
-const isPointInsidePixelRect = (point: PixelPoint, pixelRect: PixelRect) => (
-  point.x >= pixelRect.x
-  && point.y >= pixelRect.y
-  && point.x < pixelRect.x + pixelRect.width
-  && point.y < pixelRect.y + pixelRect.height
-);
-
 const toCropLocalPoint = (point: PixelPoint, pixelRect: PixelRect): PixelPoint => ({
   x: point.x - pixelRect.x,
   y: point.y - pixelRect.y,
@@ -286,15 +274,11 @@ const getFeatureMatchCandidates = (
   controlPoints: AlignmentControlPoint[],
   inlierMask: boolean[] | null,
 ) => {
-  const useMask = Array.isArray(inlierMask) && inlierMask.length === controlPoints.length;
+  if (!inlierMask) {
+    return controlPoints;
+  }
 
-  return controlPoints.flatMap((controlPoint, index) => {
-    if (useMask && !inlierMask[index]) {
-      return [];
-    }
-
-    return [controlPoint];
-  });
+  return controlPoints.filter((_, index) => inlierMask[index] ?? false);
 };
 
 const drawFeatureMatchMarker = (
@@ -303,7 +287,7 @@ const drawFeatureMatchMarker = (
   color: string,
 ) => {
   context.beginPath();
-  context.arc(point.x, point.y, 3, 0, Math.PI * 2);
+  context.arc(point.x, point.y, FEATURE_MATCH_VISUAL_SIZE, 0, Math.PI * 2);
   context.fillStyle = color;
   context.fill();
   context.lineWidth = 1;
@@ -312,7 +296,10 @@ const drawFeatureMatchMarker = (
 };
 
 const makeFeatureMatchesPreview = (args: {
+  alignmentAccepted: boolean;
+  eosinFull: HTMLCanvasElement;
   eosinCrop: HTMLCanvasElement;
+  heFull: HTMLCanvasElement;
   heCrop: HTMLCanvasElement;
   pixelRect: PixelRect;
   referenceSize: Size;
@@ -321,19 +308,21 @@ const makeFeatureMatchesPreview = (args: {
   controlPoints: AlignmentControlPoint[];
   inlierMask: boolean[] | null;
 }) => {
+  const leftCanvas = args.alignmentAccepted ? args.eosinCrop : args.eosinFull;
+  const rightCanvas = args.alignmentAccepted ? args.heCrop : args.heFull;
   const preview = document.createElement('canvas');
-  preview.width = args.eosinCrop.width + args.heCrop.width + FEATURE_MATCHES_GAP;
-  preview.height = Math.max(args.eosinCrop.height, args.heCrop.height);
+  preview.width = leftCanvas.width + rightCanvas.width + FEATURE_MATCHES_GAP;
+  preview.height = Math.max(leftCanvas.height, rightCanvas.height);
   const context = preview.getContext('2d');
   if (!context) throw new Error('Feature matches context unavailable');
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
   context.fillStyle = '#ffffff';
   context.fillRect(0, 0, preview.width, preview.height);
-  context.drawImage(args.eosinCrop, 0, 0);
-  context.drawImage(args.heCrop, args.eosinCrop.width + FEATURE_MATCHES_GAP, 0);
+  context.drawImage(leftCanvas, 0, 0);
+  context.drawImage(rightCanvas, leftCanvas.width + FEATURE_MATCHES_GAP, 0);
 
-  const separatorX = args.eosinCrop.width + FEATURE_MATCHES_GAP / 2;
+  const separatorX = leftCanvas.width + FEATURE_MATCHES_GAP / 2;
   context.beginPath();
   context.moveTo(separatorX, 0);
   context.lineTo(separatorX, preview.height);
@@ -341,21 +330,26 @@ const makeFeatureMatchesPreview = (args: {
   context.strokeStyle = 'rgba(15, 23, 42, 0.12)';
   context.stroke();
 
-  const candidates = getFeatureMatchCandidates(args.controlPoints, args.inlierMask);
+  const candidates = args.alignmentAccepted
+    ? getFeatureMatchCandidates(args.controlPoints, args.inlierMask)
+    : args.controlPoints;
   let drawableIndex = 0;
 
   for (const candidate of candidates) {
     const referencePoint = toPixelPoint(candidate.source, args.referenceSize);
     const movingPoint = toPixelPoint(candidate.target, args.movingSize);
-    const warpedMovingPoint = applyAffineToPoint(movingPoint, args.affineMatrix);
-    if (!isPointInsidePixelRect(referencePoint, args.pixelRect) || !isPointInsidePixelRect(warpedMovingPoint, args.pixelRect)) {
-      continue;
-    }
+    const warpedMovingPoint = args.alignmentAccepted
+      ? applyAffineToPoint(movingPoint, args.affineMatrix)
+      : movingPoint;
 
-    const leftPoint = toCropLocalPoint(referencePoint, args.pixelRect);
-    const rightLocalPoint = toCropLocalPoint(warpedMovingPoint, args.pixelRect);
+    const leftPoint = args.alignmentAccepted
+      ? toCropLocalPoint(referencePoint, args.pixelRect)
+      : referencePoint;
+    const rightLocalPoint = args.alignmentAccepted
+      ? toCropLocalPoint(warpedMovingPoint, args.pixelRect)
+      : warpedMovingPoint;
     const rightPoint = {
-      x: args.eosinCrop.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
+      x: leftCanvas.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
       y: rightLocalPoint.y,
     };
     const color = FEATURE_MATCHES_COLORS[drawableIndex % FEATURE_MATCHES_COLORS.length];
@@ -364,7 +358,7 @@ const makeFeatureMatchesPreview = (args: {
     context.beginPath();
     context.moveTo(leftPoint.x, leftPoint.y);
     context.lineTo(rightPoint.x, rightPoint.y);
-    context.lineWidth = 1.5;
+    context.lineWidth = FEATURE_MATCH_VISUAL_SIZE / 2;
     context.strokeStyle = color;
     context.stroke();
 
@@ -439,16 +433,19 @@ export async function runCropQc(args: {
   chipBounds: PreprocessRect;
   imageTransform: LocalizationImageTransform;
   affineMatrix: AlignmentAffineMatrix;
+  alignmentAccepted?: boolean;
+  solveAccepted?: boolean;
   controlPoints?: AlignmentControlPoint[];
   inlierMask?: boolean[] | null;
 }) {
   const eosin = await imageToCanvas(args.eosinDataUrl);
   const he = await imageToCanvas(args.heDataUrl);
 
-  const normalized = normalizeRect(args.chipBounds, args.imageTransform, { width: eosin.width, height: eosin.height });
+  const normalized = normalizeRect(args.chipBounds, { width: eosin.width, height: eosin.height });
 
   const eosinCrop = cropCanvas(eosin.canvas, normalized.pixelRect);
   const heCrop = makeWarpedHeCrop(args.cv, he.canvas, args.affineMatrix, normalized.pixelRect);
+  const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
 
   try {
     const eosinAssetSet = buildCanonicalAssetSet(eosinCrop);
@@ -460,7 +457,10 @@ export async function runCropQc(args: {
 
     const checkerboardDataUrl = makeCheckerboard(eosinCrop, heCrop);
     const featureMatchesDataUrl = makeFeatureMatchesPreview({
+      alignmentAccepted: useAcceptedFeatureMatchesPreview,
+      eosinFull: eosin.canvas,
       eosinCrop,
+      heFull: he.canvas,
       heCrop,
       pixelRect: normalized.pixelRect,
       referenceSize: { width: eosin.width, height: eosin.height },
