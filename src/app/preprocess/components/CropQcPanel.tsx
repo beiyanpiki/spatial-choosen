@@ -16,7 +16,7 @@ import {
   Tabs,
   Text,
 } from '@chakra-ui/react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   commitCropQcOverlayOpacityDraft,
   createCropQcOverlayOpacityState,
@@ -65,20 +65,27 @@ export function CropQcPanel({
     createCropQcOverlayOpacityState(overlayOpacity)
   ));
 
-  useEffect(() => {
-    setOverlayOpacityState((current) => syncCommittedCropQcOverlayOpacity(current, overlayOpacity));
-  }, [overlayOpacity]);
+  const syncedOverlayOpacityState = syncCommittedCropQcOverlayOpacity(
+    overlayOpacityState,
+    overlayOpacity,
+  );
 
   const handleOverlayOpacityChange = useCallback((value: number) => {
-    setOverlayOpacityState((current) => updateCropQcOverlayOpacityDraft(current, value));
-  }, []);
+    setOverlayOpacityState((current) => updateCropQcOverlayOpacityDraft(
+      syncCommittedCropQcOverlayOpacity(current, overlayOpacity),
+      value,
+    ));
+  }, [overlayOpacity]);
 
   const handleOverlayOpacityChangeEnd = useCallback((value: number) => {
-    setOverlayOpacityState((current) => commitCropQcOverlayOpacityDraft(current, value));
+    setOverlayOpacityState((current) => commitCropQcOverlayOpacityDraft(
+      syncCommittedCropQcOverlayOpacity(current, overlayOpacity),
+      value,
+    ));
     onOverlayOpacityCommit(value);
-  }, [onOverlayOpacityCommit]);
+  }, [onOverlayOpacityCommit, overlayOpacity]);
 
-  const displayedOverlayOpacity = overlayOpacityState.displayOpacity;
+  const displayedOverlayOpacity = syncedOverlayOpacityState.displayOpacity;
   const tissueAlignPreviewMode = getCropQcPreviewMode('tissueAlign');
   const featureMatchesPreviewMode = getCropQcPreviewMode('featureMatches');
 

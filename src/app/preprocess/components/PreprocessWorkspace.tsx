@@ -1781,7 +1781,7 @@ export function PreprocessWorkspace({
 										?? null
 									}
 									overlayOpacity={project.cropQc.overlayOpacity}
-									onOverlayOpacityChange={(value) => {
+									onOverlayOpacityCommit={(value: number) => {
 										applyCropQcUpdate(
 											(current) => ({
 												...current,
