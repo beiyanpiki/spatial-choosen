@@ -10,9 +10,14 @@ class FakeMat implements CvMat {
 	data32F: Float32Array;
 	data: Uint8Array;
 
-	constructor(rows = 0, cols = 0, values: ArrayLike<number> = []) {
-		this.rows = rows;
-		this.cols = cols;
+	constructor(...args: unknown[]) {
+		const [rowsArg = 0, colsArg = 0, valuesArg = []] = args;
+		const values = typeof valuesArg === 'object' && valuesArg !== null && 'length' in valuesArg
+			? Array.from(valuesArg as ArrayLike<number>)
+			: [];
+
+		this.rows = typeof rowsArg === 'number' ? rowsArg : 0;
+		this.cols = typeof colsArg === 'number' ? colsArg : 0;
 		this.data64F = Float64Array.from(values);
 		this.data32F = Float32Array.from(values);
 		this.data = new Uint8Array();

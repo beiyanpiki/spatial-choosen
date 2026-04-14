@@ -167,12 +167,15 @@ class FakeCvMat implements CvMat {
   data32F: Float32Array;
   data: Uint8Array;
 
-  constructor(args?: { rows?: number; cols?: number; data64F?: Float64Array; data?: Uint8Array }) {
-    this.rows = args?.rows ?? 0;
-    this.cols = args?.cols ?? 0;
-    this.data64F = args?.data64F ?? new Float64Array(0);
+  constructor(...args: unknown[]) {
+    const [config] = args;
+    const normalized = isFakeCvMatInit(config) ? config : undefined;
+
+    this.rows = normalized?.rows ?? 0;
+    this.cols = normalized?.cols ?? 0;
+    this.data64F = normalized?.data64F ?? new Float64Array(0);
     this.data32F = new Float32Array(0);
-    this.data = args?.data ?? new Uint8Array(0);
+    this.data = normalized?.data ?? new Uint8Array(0);
   }
 
   empty() {
@@ -183,6 +186,21 @@ class FakeCvMat implements CvMat {
     return undefined;
   }
 }
+
+type FakeCvMatInit = {
+  rows?: number;
+  cols?: number;
+  data64F?: Float64Array;
+  data?: Uint8Array;
+};
+
+const isFakeCvMatInit = (value: unknown): value is FakeCvMatInit => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  return true;
+};
 
 class FakeCvSize {
   width: number;
@@ -400,9 +418,6 @@ describe('runCropQc feature match preview', () => {
     expect(result.cropWidth).toBe(50);
     expect(result.cropHeight).toBe(50);
 
-    const featureMatchesCanvas = document.createElement('canvas') as MockCanvasElement;
-    featureMatchesCanvas.width = 0;
-    featureMatchesCanvas.height = 0;
     expect(result.featureMatchesDataUrl).toContain('mock:');
 
     const summary = parsePreviewSummary(result.featureMatchesDataUrl);
@@ -410,4 +425,3 @@ describe('runCropQc feature match preview', () => {
     expect(summary.arcPoints[1]?.x).toBeGreaterThan(result.cropWidth);
   });
 });
-
