@@ -20,6 +20,7 @@ type RenderOptions = {
 	unsupportedReason?: string | null;
 	isDetecting?: boolean;
 	tissueTool?: TissueTool;
+	showSpots?: boolean;
 };
 
 function renderControls({
@@ -30,12 +31,14 @@ function renderControls({
 	unsupportedReason = null,
 	isDetecting = false,
 	tissueTool = "activate",
+	showSpots = true,
 }: RenderOptions = {}) {
 	const onThresholdModeChange = vi.fn();
 	const onActivationThresholdChange = vi.fn();
 	const onBlockThresholdChange = vi.fn();
 	const onTissueToolChange = vi.fn();
 	const onRunAutoDetection = vi.fn();
+	const onShowSpotsChange = vi.fn();
 
 	function Harness() {
 		const [currentThresholdMode, setCurrentThresholdMode] =
@@ -45,6 +48,7 @@ function renderControls({
 		const [currentBlockThreshold, setCurrentBlockThreshold] =
 			useState(blockThreshold);
 		const [currentTissueTool, setCurrentTissueTool] = useState(tissueTool);
+		const [currentShowSpots, setCurrentShowSpots] = useState(showSpots);
 
 		return (
 			<TissueSelectionControls
@@ -55,6 +59,7 @@ function renderControls({
 				unsupportedReason={unsupportedReason}
 				isDetecting={isDetecting}
 				tissueTool={currentTissueTool}
+				showSpots={currentShowSpots}
 				onThresholdModeChange={(value) => {
 					onThresholdModeChange(value);
 					setCurrentThresholdMode(value);
@@ -72,6 +77,10 @@ function renderControls({
 					setCurrentTissueTool(value);
 				}}
 				onRunAutoDetection={onRunAutoDetection}
+				onShowSpotsChange={(value) => {
+					onShowSpotsChange(value);
+					setCurrentShowSpots(value);
+				}}
 			/>
 		);
 	}
@@ -88,6 +97,7 @@ function renderControls({
 		onBlockThresholdChange,
 		onTissueToolChange,
 		onRunAutoDetection,
+		onShowSpotsChange,
 	};
 }
 
@@ -125,6 +135,7 @@ function renderEditingHarness({
 					unsupportedReason={null}
 					isDetecting={false}
 					tissueTool="activate"
+					showSpots={true}
 					onThresholdModeChange={vi.fn()}
 					onActivationThresholdChange={(value) => {
 						activationValues.push(value);
@@ -134,8 +145,9 @@ function renderEditingHarness({
 						blockValues.push(value);
 						setCurrentBlockThreshold(value);
 					}}
-					onTissueToolChange={vi.fn()}
-					onRunAutoDetection={vi.fn()}
+						onTissueToolChange={vi.fn()}
+						onRunAutoDetection={vi.fn()}
+						onShowSpotsChange={vi.fn()}
 				/>
 				<input
 					data-testid="activation-edit-proxy"
@@ -169,6 +181,18 @@ function onLast(values: number[]) {
 }
 
 describe("TissueSelectionControls", () => {
+	it("toggles the show spots button label and callback", async () => {
+		const user = userEvent.setup();
+		const { onShowSpotsChange } = renderControls({ showSpots: true });
+
+		const toggleButton = screen.getByRole("button", { name: "Hide spots" });
+		expect(toggleButton).toBeEnabled();
+
+		await user.click(toggleButton);
+		expect(onShowSpotsChange).toHaveBeenCalledWith(false);
+		expect(screen.getByRole("button", { name: "Show spots" })).toBeInTheDocument();
+	});
+
 	it("renders only activate and deactivate tools for supported chips", async () => {
 		const user = userEvent.setup();
 		const {

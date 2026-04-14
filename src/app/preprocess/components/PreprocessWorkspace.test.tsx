@@ -363,6 +363,24 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     mockLoadChipConfigData.mockResolvedValue(null);
   });
 
+  it('toggles spot visibility locally without changing the selected spot count', async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceHarness />);
+
+    const selectedCount = screen.getByTestId('tissue-selected-count');
+    const panelSelectedCount = screen.getByTestId('tissue-panel-selected-count');
+    const toggleButton = screen.getByRole('button', { name: 'Hide spots' });
+
+    expect(selectedCount).toHaveTextContent('Selected spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Selected spots: 0');
+
+    await user.click(toggleButton);
+
+    expect(screen.getByRole('button', { name: 'Show spots' })).toBeInTheDocument();
+    expect(selectedCount).toHaveTextContent('Selected spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Selected spots: 0');
+  });
+
   it('uses edited activation and block thresholds for the next auto-detection run without auto-running on edit', async () => {
     mockRunTissueAutoSelection.mockResolvedValue({
       selectedIds: [],

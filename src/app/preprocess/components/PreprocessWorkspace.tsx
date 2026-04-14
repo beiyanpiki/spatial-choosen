@@ -53,7 +53,10 @@ import {
 	projectSpotsForCrop,
 	resolveAuthoritativeSpotDiameterFullres,
 } from "../../../lib/preprocess/spotProjection";
-import { buildManualTissueSelectionState } from "../../../lib/preprocess/projectUpdates";
+import {
+	buildInvertedTissueSelectionState,
+	buildManualTissueSelectionState,
+} from "../../../lib/preprocess/projectUpdates";
 import { runTissueAutoSelection } from "../../../lib/preprocess/tissuePipeline";
 import { selectedSpotIdsFromMatrix } from "../../../lib/preprocess/tissueMatrix";
 import { resolveTissueSelectionSupport } from "../../../lib/preprocess/tissueSupport";
@@ -68,7 +71,6 @@ import type {
 	PreprocessRect,
 	PreprocessSourceImage,
 	PreprocessStepId,
-	TissueSelectionSlice,
 } from "@/types/preprocess";
 import { AlignmentPanel } from "./AlignmentPanel";
 import { CanvasStage } from "./CanvasStage";
@@ -1290,6 +1292,7 @@ export function PreprocessWorkspace({
 	const isTissueInteractionDisabled =
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
+	const [showTissueSpots, setShowTissueSpots] = useState(true);
 
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
@@ -1799,6 +1802,7 @@ export function PreprocessWorkspace({
 								eosinCropDataUrl={project.cropQc.cropAssets?.eosin?.lowres.dataUrl ?? null}
 								projectedSpots={tissueProjectedSpots}
 								selectedSpotIds={tissueSelectedSpotIds}
+								showSpots={showTissueSpots}
 								showControls={false}
 								tool={tissueTool}
 								disabled={isTissueInteractionDisabled}
@@ -1814,6 +1818,8 @@ export function PreprocessWorkspace({
 												projectedSpots,
 												editArea,
 												nextValue: tissueTool === "activate" ? 1 : 0,
+												rows: current.chipConfig.rows,
+												columns: current.chipConfig.columns,
 												updatedAt,
 											}),
 											exportState: {
@@ -2010,124 +2016,154 @@ export function PreprocessWorkspace({
 												</CardBody>
 											</Card>
 
-										<TissueSelectionControls
-											thresholdMode={project.tissueSelection.thresholdMode}
-											activationThreshold={project.tissueSelection.activationThreshold}
-											blockThreshold={project.tissueSelection.blockThreshold}
-											supportState={tissueSupport.supportState}
-											unsupportedReason={tissueSupport.unsupportedReason}
-											isDetecting={isDetectingTissue}
-											tissueTool={tissueTool}
-											onThresholdModeChange={(thresholdMode) => {
-												onProjectMutate((current) => {
-													const nextSupport = resolveTissueSelectionSupport({
-														chipType: current.chipConfig.chipType,
-														rows: current.chipConfig.rows,
-														columns: current.chipConfig.columns,
-													});
-													const updatedAt = new Date().toISOString();
+						<TissueSelectionControls
+							thresholdMode={project.tissueSelection.thresholdMode}
+							activationThreshold={project.tissueSelection.activationThreshold}
+							blockThreshold={project.tissueSelection.blockThreshold}
+							supportState={tissueSupport.supportState}
+							unsupportedReason={tissueSupport.unsupportedReason}
+							isDetecting={isDetectingTissue}
+							tissueTool={tissueTool}
+							showSpots={showTissueSpots}
 
-													return {
-														...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				thresholdMode,
-																				supportState: nextSupport.supportState,
-																				unsupportedReason: nextSupport.unsupportedReason,
-																				status: "stale",
-																				warning: null,
-																				error: null,
-																				isStale: true,
-																				updatedAt,
-																			},
+							onThresholdModeChange={(thresholdMode) => {
+								onProjectMutate((current) => {
+									const nextSupport = resolveTissueSelectionSupport({
+										chipType: current.chipConfig.chipType,
+										rows: current.chipConfig.rows,
+										columns: current.chipConfig.columns,
+									});
+									const updatedAt = new Date().toISOString();
 
-														exportState: {
-															...current.exportState,
-															status: "stale",
-															isStale: true,
-															updatedAt,
-															lastExportedAt: null,
-															artifacts: [],
-															error: null,
-														},
-													};
-												}, { mode: "metadata", strategy: "debounced" });
-											}}
-											onActivationThresholdChange={(activationThreshold) => {
-												onProjectMutate((current) => {
-													const nextSupport = resolveTissueSelectionSupport({
-														chipType: current.chipConfig.chipType,
-														rows: current.chipConfig.rows,
-														columns: current.chipConfig.columns,
-													});
-													const updatedAt = new Date().toISOString();
+									return {
+										...current,
+													tissueSelection: {
+														...current.tissueSelection,
+														thresholdMode,
+														supportState: nextSupport.supportState,
+														unsupportedReason: nextSupport.unsupportedReason,
+														status: "stale",
+														warning: null,
+														error: null,
+														isStale: true,
+														updatedAt,
+													},
 
-													return {
-														...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				activationThreshold,
-																				supportState: nextSupport.supportState,
-																				unsupportedReason: nextSupport.unsupportedReason,
-																				status: "stale",
-																				warning: null,
-																				error: null,
-																				isStale: true,
-																				updatedAt,
-																			},
+										exportState: {
+											...current.exportState,
+											status: "stale",
+											isStale: true,
+											updatedAt,
+											lastExportedAt: null,
+											artifacts: [],
+											error: null,
+										},
+									};
+								}, { mode: "metadata", strategy: "debounced" });
+							}}
+							onActivationThresholdChange={(activationThreshold) => {
+								onProjectMutate((current) => {
+									const nextSupport = resolveTissueSelectionSupport({
+										chipType: current.chipConfig.chipType,
+										rows: current.chipConfig.rows,
+										columns: current.chipConfig.columns,
+									});
+									const updatedAt = new Date().toISOString();
 
-														exportState: {
-															...current.exportState,
-															status: "stale",
-															isStale: true,
-															updatedAt,
-															lastExportedAt: null,
-															artifacts: [],
-															error: null,
-														},
-													};
-												}, { mode: "metadata", strategy: "debounced" });
-											}}
-											onBlockThresholdChange={(blockThreshold) => {
-												onProjectMutate((current) => {
-													const nextSupport = resolveTissueSelectionSupport({
-														chipType: current.chipConfig.chipType,
-														rows: current.chipConfig.rows,
-														columns: current.chipConfig.columns,
-													});
-													const updatedAt = new Date().toISOString();
+									return {
+										...current,
+													tissueSelection: {
+														...current.tissueSelection,
+														activationThreshold,
+														supportState: nextSupport.supportState,
+														unsupportedReason: nextSupport.unsupportedReason,
+														status: "stale",
+														warning: null,
+														error: null,
+														isStale: true,
+														updatedAt,
+													},
 
-													return {
-														...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				blockThreshold,
-																				supportState: nextSupport.supportState,
-																				unsupportedReason: nextSupport.unsupportedReason,
-																				status: "stale",
-																				warning: null,
-																				error: null,
-																				isStale: true,
-																				updatedAt,
-																			},
+										exportState: {
+											...current.exportState,
+											status: "stale",
+											isStale: true,
+											updatedAt,
+											lastExportedAt: null,
+											artifacts: [],
+											error: null,
+										},
+									};
+								}, { mode: "metadata", strategy: "debounced" });
+							}}
+							onBlockThresholdChange={(blockThreshold) => {
+								onProjectMutate((current) => {
+									const nextSupport = resolveTissueSelectionSupport({
+										chipType: current.chipConfig.chipType,
+										rows: current.chipConfig.rows,
+										columns: current.chipConfig.columns,
+									});
+									const updatedAt = new Date().toISOString();
 
-														exportState: {
-															...current.exportState,
-															status: "stale",
-															isStale: true,
-															updatedAt,
-															lastExportedAt: null,
-															artifacts: [],
-															error: null,
-														},
-													};
-												}, { mode: "metadata", strategy: "debounced" });
-											}}
-											onTissueToolChange={setTissueTool}
-											onRunAutoDetection={() => {
-												void runTissueAutoDetection();
-											}}
-										/>
+									return {
+										...current,
+													tissueSelection: {
+														...current.tissueSelection,
+														blockThreshold,
+														supportState: nextSupport.supportState,
+														unsupportedReason: nextSupport.unsupportedReason,
+														status: "stale",
+														warning: null,
+														error: null,
+														isStale: true,
+														updatedAt,
+													},
+
+										exportState: {
+											...current.exportState,
+											status: "stale",
+											isStale: true,
+											updatedAt,
+											lastExportedAt: null,
+											artifacts: [],
+											error: null,
+										},
+									};
+								}, { mode: "metadata", strategy: "debounced" });
+							}}
+							onTissueToolChange={setTissueTool}
+							onRunAutoDetection={() => {
+								void runTissueAutoDetection();
+							}}
+							onInvertSelection={() => {
+								onProjectMutate((current) => {
+									const projectedSpots = current.chipConfig.projectedSpots ?? [];
+									const updatedAt = new Date().toISOString();
+									return {
+										...current,
+										tissueSelection: buildInvertedTissueSelectionState({
+											current: current.tissueSelection,
+											projectedSpots,
+											rows: current.chipConfig.rows,
+											columns: current.chipConfig.columns,
+											updatedAt,
+										}),
+										exportState: {
+											...current.exportState,
+											status: "stale",
+											isStale: true,
+											updatedAt,
+											lastExportedAt: null,
+											artifacts: [],
+											error: null,
+										},
+									};
+								}, { mode: "metadata", strategy: "debounced" });
+							}}
+							onShowSpotsChange={setShowTissueSpots}
+						/>
+
+
 
 
 

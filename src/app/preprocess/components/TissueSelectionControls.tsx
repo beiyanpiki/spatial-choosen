@@ -16,18 +16,21 @@ export type TissueSelectionSupportState = 'supported' | 'unsupported';
 export type TissueTool = 'activate' | 'deactivate';
 
 type TissueSelectionControlsProps = {
-  thresholdMode: ThresholdMode;
-  activationThreshold: number;
-  blockThreshold: number;
-  supportState: TissueSelectionSupportState;
-  unsupportedReason: string | null;
-  isDetecting: boolean;
-  tissueTool: TissueTool;
-  onThresholdModeChange: (mode: ThresholdMode) => void;
-  onActivationThresholdChange: (value: number) => void;
-  onBlockThresholdChange: (value: number) => void;
-  onTissueToolChange: (tool: TissueTool) => void;
-  onRunAutoDetection: () => void;
+	thresholdMode: ThresholdMode;
+	activationThreshold: number;
+	blockThreshold: number;
+	supportState: TissueSelectionSupportState;
+	unsupportedReason: string | null;
+	isDetecting: boolean;
+	tissueTool: TissueTool;
+	showSpots: boolean;
+	onThresholdModeChange: (mode: ThresholdMode) => void;
+	onActivationThresholdChange: (value: number) => void;
+	onBlockThresholdChange: (value: number) => void;
+	onTissueToolChange: (tool: TissueTool) => void;
+	onRunAutoDetection: () => void;
+	onInvertSelection: () => void;
+	onShowSpotsChange: (showSpots: boolean) => void;
 };
 
 const THRESHOLD_MODE_OPTIONS: ThresholdMode[] = ['raw', 'gray-max', 'gray-min'];
@@ -75,18 +78,21 @@ function hasInvalidBlockThresholdState(value: string) {
 }
 
 export function TissueSelectionControls({
-  thresholdMode,
-  activationThreshold,
-  blockThreshold,
-  supportState,
-  unsupportedReason,
-  isDetecting,
-  tissueTool,
-  onThresholdModeChange,
-  onActivationThresholdChange,
-  onBlockThresholdChange,
-  onTissueToolChange,
-  onRunAutoDetection,
+	thresholdMode,
+	activationThreshold,
+	blockThreshold,
+	supportState,
+	unsupportedReason,
+	isDetecting,
+	tissueTool,
+	showSpots,
+	onThresholdModeChange,
+	onActivationThresholdChange,
+	onBlockThresholdChange,
+	onTissueToolChange,
+	onRunAutoDetection,
+	onInvertSelection,
+	onShowSpotsChange,
 }: TissueSelectionControlsProps) {
   const isUnsupported = supportState === 'unsupported';
   const [activationThresholdInput, setActivationThresholdInput] = useState(() => String(activationThreshold));
@@ -213,6 +219,24 @@ export function TissueSelectionControls({
         <CardBody p={4}>
           <Stack spacing={3}>
             <Text fontSize="sm" fontWeight="semibold">Selection controls</Text>
+            <Button
+              data-testid="tissue-show-spots-toggle"
+              variant="outline"
+              justifyContent="flex-start"
+              isDisabled={isUnsupported || isDetecting}
+              onClick={() => onShowSpotsChange(!showSpots)}
+            >
+              {showSpots ? 'Hide spots' : 'Show spots'}
+            </Button>
+            <Button
+              data-testid="tissue-invert-selection"
+              variant="outline"
+              justifyContent="flex-start"
+              isDisabled={isUnsupported || isDetecting}
+              onClick={onInvertSelection}
+            >
+              Invert selection
+            </Button>
             {TOOL_OPTIONS.map((tool) => (
               <Button
                 key={tool.value}
