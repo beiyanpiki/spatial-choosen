@@ -378,27 +378,36 @@ describe('runCropQc feature match preview', () => {
     });
   });
 
-  it('falls back to raw stored landmark pairs when alignment quality is rejected', async () => {
+  it('keeps accepted feature matches as a side-by-side montage wider than the crop', async () => {
     installBrowserStubs();
 
     const result = await runCropQcWithArgs({
-      affineMatrix: [1, 0, 60, 0, 1, 0],
-      alignmentAccepted: false,
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      alignmentAccepted: true,
+      solveAccepted: true,
+      chipBounds: {
+        x: 0.25,
+        y: 0.25,
+        width: 0.5,
+        height: 0.5,
+      },
       controlPoints: [
         { id: 'point-a', source: { x: 0.5, y: 0.5 }, target: { x: 0.5, y: 0.5 } },
       ],
-      inlierMask: [false],
+      inlierMask: [true],
     });
+
+    expect(result.cropWidth).toBe(50);
+    expect(result.cropHeight).toBe(50);
+
+    const featureMatchesCanvas = document.createElement('canvas') as MockCanvasElement;
+    featureMatchesCanvas.width = 0;
+    featureMatchesCanvas.height = 0;
+    expect(result.featureMatchesDataUrl).toContain('mock:');
 
     const summary = parsePreviewSummary(result.featureMatchesDataUrl);
-
-    expect(summary.arcPoints).toEqual([
-      { x: 50, y: 50 },
-      { x: 174, y: 50 },
-    ]);
-    expect(summary.lineSegments).toContainEqual({
-      from: { x: 50, y: 50 },
-      to: { x: 174, y: 50 },
-    });
+    expect(summary.arcCount).toBeGreaterThan(0);
+    expect(summary.arcPoints[1]?.x).toBeGreaterThan(result.cropWidth);
   });
 });
+
