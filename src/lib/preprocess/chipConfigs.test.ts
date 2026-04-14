@@ -9,8 +9,11 @@ import {
 } from './chipConfigs';
 
 const fiftyUmDirectory = path.resolve(process.cwd(), 'public/preprocess-chip-configs/50um');
+const fifteenUmDirectory = path.resolve(process.cwd(), 'public/preprocess-chip-configs/15um');
 const manifestText = readFileSync(path.join(fiftyUmDirectory, 'manifest.json'), 'utf8');
 const tissuePositionsCsv = readFileSync(path.join(fiftyUmDirectory, 'tissue_positions.csv'), 'utf8');
+const fifteenUmManifestText = readFileSync(path.join(fifteenUmDirectory, 'manifest.json'), 'utf8');
+const fifteenUmTissuePositionsCsv = readFileSync(path.join(fifteenUmDirectory, 'tissue_positions.csv'), 'utf8');
 
 const parseTissuePositions = () => tissuePositionsCsv
   .trim()
@@ -144,5 +147,32 @@ describe('chip config helpers', () => {
         arrayCol: 1,
       },
     ]);
+  });
+
+  it('parses the checked-in 15um template asset as a full 96x96 grid', () => {
+    const manifest = parseChipConfigManifestJson(fifteenUmManifestText);
+    const templateEntries = parseChipTemplateCsv(manifest, fifteenUmTissuePositionsCsv);
+
+    expect(templateEntries).toHaveLength(96 * 96);
+    expect(templateEntries[0]).toEqual({
+      barcode: '15um-001-001',
+      arrayRow: 1,
+      arrayCol: 1,
+    });
+    expect(templateEntries[1]).toEqual({
+      barcode: '15um-001-002',
+      arrayRow: 1,
+      arrayCol: 2,
+    });
+    expect(templateEntries[96]).toEqual({
+      barcode: '15um-002-001',
+      arrayRow: 2,
+      arrayCol: 1,
+    });
+    expect(templateEntries.at(-1)).toEqual({
+      barcode: '15um-096-096',
+      arrayRow: 96,
+      arrayCol: 96,
+    });
   });
 });
