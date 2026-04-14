@@ -105,6 +105,8 @@ export function TissueSelectionControls({
     setBlockThresholdInput(String(blockThreshold));
   }, [blockThreshold]);
 
+  const blockThresholdLabel = thresholdMode === 'raw' ? 'Saturation threshold' : 'Block threshold';
+
   return (
     <Stack spacing={4}>
       <Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
@@ -166,7 +168,7 @@ export function TissueSelectionControls({
               />
             </FormControl>
             <FormControl isDisabled={isUnsupported || isDetecting}>
-              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Block threshold</FormLabel>
+              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>{blockThresholdLabel}</FormLabel>
               <Input
                 type="number"
                 step="1"

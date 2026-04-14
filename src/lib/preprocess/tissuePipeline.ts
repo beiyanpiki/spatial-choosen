@@ -61,6 +61,16 @@ const transformChannels = (args: {
   return [r, g, b] as const;
 };
 
+const computeRawSaturation = (r: number, g: number, b: number) => {
+  const max = Math.max(r, g, b);
+  if (max === 0) {
+    return 0;
+  }
+
+  const min = Math.min(r, g, b);
+  return ((max - min) / max) * 255;
+};
+
 const buildActivePixelIntegralImage = (
   data: Uint8ClampedArray,
   width: number,
@@ -80,8 +90,11 @@ const buildActivePixelIntegralImage = (
       const b = data[offset + 2] ?? 0;
       const [workingR, workingG, workingB] = transformChannels({ thresholdMode, r, g, b });
       const workingIntensity = (workingR + workingG + workingB) / 3;
+      const isActivePixel = thresholdMode === 'raw'
+        ? computeRawSaturation(r, g, b) >= blockThreshold
+        : workingIntensity <= blockThreshold;
 
-      if (workingIntensity <= blockThreshold) {
+      if (isActivePixel) {
         rowSum += 1;
       }
       integral[(py + 1) * stride + (px + 1)] = integral[py * stride + (px + 1)] + rowSum;

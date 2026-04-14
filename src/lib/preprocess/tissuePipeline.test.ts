@@ -175,7 +175,7 @@ describe('runTissueAutoSelection', () => {
       },
     });
 
-    expect(rawResult.selectedIds).toEqual(['spot-a', 'spot-c']);
+    expect(rawResult.selectedIds).toEqual(['spot-a', 'spot-b']);
     expect(grayMaxResult.selectedIds).toEqual(['spot-c']);
     expect(grayMinResult.selectedIds).toEqual(['spot-a', 'spot-b', 'spot-c']);
 
@@ -196,7 +196,7 @@ describe('runTissueAutoSelection', () => {
     installImageDataStub({
       projectedSpots: FIFTY_UM_PROJECTED_SPOTS,
       colorsBySpotId: {
-        'spot-a': [20, 20, 20],
+        'spot-a': [255, 0, 0],
       },
     });
 
@@ -228,9 +228,9 @@ describe('runTissueAutoSelection', () => {
     installImageDataStub({
       projectedSpots: FIFTEEN_UM_PROJECTED_SPOTS,
       colorsBySpotId: {
-        'spot-a': [0, 0, 0],
-        'spot-b': [0, 0, 0],
-        'spot-c': [0, 0, 0],
+        'spot-a': [255, 0, 0],
+        'spot-b': [255, 0, 0],
+        'spot-c': [255, 0, 0],
       },
     });
 
@@ -262,7 +262,7 @@ describe('runTissueAutoSelection', () => {
     installImageDataStub({
       projectedSpots: FIFTY_UM_PROJECTED_SPOTS,
       colorsBySpotId: {
-        'spot-a': [0, 0, 0],
+        'spot-a': [255, 0, 0],
       },
     });
 
@@ -295,8 +295,8 @@ describe('runTissueAutoSelection', () => {
     installImageDataStub({
       projectedSpots: ZERO_BASED_PROJECTED_SPOTS,
       colorsBySpotId: {
-        'spot-a': [0, 0, 0],
-        'spot-c': [0, 0, 0],
+        'spot-a': [255, 0, 0],
+        'spot-c': [255, 0, 0],
       },
     });
 
@@ -331,7 +331,7 @@ describe('runTissueAutoSelection', () => {
     installImageDataStub({
       projectedSpots: lowConfidenceSpots,
       colorsBySpotId: {
-        'spot-1-1': [0, 0, 0],
+        'spot-1-1': [255, 0, 0],
       },
       width: 200,
       height: 200,
