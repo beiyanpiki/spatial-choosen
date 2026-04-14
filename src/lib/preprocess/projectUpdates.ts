@@ -5,7 +5,11 @@ import type {
   TissueSelectionSlice,
 } from '@/types/preprocess';
 
-import { selectedSpotIdsFromMatrix } from './tissueMatrix';
+import {
+  createEmptyMatrix,
+  invertTissueActivationMatrix,
+  selectedSpotIdsFromMatrix,
+} from './tissueMatrix';
 import { applyTissueMatrixEdit } from './tissueMatrixEdits';
 
 const buildSelectedCountSummary = (selectedIds: string[], totalSpots: number) => {
@@ -24,6 +28,16 @@ type ManualTissueSelectionMatrixEditArgs = {
   projectedSpots: ProjectedSpot[];
   editArea?: PreprocessPoint[];
   nextValue?: TissueActivationValue;
+  rows?: number | null;
+  columns?: number | null;
+  updatedAt: string;
+};
+
+type InvertManualTissueSelectionArgs = {
+  current: TissueSelectionSlice;
+  projectedSpots: ProjectedSpot[];
+  rows?: number | null;
+  columns?: number | null;
   updatedAt: string;
 };
 
@@ -47,21 +61,73 @@ export function buildManualTissueSelectionState<T extends ManualTissueSelectionM
   args: T,
 ): TissueSelectionSlice {
   const { current } = args;
-  if (current.matrix === null || !args.editArea || typeof args.nextValue === 'undefined') {
+  if (!args.editArea || typeof args.nextValue === 'undefined') {
+    return current;
+  }
+
+  const matrix = current.matrix ?? (
+    typeof args.rows === 'number'
+      && Number.isInteger(args.rows)
+      && args.rows > 0
+      && typeof args.columns === 'number'
+      && Number.isInteger(args.columns)
+      && args.columns > 0
+      ? createEmptyMatrix(args.rows, args.columns)
+      : null
+  );
+
+  if (matrix === null) {
     return current;
   }
 
   const nextMatrix = applyTissueMatrixEdit({
-    matrix: current.matrix,
+    matrix,
     projectedSpots: args.projectedSpots,
     editArea: args.editArea,
     nextValue: args.nextValue,
   });
 
-  if (nextMatrix === current.matrix) {
+  if (current.matrix !== null && nextMatrix === matrix) {
     return current;
   }
 
+  const finalSelectedSpotIds = selectedSpotIdsFromMatrix(nextMatrix, args.projectedSpots);
+
+  return {
+    ...current,
+    mode: 'matrix',
+    matrix: nextMatrix,
+    selectedSpotIds: finalSelectedSpotIds,
+    paritySummary: buildSelectedCountSummary(finalSelectedSpotIds, args.projectedSpots.length),
+    overrideNotice: null,
+    status: 'complete',
+    isStale: false,
+    updatedAt: args.updatedAt,
+    warning: null,
+    error: null,
+  };
+}
+
+export function buildInvertedTissueSelectionState(
+  args: InvertManualTissueSelectionArgs,
+): TissueSelectionSlice {
+  const { current } = args;
+  const matrix = current.matrix ?? (
+    typeof args.rows === 'number'
+      && Number.isInteger(args.rows)
+      && args.rows > 0
+      && typeof args.columns === 'number'
+      && Number.isInteger(args.columns)
+      && args.columns > 0
+      ? createEmptyMatrix(args.rows, args.columns)
+      : null
+  );
+
+  if (matrix === null) {
+    return current;
+  }
+
+  const nextMatrix = invertTissueActivationMatrix(matrix);
   const finalSelectedSpotIds = selectedSpotIdsFromMatrix(nextMatrix, args.projectedSpots);
 
   return {

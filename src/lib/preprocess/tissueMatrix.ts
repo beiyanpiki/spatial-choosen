@@ -58,6 +58,16 @@ export function validateTissueActivationMatrix(matrix: TissueActivationMatrix): 
   };
 }
 
+export function invertTissueActivationMatrix(matrix: TissueActivationMatrix): TissueActivationMatrix {
+  const validated = validateTissueActivationMatrix(matrix);
+
+  return {
+    rows: validated.rows,
+    columns: validated.columns,
+    values: validated.values.map((value) => (value === 0 ? 1 : 0)),
+  };
+}
+
 export function selectedSpotIdsFromMatrix(
   matrix: TissueActivationMatrix,
   projectedSpots: ProjectedSpot[],
