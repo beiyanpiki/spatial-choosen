@@ -16,7 +16,14 @@ import {
   Tabs,
   Text,
 } from '@chakra-ui/react';
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  commitCropQcOverlayOpacityDraft,
+  createCropQcOverlayOpacityState,
+  syncCommittedCropQcOverlayOpacity,
+  updateCropQcOverlayOpacityDraft,
+} from './cropQcOverlayOpacity';
+import { getCropQcPreviewMode } from './cropQcPreviewModes';
 
 type CropQcPanelProps = {
   cropHeight: number | null;
@@ -26,7 +33,7 @@ type CropQcPanelProps = {
   checkerboardDataUrl: string | null;
   featureMatchesDataUrl: string | null;
   overlayOpacity: number;
-  onOverlayOpacityChange: (value: number) => void;
+  onOverlayOpacityCommit: (value: number) => void;
   onRunCrop: () => void;
   onAccept: () => void;
   onRejectToAlign: () => void;
@@ -42,7 +49,7 @@ export function CropQcPanel({
   checkerboardDataUrl,
   featureMatchesDataUrl,
   overlayOpacity,
-  onOverlayOpacityChange,
+  onOverlayOpacityCommit,
   onRunCrop,
   onAccept,
   onRejectToAlign,
@@ -53,6 +60,27 @@ export function CropQcPanel({
     if (!cropWidth || !cropHeight) return 'Not generated';
     return `${cropWidth} × ${cropHeight}`;
   }, [cropHeight, cropWidth]);
+
+  const [overlayOpacityState, setOverlayOpacityState] = useState(() => (
+    createCropQcOverlayOpacityState(overlayOpacity)
+  ));
+
+  useEffect(() => {
+    setOverlayOpacityState((current) => syncCommittedCropQcOverlayOpacity(current, overlayOpacity));
+  }, [overlayOpacity]);
+
+  const handleOverlayOpacityChange = useCallback((value: number) => {
+    setOverlayOpacityState((current) => updateCropQcOverlayOpacityDraft(current, value));
+  }, []);
+
+  const handleOverlayOpacityChangeEnd = useCallback((value: number) => {
+    setOverlayOpacityState((current) => commitCropQcOverlayOpacityDraft(current, value));
+    onOverlayOpacityCommit(value);
+  }, [onOverlayOpacityCommit]);
+
+  const displayedOverlayOpacity = overlayOpacityState.displayOpacity;
+  const tissueAlignPreviewMode = getCropQcPreviewMode('tissueAlign');
+  const featureMatchesPreviewMode = getCropQcPreviewMode('featureMatches');
 
   return (
     <Stack spacing={5}>
@@ -82,71 +110,92 @@ export function CropQcPanel({
 
         <TabPanels>
           <TabPanel px={0} pt={4}>
-            <Box
-              border='1px solid'
-              borderColor='gray.200'
-              borderRadius='lg'
-              overflow='hidden'
-              bg='gray.50'
-              minH={{ base: '320px', lg: '400px' }}
-              h={{ base: '44vh', lg: '52vh' }}
-              maxH='480px'
-              maxW='480px'
-              mx='auto'
-              display='flex'
-              alignItems='center'
-              justifyContent='center'
-            >
-              {checkerboardDataUrl ? (
-                <img
-                  src={checkerboardDataUrl}
-                  alt='QC checkerboard preview'
-                  data-testid='cropqc-spatial-align-canvas'
-                  style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
-                />
-              ) : (
-                <Box p={4}><Text fontSize='sm' color='gray.500'>Checkerboard preview appears after crop generation.</Text></Box>
-              )}
-            </Box>
+            <Stack spacing={3}>
+              <Box>
+                <Text fontSize='sm' fontWeight='semibold' color='gray.700'>
+                  {tissueAlignPreviewMode.title}
+                </Text>
+                <Text fontSize='sm' color='gray.600'>
+                  {tissueAlignPreviewMode.description}
+                </Text>
+              </Box>
+              <Box
+                border='1px solid'
+                borderColor='gray.200'
+                borderRadius='lg'
+                overflow='hidden'
+                bg='gray.50'
+                minH={{ base: '320px', lg: '400px' }}
+                h={{ base: '44vh', lg: '52vh' }}
+                maxH='480px'
+                maxW='480px'
+                mx='auto'
+                display='flex'
+                alignItems='center'
+                justifyContent='center'
+              >
+                {checkerboardDataUrl ? (
+                  <img
+                    src={checkerboardDataUrl}
+                    alt='QC checkerboard preview'
+                    data-testid='cropqc-spatial-align-canvas'
+                    style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <Box p={4}><Text fontSize='sm' color='gray.500'>{tissueAlignPreviewMode.emptyState}</Text></Box>
+                )}
+              </Box>
+            </Stack>
           </TabPanel>
 
           <TabPanel px={0} pt={4}>
-            <Box
-              border='1px solid'
-              borderColor='gray.200'
-              borderRadius='lg'
-              overflow='hidden'
-              bg='gray.50'
-              minH={{ base: '320px', lg: '400px' }}
-              h={{ base: '44vh', lg: '52vh' }}
-              maxH='480px'
-              display='flex'
-              alignItems='center'
-              justifyContent='center'
-            >
-              {featureMatchesDataUrl ? (
-                <img
-                  src={featureMatchesDataUrl}
-                  alt='QC feature matches preview'
-                  data-testid='cropqc-feature-matches-canvas'
-                  style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
-                />
-              ) : (
-                <Box p={4}><Text fontSize='sm' color='gray.500'>Feature-match preview appears after crop generation.</Text></Box>
-              )}
-            </Box>
+            <Stack spacing={3}>
+              <Box>
+                <Text fontSize='sm' fontWeight='semibold' color='gray.700'>
+                  {featureMatchesPreviewMode.title}
+                </Text>
+                <Text fontSize='sm' color='gray.600'>
+                  {featureMatchesPreviewMode.description}
+                </Text>
+              </Box>
+              <Box
+                border='1px solid'
+                borderColor='gray.200'
+                borderRadius='lg'
+                overflow='hidden'
+                bg='gray.50'
+                minH={{ base: '320px', lg: '400px' }}
+                h={{ base: '44vh', lg: '52vh' }}
+                maxH='480px'
+                display='flex'
+                alignItems='center'
+                justifyContent='center'
+              >
+                {featureMatchesDataUrl ? (
+                  <img
+                    src={featureMatchesDataUrl}
+                    alt='QC feature matches preview'
+                    data-testid='cropqc-feature-matches-canvas'
+                    style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <Box p={4}><Text fontSize='sm' color='gray.500'>{featureMatchesPreviewMode.emptyState}</Text></Box>
+                )}
+              </Box>
+            </Stack>
           </TabPanel>
 
           <TabPanel px={0} pt={4}>
             <Stack spacing={4}>
               <Stack spacing={2}>
-                <Text fontSize='sm' color='gray.600'>Overlay opacity: {overlayOpacity.toFixed(2)}</Text>
+                <Text fontSize='sm' color='gray.600'>Overlay opacity: {displayedOverlayOpacity.toFixed(2)}</Text>
                 <Slider
                   min={0}
                   max={1}
                   step={0.01}
-                  value={overlayOpacity}
-                  onChange={onOverlayOpacityChange}
+                  value={displayedOverlayOpacity}
+                  onChange={handleOverlayOpacityChange}
+                  onChangeEnd={handleOverlayOpacityChangeEnd}
                   data-testid='cropqc-overlay-opacity'
                 >
                   <SliderTrack>
@@ -180,7 +229,7 @@ export function CropQcPanel({
                       <img
                         src={heCropDataUrl}
                         alt='Warped HE crop preview'
-                        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: overlayOpacity }}
+                        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: displayedOverlayOpacity }}
                       />
                     ) : null}
                   </>
