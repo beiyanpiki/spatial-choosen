@@ -13,6 +13,7 @@ import {
 } from '@chakra-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { colorForLabel } from '../../../lib/colors';
 import {
   computeBaseView,
   computeZoomTransform,
@@ -28,6 +29,7 @@ type TissueSelectionPanelProps = {
   eosinCropDataUrl: string | null;
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
+  showSpots?: boolean;
   disabled?: boolean;
   showControls?: boolean;
   tool?: ToolMode;
@@ -39,6 +41,7 @@ export function TissueSelectionPanel({
   eosinCropDataUrl,
   projectedSpots,
   selectedSpotIds,
+  showSpots = true,
   disabled = false,
   showControls = true,
   tool: controlledTool,
@@ -77,8 +80,6 @@ export function TissueSelectionPanel({
   useEffect(() => {
     if (!eosinCropDataUrl) {
       loadedImageRef.current = null;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setImageDimensions(null);
       requestCanvasRefresh();
       return;
     }
@@ -87,7 +88,6 @@ export function TissueSelectionPanel({
     image.src = eosinCropDataUrl;
     image.onload = () => {
       loadedImageRef.current = image;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setImageDimensions({ width: image.width, height: image.height });
       requestCanvasRefresh();
     };
@@ -125,14 +125,18 @@ export function TissueSelectionPanel({
   }, []);
 
   const ratio = useMemo(() => {
-    if (!imageDimensions) {
+    if (!eosinCropDataUrl || !imageDimensions) {
       return 4 / 3;
     }
 
     return imageDimensions.width / imageDimensions.height;
-  }, [imageDimensions]);
+  }, [eosinCropDataUrl, imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
+  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}59`, []);
+  const assignedSpotStrokeColor = '#1a202c8c';
+  const neutralSpotFillColor = '#e5e5e533';
+  const neutralSpotStrokeColor = '#a0a0a059';
 
   const computeBaseViewCb = useCallback(
     () => computeBaseView(hostRect, ratio),
@@ -364,18 +368,20 @@ export function TissueSelectionPanel({
       );
     }
 
-    for (const spot of projectedSpots) {
-      const normalizedSpotWidth = spot.width ?? spot.diameterX ?? 0;
-      const normalizedSpotHeight = spot.height ?? spot.diameterY ?? normalizedSpotWidth;
-      const spotWidth = Math.max(1, normalizedSpotWidth * transform.width);
-      const spotHeight = Math.max(1, normalizedSpotHeight * transform.height);
-      const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
-      const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
-      const selected = selectedSpotIdSet.has(spot.id);
-      ctx.fillStyle = selected ? 'rgba(46,204,113,0.35)' : 'rgba(231,76,60,0.2)';
-      ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
-      ctx.strokeStyle = selected ? 'rgba(39,174,96,0.8)' : 'rgba(192,57,43,0.7)';
-      ctx.strokeRect(spotX, spotY, spotWidth, spotHeight);
+    if (showSpots) {
+      for (const spot of projectedSpots) {
+        const normalizedSpotWidth = spot.width ?? spot.diameterX ?? 0;
+        const normalizedSpotHeight = spot.height ?? spot.diameterY ?? normalizedSpotWidth;
+        const spotWidth = Math.max(1, normalizedSpotWidth * transform.width);
+        const spotHeight = Math.max(1, normalizedSpotHeight * transform.height);
+        const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
+        const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
+        const selected = selectedSpotIdSet.has(spot.id);
+        ctx.fillStyle = selected ? assignedSpotFillColor : neutralSpotFillColor;
+        ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
+        ctx.strokeStyle = selected ? assignedSpotStrokeColor : neutralSpotStrokeColor;
+        ctx.strokeRect(spotX, spotY, spotWidth, spotHeight);
+      }
     }
 
     const currentPoints = pathRef.current;
@@ -399,12 +405,14 @@ export function TissueSelectionPanel({
     }
   }, [
     activeTool,
+    assignedSpotFillColor,
     canvasRefresh,
     getTransformCb,
     hostRect,
     isDrawing,
     projectedSpots,
     selectedSpotIdSet,
+    showSpots,
   ]);
 
   return (
