@@ -823,38 +823,23 @@ export function solveAffineAlignment({
 		inlierMaskMat = new cv.Mat();
 
 		if (effectiveSolveMode === "allPoints") {
-			const constrainedCandidate = solveConstrainedSimilarityTransform(
+			const fitted = solveLeastSquaresSimilarityTransformVariant(
 				movingPixels,
 				sourcePixels,
-				 ransacReprojThreshold,
+				{ reflected: false },
 			);
-
-			if (constrainedCandidate.matrix) {
-				affineMatrix = constrainedCandidate.matrix;
-				currentCandidateRmse = constrainedCandidate.rmse;
-				inlierMask = constrainedCandidate.inlierMask ?? Array.from({ length: pointCount }, () => true);
-				inlierIndices = constrainedCandidate.inlierMask
-					? constrainedCandidate.inlierMask.map((value, index) => (value ? index : -1)).filter((index) => index >= 0)
-					: sourcePixels.map((_, index) => index);
+			if (
+				fitted &&
+				hasUniformScale(fitted.matrix) &&
+				hasNoReflection(fitted.matrix)
+			) {
+				affineMatrix = fitted.matrix;
+				currentCandidateRmse = fitted.rmse;
+				inlierMask = Array.from({ length: pointCount }, () => true);
+				inlierIndices = sourcePixels.map((_, index) => index);
 			} else {
-				const fitted = solveLeastSquaresSimilarityTransformVariant(
-					movingPixels,
-					sourcePixels,
-					{ reflected: false },
-				);
-				if (
-					fitted &&
-					hasUniformScale(fitted.matrix) &&
-					hasNoReflection(fitted.matrix)
-				) {
-					affineMatrix = fitted.matrix;
-					currentCandidateRmse = fitted.rmse;
-					inlierMask = Array.from({ length: pointCount }, () => true);
-					inlierIndices = sourcePixels.map((_, index) => index);
-				} else {
-					affineMatrix = null;
-					solveFailed = true;
-				}
+				affineMatrix = null;
+				solveFailed = true;
 			}
 		} else if (effectiveSolveMode === "inlierSubset") {
 			const validSeedMask =
@@ -950,7 +935,8 @@ export function solveAffineAlignment({
 						expectedCropScale,
 					)
 				: null;
-			const similarityCandidate = fixedScaleFit
+			const similarityCandidate =
+				effectiveSolveMode === "allPoints" || fixedScaleFit
 				? null
 				: solveRobustSimilarityTransformNoReflection(
 						movingPixels,
