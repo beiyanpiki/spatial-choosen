@@ -1062,6 +1062,7 @@ export function PreprocessWorkspace({
 				imageTransform: project.localization.imageTransform,
 				affineMatrix: project.alignment.affineMatrix,
 				controlPoints: project.alignment.controlPoints,
+				solveAccepted: project.alignment.solveAccepted,
 				inlierMask: project.alignment.inlierMask,
 			});
 
