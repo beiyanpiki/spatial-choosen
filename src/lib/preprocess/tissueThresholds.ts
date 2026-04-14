@@ -1,4 +1,6 @@
-export type TissueThresholdMode = 'gray-min';
+import type { TissueThresholdMode } from '@/types/preprocess';
+
+export type { TissueThresholdMode };
 
 export type TissueParams = {
   thresholdMode: TissueThresholdMode;
@@ -10,7 +12,7 @@ export type TissueParams = {
 };
 
 export const DEFAULT_TISSUE_PARAMS: TissueParams = {
-  thresholdMode: 'gray-min',
+  thresholdMode: 'raw',
   activationThreshold: 0.1,
   blockThreshold: 135,
   dbscanEps: 0.03,
@@ -20,8 +22,14 @@ export const DEFAULT_TISSUE_PARAMS: TissueParams = {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
+const normalizeThresholdMode = (value: TissueThresholdMode | undefined): TissueThresholdMode => (
+  value === 'gray-max' || value === 'gray-min' || value === 'raw'
+    ? value
+    : DEFAULT_TISSUE_PARAMS.thresholdMode
+);
+
 export const normalizeTissueParams = (value: Partial<TissueParams>): TissueParams => ({
-  thresholdMode: 'gray-min',
+  thresholdMode: normalizeThresholdMode(value.thresholdMode),
   activationThreshold: clamp(
     (value.activationThreshold ?? DEFAULT_TISSUE_PARAMS.activationThreshold) > 1
       ? (value.activationThreshold ?? DEFAULT_TISSUE_PARAMS.activationThreshold) / 255

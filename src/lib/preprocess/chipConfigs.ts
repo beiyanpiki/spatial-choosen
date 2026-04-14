@@ -35,18 +35,28 @@ const isManifest = (value: unknown): value is ChipConfigManifest => {
     && typeof entry.tissuePositionsPath === 'string';
 };
 
+export const parseChipConfigManifestJson = (jsonText: string): ChipConfigManifest => {
+  const parsed: unknown = JSON.parse(jsonText);
+  if (!isManifest(parsed)) {
+    throw new Error('Chip config manifest is malformed');
+  }
+
+  return parsed;
+};
+
 export async function loadChipConfigManifest(chipId: ChipConfigManifest['id']) {
   const response = await fetch(`/preprocess-chip-configs/${chipId}/manifest.json`);
   if (!response.ok) {
     throw new Error(`Chip config ${chipId} is unavailable (${response.status})`);
   }
 
-  const parsed: unknown = await response.json();
-  if (!isManifest(parsed)) {
+  const jsonText = await response.text();
+
+  try {
+    return parseChipConfigManifestJson(jsonText);
+  } catch {
     throw new Error(`Chip config ${chipId} manifest is malformed`);
   }
-
-  return parsed;
 }
 
 export async function loadAllChipConfigManifests() {
@@ -54,24 +64,10 @@ export async function loadAllChipConfigManifests() {
   return entries;
 }
 
-const buildDefaultTemplate = (chip: ChipConfigManifest): ChipTemplateEntry[] => {
-  const entries: ChipTemplateEntry[] = [];
-  for (let row = 1; row <= chip.gridRows; row += 1) {
-    for (let col = 1; col <= chip.gridCols; col += 1) {
-      entries.push({
-        barcode: `${chip.id}-${String(row).padStart(3, '0')}-${String(col).padStart(3, '0')}`,
-        arrayRow: row,
-        arrayCol: col,
-      });
-    }
-  }
-  return entries;
-};
-
-const parseTemplateCsv = (chip: ChipConfigManifest, csvText: string): ChipTemplateEntry[] => {
+export const parseChipTemplateCsv = (chip: ChipConfigManifest, csvText: string): ChipTemplateEntry[] => {
   const lines = csvText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length <= 1) {
-    return buildDefaultTemplate(chip);
+    throw new Error(`Chip config ${chip.id} template CSV has no template entries`);
   }
 
   const header = lines[0].split(',').map((value) => value.trim());
@@ -83,18 +79,38 @@ const parseTemplateCsv = (chip: ChipConfigManifest, csvText: string): ChipTempla
   }
 
   const entries: ChipTemplateEntry[] = [];
+  const seenBarcodes = new Set<string>();
+  const seenPositions = new Set<string>();
   for (const line of lines.slice(1)) {
     const columns = line.split(',');
     const barcode = columns[barcodeIndex]?.trim();
     const arrayRow = Number(columns[rowIndex]);
     const arrayCol = Number(columns[colIndex]);
-    if (!barcode || !Number.isInteger(arrayRow) || !Number.isInteger(arrayCol)) continue;
-    if (arrayRow < 1 || arrayRow > chip.gridRows || arrayCol < 1 || arrayCol > chip.gridCols) continue;
+
+    if (!barcode || !Number.isInteger(arrayRow) || !Number.isInteger(arrayCol)) {
+      throw new Error(`Chip config ${chip.id} template CSV is malformed`);
+    }
+
+    if (arrayRow < 1 || arrayRow > chip.gridRows || arrayCol < 1 || arrayCol > chip.gridCols) {
+      throw new Error(`Chip config ${chip.id} template entry ${barcode} is out of range for ${chip.gridRows}x${chip.gridCols}`);
+    }
+
+    if (seenBarcodes.has(barcode)) {
+      throw new Error(`Chip config ${chip.id} template barcode ${barcode} is duplicated`);
+    }
+
+    const positionKey = `${arrayRow}:${arrayCol}`;
+    if (seenPositions.has(positionKey)) {
+      throw new Error(`Chip config ${chip.id} template position ${positionKey} is duplicated`);
+    }
+
+    seenBarcodes.add(barcode);
+    seenPositions.add(positionKey);
     entries.push({ barcode, arrayRow, arrayCol });
   }
 
   if (entries.length === 0) {
-    return buildDefaultTemplate(chip);
+    throw new Error(`Chip config ${chip.id} template CSV has no template entries`);
   }
 
   return entries;
@@ -102,13 +118,13 @@ const parseTemplateCsv = (chip: ChipConfigManifest, csvText: string): ChipTempla
 
 export async function loadChipConfigData(chipId: ChipConfigManifest['id']): Promise<ChipConfigData> {
   const manifest = await loadChipConfigManifest(chipId);
-  const response = await fetch(manifest.tissuePositionsPath);
+  const response = await fetch(manifest.barcodeTemplatePath);
   if (!response.ok) {
-    throw new Error(`Chip config ${chipId} tissue positions are unavailable (${response.status})`);
+    throw new Error(`Chip config ${chipId} barcode template is unavailable (${response.status})`);
   }
 
   const csvText = await response.text();
-  const templateEntries = parseTemplateCsv(manifest, csvText);
+  const templateEntries = parseChipTemplateCsv(manifest, csvText);
   return {
     manifest,
     templateEntries,

@@ -1,5 +1,31 @@
-import type { ProjectedSpot, TissueRegion, TissueSelectionSlice } from '@/types/preprocess';
-import { buildSelectedCountSummary, deriveSelectedSpotIdsFromRegions } from './tissueRegions';
+import type {
+  PreprocessPoint,
+  ProjectedSpot,
+  TissueActivationValue,
+  TissueSelectionSlice,
+} from '@/types/preprocess';
+
+import { selectedSpotIdsFromMatrix } from './tissueMatrix';
+import { applyTissueMatrixEdit } from './tissueMatrixEdits';
+
+const buildSelectedCountSummary = (selectedIds: string[], totalSpots: number) => {
+  const selectedCount = selectedIds.length;
+  const selectedPercent = totalSpots > 0 ? (selectedCount / totalSpots) * 100 : 0;
+
+  return {
+    selectedCount,
+    selectedPercent,
+    maskCoverage: selectedPercent,
+  };
+};
+
+type ManualTissueSelectionMatrixEditArgs = {
+  current: TissueSelectionSlice;
+  projectedSpots: ProjectedSpot[];
+  editArea?: PreprocessPoint[];
+  nextValue?: TissueActivationValue;
+  updatedAt: string;
+};
 
 export function buildUpdatedProjectSnapshot<T extends { updatedAt: string }>(
   current: T,
@@ -17,21 +43,31 @@ export function buildUpdatedProjectSnapshot<T extends { updatedAt: string }>(
   };
 }
 
-export function buildManualTissueSelectionState(args: {
-  current: TissueSelectionSlice;
-  projectedSpots: ProjectedSpot[];
-  nextRegions: TissueRegion[];
-  updatedAt: string;
-}): TissueSelectionSlice {
-  const finalSelectedSpotIds = args.nextRegions.length > 0
-    ? deriveSelectedSpotIdsFromRegions(args.nextRegions, args.projectedSpots)
-    : [];
+export function buildManualTissueSelectionState<T extends ManualTissueSelectionMatrixEditArgs>(
+  args: T,
+): TissueSelectionSlice {
+  const { current } = args;
+  if (current.matrix === null || !args.editArea || typeof args.nextValue === 'undefined') {
+    return current;
+  }
+
+  const nextMatrix = applyTissueMatrixEdit({
+    matrix: current.matrix,
+    projectedSpots: args.projectedSpots,
+    editArea: args.editArea,
+    nextValue: args.nextValue,
+  });
+
+  if (nextMatrix === current.matrix) {
+    return current;
+  }
+
+  const finalSelectedSpotIds = selectedSpotIdsFromMatrix(nextMatrix, args.projectedSpots);
 
   return {
-    ...args.current,
-    mode: 'polygon',
-    regions: args.nextRegions,
-    autoSelectedSpotIds: args.nextRegions.length > 0 ? args.current.autoSelectedSpotIds : [],
+    ...current,
+    mode: 'matrix',
+    matrix: nextMatrix,
     selectedSpotIds: finalSelectedSpotIds,
     paritySummary: buildSelectedCountSummary(finalSelectedSpotIds, args.projectedSpots.length),
     overrideNotice: null,

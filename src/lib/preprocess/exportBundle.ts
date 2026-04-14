@@ -1,11 +1,12 @@
+import type { PreprocessProject, ProjectedSpot, TissueActivationMatrix } from '@/types/preprocess';
 import JSZip from 'jszip';
-import type { PreprocessProject, ProjectedSpot } from '@/types/preprocess';
 import { getPreprocessPackageSourceEntries, serializePreprocessProject } from './package';
 import {
   getProjectedSpotFullresCsvCoordinates,
   resolveAuthoritativeSpotDiameterFullres,
 } from './spotProjection';
-import { deriveSelectedSpotIdsFromRegions } from './tissueRegions';
+import { selectedSpotIdsFromMatrix, validateTissueActivationMatrix } from './tissueMatrix';
+import { resolveTissueSelectionSupport } from './tissueSupport';
 
 const FIDUCIAL_DIAMETER_FULLRES = 0.027;
 
@@ -27,6 +28,7 @@ type PreprocessExportReadiness =
         projectedSpots: ProjectedSpot[];
         rows: number;
         columns: number;
+        matrixValues: number[];
         selectedSpotIds: Set<string>;
         spotDiameterFullres: number;
         tissueHiresScale: number;
@@ -70,20 +72,13 @@ const toCsv = (projectedSpots: ProjectedSpot[], selectedSpotIds: Set<string>, cr
   return `${lines.join('\n')}\n`;
 };
 
-const toMatrixCsv = (projectedSpots: ProjectedSpot[], selectedSpotIds: Set<string>, rows: number, columns: number) => {
-  const matrix = Array.from({ length: rows }, () => Array.from({ length: columns }, () => '0'));
+const toMatrixCsv = (matrixValues: number[], rows: number, columns: number) => {
+  const lines = Array.from({ length: rows }, (_, rowIndex) => {
+    const rowStart = rowIndex * columns;
+    return matrixValues.slice(rowStart, rowStart + columns).join(',');
+  });
 
-  for (const spot of projectedSpots) {
-    const rowIndex = spot.arrayRow - 1;
-    const columnIndex = spot.arrayCol - 1;
-    if (rowIndex < 0 || rowIndex >= rows || columnIndex < 0 || columnIndex >= columns) {
-      continue;
-    }
-
-    matrix[rowIndex][columnIndex] = selectedSpotIds.has(spot.id) ? '1' : '0';
-  }
-
-  return `${matrix.map((row) => row.join(',')).join('\n')}\n`;
+  return `${lines.join('\n')}\n`;
 };
 
 export function getPreprocessZipExportReadiness(project: PreprocessProject): PreprocessExportReadiness {
@@ -170,9 +165,44 @@ export function getPreprocessZipExportReadiness(project: PreprocessProject): Pre
     };
   }
 
-  const resolvedSelectedSpotIds = project.tissueSelection.regions.length > 0
-    ? deriveSelectedSpotIdsFromRegions(project.tissueSelection.regions, projectedSpots)
-    : (project.tissueSelection.selectedSpotIds ?? project.tissueSelection.autoSelectedSpotIds);
+  const support = resolveTissueSelectionSupport({
+    chipType: project.chipConfig.chipType,
+    rows,
+    columns,
+  });
+  if (project.tissueSelection.supportState === 'unsupported' || support.supportState === 'unsupported') {
+    return {
+      canExport: false,
+      reason: project.tissueSelection.unsupportedReason ?? support.unsupportedReason ?? 'Tissue export requires a supported chip configuration.',
+    };
+  }
+
+  const matrix = project.tissueSelection.matrix;
+  if (!matrix) {
+    return {
+      canExport: false,
+      reason: 'Tissue matrix data is missing. Re-run tissue detection before export.',
+    };
+  }
+
+  let validatedMatrix: TissueActivationMatrix;
+  try {
+    validatedMatrix = validateTissueActivationMatrix(matrix);
+  } catch (error) {
+    return {
+      canExport: false,
+      reason: error instanceof Error ? error.message : 'Tissue matrix data is invalid.',
+    };
+  }
+
+  if (validatedMatrix.rows !== rows || validatedMatrix.columns !== columns) {
+    return {
+      canExport: false,
+      reason: 'Tissue matrix dimensions must match the projected chip rows and columns before export.',
+    };
+  }
+
+  const resolvedSelectedSpotIds = selectedSpotIdsFromMatrix(validatedMatrix, projectedSpots);
 
   return {
     canExport: true,
@@ -187,6 +217,7 @@ export function getPreprocessZipExportReadiness(project: PreprocessProject): Pre
       projectedSpots,
       rows,
       columns,
+      matrixValues: validatedMatrix.values,
       selectedSpotIds: new Set(resolvedSelectedSpotIds),
       spotDiameterFullres,
       tissueHiresScale,
@@ -213,6 +244,7 @@ export async function exportPreprocessZip(args: {
     projectedSpots,
     rows,
     columns,
+    matrixValues,
     selectedSpotIds,
     spotDiameterFullres,
     tissueHiresScale,
@@ -232,7 +264,7 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_lowres_image.png', dataUrlToBytes(heCropAssets.lowres.dataUrl));
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
   zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, cropWidth, cropHeight));
-  zip.file('tissue_matrix.csv', toMatrixCsv(projectedSpots, selectedSpotIds, rows, columns));
+  zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {
     zip.file('aligned_tissue_image.png', dataUrlToBytes(heCropAssets.fullres.dataUrl));

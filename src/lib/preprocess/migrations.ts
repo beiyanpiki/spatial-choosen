@@ -6,10 +6,12 @@ import type {
 	LegacyCropQcSlice,
 	LegacyPreprocessProject,
 	LegacyProjectedSpot,
+	LegacyTissueSelectionSlice,
 	PreprocessProject,
 	PreprocessSliceBase,
 	PreprocessStepId,
 	ProjectedSpot,
+	TissueThresholdMode,
 } from "@/types/preprocess";
 import {
 	PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
@@ -17,12 +19,20 @@ import {
 } from "./constants";
 import { DEFAULT_LOCALIZATION_IMAGE_TRANSFORM } from "./localization";
 import {
+	createEmptyMatrix,
+	matrixFromSelectedSpotIds,
+	selectedSpotIdsFromMatrix,
+	validateTissueActivationMatrix,
+} from "./tissueMatrix";
+import { resolveTissueSelectionSupport } from "./tissueSupport";
+import {
 	DEFAULT_TISSUE_PARAMS,
 	normalizeTissueParams,
 } from "./tissueThresholds";
 
 const HE_FOCUS_WORKFLOW_VERSION = 2;
 const HE_FOCUS_STORAGE_SCHEMA_VERSION = 3;
+const TISSUE_MATRIX_WORKFLOW_VERSION = 3;
 
 const STEPS_BEYOND_LOCALIZATION = new Set<PreprocessStepId>([
 	"alignment",
@@ -101,6 +111,284 @@ const isFiniteNumber = (value: unknown): value is number =>
 
 const isNonEmptyString = (value: unknown): value is string =>
 	typeof value === "string" && value.length > 0;
+
+const isPositiveInteger = (value: unknown): value is number =>
+	typeof value === "number" && Number.isInteger(value) && value > 0;
+
+const isSupportedTissueChipType = (chipType: string | null): chipType is "15um" | "50um" =>
+	chipType === "15um" || chipType === "50um";
+
+const normalizeLegacyThresholdMode = (
+	thresholdMode: LegacyTissueSelectionSlice["thresholdMode"] | undefined,
+): TissueThresholdMode => {
+	if (thresholdMode === "dark") {
+		return "gray-min";
+	}
+
+	if (thresholdMode === "light") {
+		return "raw";
+	}
+
+	if (
+		thresholdMode === "gray-min" ||
+		thresholdMode === "gray-max" ||
+		thresholdMode === "raw"
+	) {
+		return thresholdMode;
+	}
+
+	return DEFAULT_TISSUE_PARAMS.thresholdMode;
+};
+
+const extractLegacyRegionSpotIds = (
+	regions: LegacyTissueSelectionSlice["regions"] | undefined,
+): string[] =>
+	(regions ?? []).flatMap((region) => {
+		const spotIds = (region as Record<string, unknown>).spotIds;
+		if (!Array.isArray(spotIds)) {
+			return [];
+		}
+
+		return spotIds.filter(isNonEmptyString);
+	});
+
+const isCanonicalTissueSelectionInput = (
+	project: PreprocessProject | LegacyPreprocessProject,
+): boolean => {
+	const slice = project.tissueSelection;
+
+	return (
+		(slice.mode === "matrix" || slice.mode === "imported") &&
+		(slice.thresholdMode === "raw" ||
+			slice.thresholdMode === "gray-max" ||
+			slice.thresholdMode === "gray-min") &&
+		typeof slice.supportState === "string" &&
+		"matrix" in slice
+	);
+};
+
+const normalizeCanonicalMatrixFirstTissueSelection = (
+	project: PreprocessProject | LegacyPreprocessProject,
+): PreprocessProject["tissueSelection"] => {
+	const {
+		forcedInSpotIds: _forcedInSpotIds,
+		forcedOutSpotIds: _forcedOutSpotIds,
+		overrideNotice: _overrideNotice,
+		regions: _regions,
+		selectedRegionId: _selectedRegionId,
+		previewDataUrl: _previewDataUrl,
+		matrix,
+		supportState,
+		unsupportedReason,
+		...rest
+	} = project.tissueSelection;
+
+	void _forcedInSpotIds;
+	void _forcedOutSpotIds;
+	void _overrideNotice;
+	void _regions;
+	void _selectedRegionId;
+	void _previewDataUrl;
+
+	const normalizedParams = normalizeTissueParams({
+		thresholdMode: normalizeLegacyThresholdMode(project.tissueSelection.thresholdMode),
+		activationThreshold: project.tissueSelection.activationThreshold,
+		blockThreshold: project.tissueSelection.blockThreshold,
+		dbscanEps: project.tissueSelection.dbscanEps,
+		dbscanMinSamples: project.tissueSelection.dbscanMinSamples,
+		minConnectedSpotCount: project.tissueSelection.minConnectedSpotCount,
+	});
+	const legacyCompatibilityFields = {
+		forcedInSpotIds: [],
+		forcedOutSpotIds: [],
+		overrideNotice: null,
+		regions: [],
+		selectedRegionId: null,
+		previewDataUrl: null,
+	};
+	const projectedSpots = project.chipConfig.projectedSpots;
+	const normalizedMatrix = matrix == null ? null : validateTissueActivationMatrix(matrix);
+	const selectedSpotIds = normalizedMatrix && projectedSpots
+		? selectedSpotIdsFromMatrix(normalizedMatrix, projectedSpots)
+		: null;
+	const normalizedMode = project.tissueSelection.mode === "imported" ? "imported" : "matrix";
+	const normalizedSupportState = supportState === "supported" ? "supported" : "unsupported";
+	const normalizedUnsupportedReason = unsupportedReason ?? null;
+
+	return {
+		...rest,
+		...normalizedParams,
+		...legacyCompatibilityFields,
+		mode: normalizedMode,
+		matrix: normalizedMatrix,
+		supportState: normalizedSupportState,
+		unsupportedReason: normalizedUnsupportedReason,
+		selectedSpotIds,
+	};
+};
+
+const normalizeLegacyTissueSelection = (
+	project: PreprocessProject | LegacyPreprocessProject,
+): PreprocessProject["tissueSelection"] => {
+
+	const {
+		forcedInSpotIds,
+		forcedOutSpotIds,
+		overrideNotice: _overrideNotice,
+		regions,
+		selectedRegionId: _selectedRegionId,
+		previewDataUrl: _previewDataUrl,
+		selectedSpotIds,
+		matrix: _legacyMatrix,
+		supportState: _legacySupportState,
+		unsupportedReason: _legacyUnsupportedReason,
+		...rest
+	} = project.tissueSelection;
+
+	void _overrideNotice;
+	void _selectedRegionId;
+	void _previewDataUrl;
+	void _legacyMatrix;
+	void _legacySupportState;
+	void _legacyUnsupportedReason;
+
+	const legacyCompatibilityFields = {
+		forcedInSpotIds: [],
+		forcedOutSpotIds: [],
+		overrideNotice: null,
+		regions: [],
+		selectedRegionId: null,
+		previewDataUrl: null,
+	};
+
+	const thresholdMode = normalizeLegacyThresholdMode(
+		project.tissueSelection.thresholdMode,
+	);
+	const normalizedParams = normalizeTissueParams({
+		thresholdMode,
+		activationThreshold: project.tissueSelection.activationThreshold,
+		blockThreshold: project.tissueSelection.blockThreshold,
+		dbscanEps: project.tissueSelection.dbscanEps,
+		dbscanMinSamples: project.tissueSelection.dbscanMinSamples,
+		minConnectedSpotCount: project.tissueSelection.minConnectedSpotCount,
+	});
+	const chipType = project.chipConfig.chipType ?? project.localization.chipType ?? null;
+	const rows = project.chipConfig.rows;
+	const columns = project.chipConfig.columns;
+	const support = resolveTissueSelectionSupport({
+		chipType,
+		rows,
+		columns,
+	});
+	const autoSelectedSpotIds = project.tissueSelection.autoSelectedSpotIds ?? [];
+	const forcedOutIdSet = new Set(forcedOutSpotIds ?? []);
+	const derivedAutoIds = Array.from(
+		new Set([
+			...autoSelectedSpotIds,
+			...(forcedInSpotIds ?? []),
+		].filter((id) => !forcedOutIdSet.has(id))),
+	);
+	const projectedSpots = project.chipConfig.projectedSpots;
+	const legacySelectedIds =
+		selectedSpotIds && selectedSpotIds.length > 0
+			? selectedSpotIds
+			: extractLegacyRegionSpotIds(regions).length > 0
+				? extractLegacyRegionSpotIds(regions)
+				: derivedAutoIds;
+
+	if (support.supportState === "unsupported" && !isSupportedTissueChipType(chipType)) {
+		return {
+			...rest,
+			...normalizedParams,
+			...legacyCompatibilityFields,
+			mode: "matrix",
+			autoSelectedSpotIds,
+			matrix: null,
+			supportState: support.supportState,
+			unsupportedReason: support.unsupportedReason,
+			selectedSpotIds: null,
+		};
+	}
+
+	if (!isPositiveInteger(rows) || !isPositiveInteger(columns)) {
+		return {
+			...rest,
+			...normalizedParams,
+			...legacyCompatibilityFields,
+			mode: "matrix",
+			autoSelectedSpotIds,
+			matrix: null,
+			supportState: support.supportState,
+			unsupportedReason: support.unsupportedReason,
+			selectedSpotIds: null,
+			warning:
+				project.tissueSelection.warning ??
+				"Legacy tissue selection could not be safely migrated because the chip matrix dimensions are invalid.",
+		};
+	}
+
+	const emptyMatrix = createEmptyMatrix(rows, columns);
+
+	if (support.supportState === "unsupported") {
+		return {
+			...rest,
+			...normalizedParams,
+			...legacyCompatibilityFields,
+			mode: "matrix",
+			autoSelectedSpotIds,
+			matrix: emptyMatrix,
+			supportState: support.supportState,
+			unsupportedReason: support.unsupportedReason,
+			selectedSpotIds: [],
+			warning:
+				project.tissueSelection.warning ??
+				`${chipType ?? "This chip"} legacy tissue data could not be safely migrated, so an empty matrix was created.`,
+		};
+	}
+
+	if (!projectedSpots) {
+		return {
+			...rest,
+			...normalizedParams,
+			...legacyCompatibilityFields,
+			mode: "matrix",
+			autoSelectedSpotIds,
+			matrix: emptyMatrix,
+			supportState: support.supportState,
+			unsupportedReason: support.unsupportedReason,
+			selectedSpotIds: [],
+			warning:
+				project.tissueSelection.warning ??
+				"Legacy tissue selection could not be safely migrated because projected spots are unavailable.",
+		};
+	}
+
+	const matrix = matrixFromSelectedSpotIds({
+		rows,
+		columns,
+		projectedSpots,
+		selectedSpotIds: legacySelectedIds,
+	});
+
+	return {
+		...rest,
+		...normalizedParams,
+		...legacyCompatibilityFields,
+		mode: "matrix",
+		autoSelectedSpotIds,
+		matrix,
+		supportState: support.supportState,
+		unsupportedReason: support.unsupportedReason,
+		selectedSpotIds: selectedSpotIdsFromMatrix(matrix, projectedSpots),
+	};
+};
+
+const normalizeCanonicalTissueSelection = (
+	project: PreprocessProject | LegacyPreprocessProject,
+): PreprocessProject["tissueSelection"] =>
+	isCanonicalTissueSelectionInput(project)
+		? normalizeCanonicalMatrixFirstTissueSelection(project)
+		: normalizeLegacyTissueSelection(project);
 
 const createEmptyCropAssets = () => ({
 	eosin: null,
@@ -449,32 +737,15 @@ export function migratePreprocessProject(
 			project.chipConfig.status === "complete" ||
 			project.chipConfig.status === "processing");
 
-	const tissueSelection = {
-		...project.tissueSelection,
-		...(project.tissueSelection.thresholdMode === "gray-min"
-			? normalizeTissueParams({
-					activationThreshold: project.tissueSelection.activationThreshold,
-					blockThreshold: project.tissueSelection.blockThreshold,
-					dbscanEps: project.tissueSelection.dbscanEps,
-					dbscanMinSamples: project.tissueSelection.dbscanMinSamples,
-					minConnectedSpotCount: project.tissueSelection.minConnectedSpotCount,
-				})
-			: DEFAULT_TISSUE_PARAMS),
-		forcedInSpotIds: project.tissueSelection.forcedInSpotIds ?? [],
-		forcedOutSpotIds: project.tissueSelection.forcedOutSpotIds ?? [],
-		overrideNotice: project.tissueSelection.overrideNotice ?? null,
-		autoSelectedSpotIds: project.tissueSelection.autoSelectedSpotIds ?? [],
-		selectedRegionId: project.tissueSelection.selectedRegionId ?? null,
-		regions: (project.tissueSelection.regions ?? []).map((region) => ({
-			...region,
-			paths: region.paths?.length ? region.paths : [region.points],
-		})),
-		selectedSpotIds: project.tissueSelection.selectedSpotIds ?? null,
-	};
+	const tissueSelection = normalizeCanonicalTissueSelection(project);
 
 	return {
 		...project,
-		workflowVersion: Math.max(workflowVersion, HE_FOCUS_WORKFLOW_VERSION),
+		workflowVersion: Math.max(
+			workflowVersion,
+			HE_FOCUS_WORKFLOW_VERSION,
+			TISSUE_MATRIX_WORKFLOW_VERSION,
+		),
 		storageVersion: PREPROCESS_STORAGE_SCHEMA_VERSION,
 		currentStep:
 			needsHeFocusMigration && shouldRewindToHeFocus(project.currentStep)

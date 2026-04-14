@@ -5,6 +5,7 @@ import type {
   PreprocessProject,
   PreprocessSourceImage,
   PreprocessStepId,
+  TissueActivationMatrix,
 } from '../../types/preprocess';
 import {
   PREPROCESS_DB_NAME,
@@ -12,8 +13,10 @@ import {
   PREPROCESS_STORAGE_KEY,
 } from './constants';
 import { migratePreprocessProject } from './migrations';
+import { validateTissueActivationMatrix } from './tissueMatrix';
+import { resolveTissueSelectionSupport } from './tissueSupport';
 
-export const PACKAGE_VERSION = 3;
+export const PACKAGE_VERSION = 4;
 
 type PackagedSourceImage = Omit<
   PreprocessSourceImage,
@@ -52,7 +55,16 @@ type PreprocessPackagedProject = Omit<
     };
   };
   chipConfig: Omit<PreprocessProject["chipConfig"], "projectedSpots"> & { projectedSpots: null };
-  tissueSelection: Omit<PreprocessProject["tissueSelection"], "previewDataUrl" | "selectedSpotIds"> & {
+  tissueSelection: Omit<
+    PreprocessProject["tissueSelection"],
+    | 'forcedInSpotIds'
+    | 'forcedOutSpotIds'
+    | 'overrideNotice'
+    | 'regions'
+    | 'selectedRegionId'
+    | "previewDataUrl"
+    | "selectedSpotIds"
+  > & {
     previewDataUrl: null;
     selectedSpotIds: null;
   };
@@ -74,11 +86,16 @@ type PreprocessPackageV2 = {
 };
 
 type PreprocessPackageV3 = {
+  version: 3;
+  project: LegacyPreprocessPackagedProject;
+};
+
+type PreprocessPackageV4 = {
   version: typeof PACKAGE_VERSION;
   project: PreprocessPackagedProject;
 };
 
-type PreprocessPackage = PreprocessPackageV1 | PreprocessPackageV2 | PreprocessPackageV3;
+type PreprocessPackage = PreprocessPackageV1 | PreprocessPackageV2 | PreprocessPackageV3 | PreprocessPackageV4;
 
 const isBrowser = () => typeof window !== "undefined";
 
@@ -94,50 +111,114 @@ const stripRuntimeImageState = (image: PreprocessSourceImage | null): PackagedSo
   return rest;
 };
 
-const toPackagedProject = (project: PreprocessProject): PreprocessPackagedProject => ({
-  ...project,
-  sourceAssets: {
-    ...project.sourceAssets,
-    images: {
-      eosin: stripRuntimeImageState(project.sourceAssets.images.eosin),
-      he: stripRuntimeImageState(project.sourceAssets.images.he),
+const toPackagedProject = (project: PreprocessProject): PreprocessPackagedProject => {
+  const {
+    forcedInSpotIds: _forcedInSpotIds,
+    forcedOutSpotIds: _forcedOutSpotIds,
+    overrideNotice: _overrideNotice,
+    regions: _regions,
+    selectedRegionId: _selectedRegionId,
+    previewDataUrl: _previewDataUrl,
+    ...canonicalTissueSelection
+  } = project.tissueSelection;
+
+  void _forcedInSpotIds;
+  void _forcedOutSpotIds;
+  void _overrideNotice;
+  void _regions;
+  void _selectedRegionId;
+  void _previewDataUrl;
+
+  const {
+    projectedSpotIndex: _projectedSpotIndex,
+    ...canonicalChipConfig
+  } = project.chipConfig as PreprocessProject['chipConfig'] & {
+    projectedSpotIndex?: unknown;
+  };
+
+  void _projectedSpotIndex;
+
+  return {
+    ...project,
+    sourceAssets: {
+      ...project.sourceAssets,
+      images: {
+        eosin: stripRuntimeImageState(project.sourceAssets.images.eosin),
+        he: stripRuntimeImageState(project.sourceAssets.images.he),
+      },
     },
-  },
-  heFocus: {
-    ...project.heFocus,
-    focusedImageDataUrl: null,
-  },
-  alignment: {
-    ...project.alignment,
-    previewDataUrl: null,
-  },
-  cropQc: {
-    ...project.cropQc,
-    eosinPreviewDataUrl: null,
-    previewDataUrl: null,
-    checkerboardPreviewDataUrl: null,
-    checkerboardPreview: {
-      dataUrl: null,
+    heFocus: {
+      ...project.heFocus,
+      focusedImageDataUrl: null,
     },
-    featureMatchesPreviewDataUrl: null,
-    featureMatchesPreview: {
-      dataUrl: null,
+    alignment: {
+      ...project.alignment,
+      previewDataUrl: null,
     },
-  },
-  chipConfig: {
-    ...project.chipConfig,
-    projectedSpots: null,
-  },
-  tissueSelection: {
-    ...project.tissueSelection,
-    previewDataUrl: null,
-    selectedSpotIds: null,
-  },
-  exportState: {
-    ...project.exportState,
-    artifacts: [],
-  },
-});
+    cropQc: {
+      ...project.cropQc,
+      eosinPreviewDataUrl: null,
+      previewDataUrl: null,
+      checkerboardPreviewDataUrl: null,
+      checkerboardPreview: {
+        dataUrl: null,
+      },
+      featureMatchesPreviewDataUrl: null,
+      featureMatchesPreview: {
+        dataUrl: null,
+      },
+    },
+    chipConfig: {
+      ...canonicalChipConfig,
+      projectedSpots: null,
+    },
+    tissueSelection: {
+      ...canonicalTissueSelection,
+      previewDataUrl: null,
+      selectedSpotIds: null,
+    },
+    exportState: {
+      ...project.exportState,
+      artifacts: [],
+    },
+  };
+};
+
+const assertBinaryMatrix = (value: unknown, fieldName: string): TissueActivationMatrix => {
+  assertObject(value, fieldName);
+  const matrix = value as Record<string, unknown>;
+  assertNumber(matrix.rows, `${fieldName}.rows`);
+  assertNumber(matrix.columns, `${fieldName}.columns`);
+  assertArray(matrix.values, `${fieldName}.values`);
+
+  return validateTissueActivationMatrix({
+    rows: matrix.rows as number,
+    columns: matrix.columns as number,
+    values: (matrix.values as unknown[]).map((entry, index) => {
+      if (entry !== 0 && entry !== 1) {
+        throw new Error(`Project field "${fieldName}.values[${index}]" must be binary`);
+      }
+
+      return entry;
+    }),
+  });
+};
+
+const assertNoLegacyCanonicalTissueFields = (slice: Record<string, unknown>) => {
+  const legacyKeys = [
+    'forcedInSpotIds',
+    'forcedOutSpotIds',
+    'overrideNotice',
+    'regions',
+    'selectedRegionId',
+  ] as const;
+
+  for (const key of legacyKeys) {
+    if (key in slice) {
+      throw new Error('Canonical package data cannot include legacy region-first tissue fields.');
+    }
+  }
+};
 
 const packageSourcePath = (kind: PreprocessImageKind) => `source-assets/${kind}`;
 const packageHeFocusPath = () => 'derived-assets/he-focus';
@@ -680,25 +761,51 @@ const assertChipConfigSlice = (value: unknown) => {
   }
 };
 
-const assertTissueSelectionSlice = (value: unknown) => {
+const assertCanonicalTissueSelectionSlice = (
+  value: unknown,
+  chipConfig: Record<string, unknown>,
+) => {
   assertPreprocessSliceBase(value, "tissueSelection");
   const slice = value as Record<string, unknown>;
-  if (slice.mode !== "polygon" && slice.mode !== "brush" && slice.mode !== "threshold" && slice.mode !== "imported") {
+  assertNoLegacyCanonicalTissueFields(slice);
+  if (slice.mode !== 'matrix' && slice.mode !== 'imported') {
     throw new Error('Project field "tissueSelection.mode" is invalid or missing');
   }
-  if (slice.thresholdMode !== "gray-min" && slice.thresholdMode !== "dark" && slice.thresholdMode !== "light") {
+  if (slice.thresholdMode !== 'raw' && slice.thresholdMode !== 'gray-max' && slice.thresholdMode !== 'gray-min') {
     throw new Error('Project field "tissueSelection.thresholdMode" is invalid or missing');
   }
   for (const key of ["activationThreshold", "blockThreshold", "dbscanEps", "dbscanMinSamples", "minConnectedSpotCount"] as const) {
     assertNumber(slice[key], `tissueSelection.${key}`);
   }
-  for (const key of ["autoSelectedSpotIds", "forcedInSpotIds", "forcedOutSpotIds"] as const) {
+  for (const key of ['autoSelectedSpotIds'] as const) {
     assertArray(slice[key], `tissueSelection.${key}`);
     for (const [index, entry] of (slice[key] as unknown[]).entries()) {
       assertString(entry, `tissueSelection.${key}[${index}]`);
     }
   }
-  assertNullableString(slice.overrideNotice, "tissueSelection.overrideNotice");
+  if (slice.supportState !== 'supported' && slice.supportState !== 'unsupported') {
+    throw new Error('Project field "tissueSelection.supportState" is invalid or missing');
+  }
+  assertNullableString(slice.unsupportedReason, 'tissueSelection.unsupportedReason');
+  if (slice.matrix !== null) {
+    const matrix = assertBinaryMatrix(slice.matrix, 'tissueSelection.matrix');
+    const support = resolveTissueSelectionSupport({
+      chipType: typeof chipConfig.chipType === 'string' ? chipConfig.chipType : null,
+      rows: typeof chipConfig.rows === 'number' ? chipConfig.rows : null,
+      columns: typeof chipConfig.columns === 'number' ? chipConfig.columns : null,
+    });
+
+    if (chipConfig.chipType === '50um' && (matrix.rows !== 64 || matrix.columns !== 64)) {
+      throw new Error('50um canonical tissue matrix payloads must use 64x64 dimensions.');
+    }
+
+    if (
+      support.supportState === 'supported'
+      && (matrix.rows !== chipConfig.rows || matrix.columns !== chipConfig.columns)
+    ) {
+      throw new Error('Project field "tissueSelection.matrix" has invalid matrix length for chip configuration.');
+    }
+  }
   if (slice.paritySummary !== null) {
     assertObject(slice.paritySummary, "tissueSelection.paritySummary");
     const summary = slice.paritySummary as Record<string, unknown>;
@@ -707,33 +814,36 @@ const assertTissueSelectionSlice = (value: unknown) => {
     assertNumber(summary.maskCoverage, "tissueSelection.paritySummary.maskCoverage");
   }
   assertNullableString(slice.warning, "tissueSelection.warning");
-  assertArray(slice.regions, "tissueSelection.regions");
-  for (const [index, region] of (slice.regions as unknown[]).entries()) {
-    assertObject(region, `tissueSelection.regions[${index}]`);
-    const item = region as Record<string, unknown>;
-    assertString(item.id, `tissueSelection.regions[${index}].id`);
-    assertString(item.label, `tissueSelection.regions[${index}].label`);
-    assertString(item.color, `tissueSelection.regions[${index}].color`);
-    assertArray(item.points, `tissueSelection.regions[${index}].points`);
-    for (const [pointIndex, point] of (item.points as unknown[]).entries()) {
-      assertPreprocessPoint(point, `tissueSelection.regions[${index}].points[${pointIndex}]`);
-    }
-    if (Array.isArray(item.paths)) {
-      for (const [pathIndex, ring] of item.paths.entries()) {
-        assertArray(ring, `tissueSelection.regions[${index}].paths[${pathIndex}]`);
-        for (const [pointIndex, point] of ring.entries()) {
-          assertPreprocessPoint(point, `tissueSelection.regions[${index}].paths[${pathIndex}][${pointIndex}]`);
-        }
-      }
-    }
-  }
-  assertNullableString(slice.selectedRegionId, "tissueSelection.selectedRegionId");
   assertNullableString(slice.previewDataUrl, "tissueSelection.previewDataUrl");
   if (slice.selectedSpotIds !== null) {
     assertArray(slice.selectedSpotIds, "tissueSelection.selectedSpotIds");
     for (const [index, entry] of (slice.selectedSpotIds as unknown[]).entries()) {
       assertString(entry, `tissueSelection.selectedSpotIds[${index}]`);
     }
+  }
+};
+
+const assertLegacyTissueSelectionSlice = (value: unknown) => {
+  assertPreprocessSliceBase(value, 'tissueSelection');
+  const slice = value as Record<string, unknown>;
+  if (slice.mode !== 'polygon' && slice.mode !== 'brush' && slice.mode !== 'threshold' && slice.mode !== 'imported' && slice.mode !== 'matrix') {
+    throw new Error('Project field "tissueSelection.mode" is invalid or missing');
+  }
+  if (slice.thresholdMode !== 'gray-min' && slice.thresholdMode !== 'dark' && slice.thresholdMode !== 'light' && slice.thresholdMode !== 'raw' && slice.thresholdMode !== 'gray-max') {
+    throw new Error('Project field "tissueSelection.thresholdMode" is invalid or missing');
+  }
+  for (const key of ['activationThreshold', 'blockThreshold', 'dbscanEps', 'dbscanMinSamples', 'minConnectedSpotCount'] as const) {
+    assertNumber(slice[key], `tissueSelection.${key}`);
+  }
+  for (const key of ['autoSelectedSpotIds', 'forcedInSpotIds', 'forcedOutSpotIds'] as const) {
+    assertArray(slice[key], `tissueSelection.${key}`);
+  }
+  assertNullableString(slice.overrideNotice, 'tissueSelection.overrideNotice');
+  assertArray(slice.regions, 'tissueSelection.regions');
+  assertNullableString(slice.selectedRegionId, 'tissueSelection.selectedRegionId');
+  assertNullableString(slice.previewDataUrl, 'tissueSelection.previewDataUrl');
+  if (slice.selectedSpotIds !== null) {
+    assertArray(slice.selectedSpotIds, 'tissueSelection.selectedSpotIds');
   }
 };
 
@@ -785,6 +895,7 @@ const assertPreprocessProjectShape = (
   value: unknown,
   requireSourceDataUrls: boolean,
   requireHeFocus: boolean,
+  expectCanonicalPackage: boolean,
 ): LegacyPreprocessProject => {
   assertObject(value, "project");
   const project = value as Record<string, unknown>;
@@ -831,7 +942,11 @@ const assertPreprocessProjectShape = (
   assertAlignmentSlice(project.alignment);
   assertCropQcSlice(project.cropQc);
   assertChipConfigSlice(project.chipConfig);
-  assertTissueSelectionSlice(project.tissueSelection);
+  if (expectCanonicalPackage) {
+    assertCanonicalTissueSelectionSlice(project.tissueSelection, project.chipConfig as Record<string, unknown>);
+  } else {
+    assertLegacyTissueSelectionSlice(project.tissueSelection);
+  }
   assertExportStateSlice(project.exportState);
 
   const storageVersion = typeof project.storageVersion === 'number' ? project.storageVersion : 0;
@@ -856,7 +971,7 @@ export async function serializePreprocessProject(project: PreprocessProject): Pr
     throw new Error("Preprocess project export is available in-browser only");
   }
 
-  const payload: PreprocessPackageV3 = {
+  const payload: PreprocessPackageV4 = {
     version: PACKAGE_VERSION,
     project: toPackagedProject(project),
   };
@@ -885,7 +1000,7 @@ function deserializePreprocessProjectText(text: string): PreprocessProject {
   }
 
   const pkg = parsed as Partial<PreprocessPackage>;
-  if (pkg.version !== 1 && pkg.version !== 2 && pkg.version !== PACKAGE_VERSION) {
+  if (pkg.version !== 1 && pkg.version !== 2 && pkg.version !== 3 && pkg.version !== PACKAGE_VERSION) {
     throw new Error("Unsupported package version. Please re-export with the latest app.");
   }
 
@@ -893,6 +1008,7 @@ function deserializePreprocessProjectText(text: string): PreprocessProject {
     assertPreprocessProjectShape(
       pkg.project,
       pkg.version === 1,
+      pkg.version === PACKAGE_VERSION,
       pkg.version === PACKAGE_VERSION,
     ),
   );

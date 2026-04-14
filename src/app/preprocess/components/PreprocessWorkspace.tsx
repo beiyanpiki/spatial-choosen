@@ -14,35 +14,31 @@ import {
 	Image,
 	Input,
 	Select,
-	Slider,
-	SliderFilledTrack,
-	SliderThumb,
-	SliderTrack,
 	Spinner,
 	Stack,
 	Text,
 	useToast,
 } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { normalizeAlignmentSlice } from "@/lib/preprocess/alignment";
+import { normalizeAlignmentSlice } from "../../../lib/preprocess/alignment";
 import {
 	type ChipConfigManifest,
 	loadAllChipConfigManifests,
 	loadChipConfigData,
-} from "@/lib/preprocess/chipConfigs";
-import { runCropQc } from "@/lib/preprocess/cropQc";
+} from "../../../lib/preprocess/chipConfigs";
+import { runCropQc } from "../../../lib/preprocess/cropQc";
 import {
 	exportPreprocessZip,
 	getPreprocessZipExportReadiness,
-} from "@/lib/preprocess/exportBundle";
+} from "../../../lib/preprocess/exportBundle";
 import {
 	invalidateOnAlignmentChange,
 	invalidateOnCropQcChange,
 	invalidateOnHeFocusChange,
 	invalidateOnLocalizationChange,
 	invalidateOnSourceAssetsChange,
-} from "@/lib/preprocess/invalidation";
-import { loadOpenCv } from "@/lib/preprocess/loadOpenCv";
+} from "../../../lib/preprocess/invalidation";
+import { loadOpenCv } from "../../../lib/preprocess/loadOpenCv";
 import {
 	buildLocalizationHandles,
 	clampNormalizedSquareRect,
@@ -51,20 +47,16 @@ import {
 	DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
-} from "@/lib/preprocess/localization";
-import { buildSourceImage, createThumbnailBlob } from "@/lib/preprocess/sourceImage";
+} from "../../../lib/preprocess/localization";
+import { buildSourceImage, createThumbnailBlob } from "../../../lib/preprocess/sourceImage";
 import {
 	projectSpotsForCrop,
 	resolveAuthoritativeSpotDiameterFullres,
-} from "@/lib/preprocess/spotProjection";
-import { buildManualTissueSelectionState } from "@/lib/preprocess/projectUpdates";
-import { runTissueAutoSelection } from "@/lib/preprocess/tissuePipeline";
-import {
-	AUTO_TISSUE_REGION_ID,
-	buildDefaultTissueRegionFromDetectedSpots,
-	buildSelectedCountSummary,
-	deriveSelectedSpotIdsFromRegions,
-} from "@/lib/preprocess/tissueRegions";
+} from "../../../lib/preprocess/spotProjection";
+import { buildManualTissueSelectionState } from "../../../lib/preprocess/projectUpdates";
+import { runTissueAutoSelection } from "../../../lib/preprocess/tissuePipeline";
+import { selectedSpotIdsFromMatrix } from "../../../lib/preprocess/tissueMatrix";
+import { resolveTissueSelectionSupport } from "../../../lib/preprocess/tissueSupport";
 import type {
 	AlignmentSlice,
 	CropQcSlice,
@@ -83,7 +75,8 @@ import { CanvasStage } from "./CanvasStage";
 import { CropQcPanel } from "./CropQcPanel";
 import { ExportPanel } from "./ExportPanel";
 import { StepSidebar } from "./StepSidebar";
-import { TissueSelectionPanel, type ToolMode } from "./TissueSelectionPanel";
+import { TissueSelectionControls, type TissueTool } from "./TissueSelectionControls";
+import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
 
@@ -126,6 +119,7 @@ const normalizeLocalizationRotationDegrees = (value: number) => {
 	const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
 	return Object.is(wrapped, -0) ? 0 : wrapped;
 };
+
 
 const normalizeHeFocusSlice = (
 	slice: HeFocusSlice,
@@ -295,59 +289,6 @@ const placeholderCopyByStep: Record<
 	},
 };
 
-const OVERRIDES_CLEARED_NOTICE = "Overrides cleared due to geometry change.";
-
-const hasManualTissueEdits = (tissueSelection: TissueSelectionSlice) =>
-	tissueSelection.forcedInSpotIds.length > 0 ||
-	tissueSelection.forcedOutSpotIds.length > 0 ||
-	tissueSelection.regions.some((region) => region.id !== AUTO_TISSUE_REGION_ID);
-
-const buildTissueAutoDetectionPatch = async (args: {
-	eosinLowresCropDataUrl: string;
-	cropWidth: number;
-	cropHeight: number;
-	tissueLowresScaleFactor: number;
-	projectedSpots: NonNullable<PreprocessProject["chipConfig"]["projectedSpots"]>;
-	tissueSelection: TissueSelectionSlice;
-	replaceManualEdits: boolean;
-}) => {
-	const result = await runTissueAutoSelection({
-		eosinLowresCropDataUrl: args.eosinLowresCropDataUrl,
-		cropWidth: args.cropWidth,
-		cropHeight: args.cropHeight,
-		tissueLowresScaleFactor: args.tissueLowresScaleFactor,
-		projectedSpots: args.projectedSpots,
-		params: {
-			thresholdMode: args.tissueSelection.thresholdMode,
-			activationThreshold: clampActivationThreshold(
-				args.tissueSelection.activationThreshold,
-			),
-			blockThreshold: args.tissueSelection.blockThreshold,
-			dbscanEps: args.tissueSelection.dbscanEps,
-			dbscanMinSamples: args.tissueSelection.dbscanMinSamples,
-			minConnectedSpotCount: args.tissueSelection.minConnectedSpotCount,
-		},
-	});
-
-	const defaultRegion = buildDefaultTissueRegionFromDetectedSpots({
-		projectedSpots: args.projectedSpots,
-		selectedSpotIds: result.selectedIds,
-	});
-	const nextRegions = defaultRegion ? [defaultRegion] : [];
-	const nextSelectedSpotIds = result.selectedIds;
-
-	return {
-		result,
-		nextRegions,
-		nextSelectedRegionId: defaultRegion?.id ?? null,
-		nextSelectedSpotIds,
-		paritySummary: buildSelectedCountSummary(nextSelectedSpotIds, args.projectedSpots.length),
-		overrideNotice: args.replaceManualEdits && hasManualTissueEdits(args.tissueSelection)
-			? OVERRIDES_CLEARED_NOTICE
-			: null,
-	};
-};
-
 const resolveTissueAutoDetectionImageArgs = (project: PreprocessProject | null) => {
 	const eosinLowresCropDataUrl = project?.cropQc.cropAssets?.eosin?.lowres.dataUrl ?? null;
 	const cropWidth = project?.cropQc.cropWidth ?? null;
@@ -381,6 +322,8 @@ const buildTissueDetectionSnapshot = (args: {
 	projectedSpots: NonNullable<PreprocessProject["chipConfig"]["projectedSpots"]>;
 }) => ({
 	chipType: args.project.chipConfig.chipType,
+	rows: args.project.chipConfig.rows,
+	columns: args.project.chipConfig.columns,
 	eosinLowresCropDataUrl: args.tissueImageArgs.eosinLowresCropDataUrl,
 	cropWidth: args.tissueImageArgs.cropWidth,
 	cropHeight: args.tissueImageArgs.cropHeight,
@@ -405,6 +348,8 @@ const matchesTissueDetectionSnapshot = (
 
 	return (
 		project.chipConfig.chipType === snapshot.chipType
+		&& project.chipConfig.rows === snapshot.rows
+		&& project.chipConfig.columns === snapshot.columns
 		&& tissueImageArgs.eosinLowresCropDataUrl === snapshot.eosinLowresCropDataUrl
 		&& tissueImageArgs.cropWidth === snapshot.cropWidth
 		&& tissueImageArgs.cropHeight === snapshot.cropHeight
@@ -510,7 +455,7 @@ export function PreprocessWorkspace({
 	const [projectNameDraft, setProjectNameDraft] = useState("");
 	const [focusedHeMovingImage, setFocusedHeMovingImage] =
 		useState<PreprocessSourceImage | null>(null);
-	const [tissueTool, setTissueTool] = useState<ToolMode>("edit");
+	const [tissueTool, setTissueTool] = useState<TissueTool>("activate");
 	const [isDetectingTissue, setIsDetectingTissue] = useState(false);
 	const tissueDetectionRequestTokenRef = useRef(0);
 
@@ -544,9 +489,6 @@ export function PreprocessWorkspace({
 	const hasLocalizationChipBounds = Boolean(project?.localization.chipBounds);
 	const hasHeFocusChipBounds = Boolean(project?.heFocus.chipBounds);
 	const tissueAutoDetectionImageArgs = resolveTissueAutoDetectionImageArgs(project);
-	const activationThresholdValue = project
-		? clampActivationThreshold(project.tissueSelection.activationThreshold)
-		: 0;
 	const exportReadiness = project
 		? getPreprocessZipExportReadiness(project)
 		: { canExport: false as const, reason: "Project unavailable." };
@@ -1169,12 +1111,26 @@ export function PreprocessWorkspace({
 		[applyLocalizationUpdate],
 	);
 
+	const tissueSupport = project
+		? resolveTissueSelectionSupport({
+			chipType: project.chipConfig.chipType,
+			rows: project.chipConfig.rows,
+			columns: project.chipConfig.columns,
+		})
+		: { supportState: "unsupported" as const, unsupportedReason: null };
+
 	const runTissueAutoDetection = useCallback(async () => {
 		if (!project) {
 			return;
 		}
 		const projectedSpots = project.chipConfig.projectedSpots;
-		if (!tissueAutoDetectionImageArgs || !projectedSpots) {
+		if (
+			tissueSupport.supportState === "unsupported"
+			|| !tissueAutoDetectionImageArgs
+			|| !projectedSpots
+			|| !project.chipConfig.rows
+			|| !project.chipConfig.columns
+		) {
 			return;
 		}
 
@@ -1190,6 +1146,8 @@ export function PreprocessWorkspace({
 			...current,
 			tissueSelection: {
 				...current.tissueSelection,
+				supportState: tissueSupport.supportState,
+				unsupportedReason: tissueSupport.unsupportedReason,
 				warning: null,
 				error: null,
 				status: "processing",
@@ -1199,11 +1157,21 @@ export function PreprocessWorkspace({
 		}), { mode: "metadata" });
 
 		try {
-			const tissuePatch = await buildTissueAutoDetectionPatch({
+			const result = await runTissueAutoSelection({
 				...tissueAutoDetectionImageArgs,
+				matrixRows: project.chipConfig.rows,
+				matrixColumns: project.chipConfig.columns,
 				projectedSpots,
-				tissueSelection: project.tissueSelection,
-				replaceManualEdits: true,
+				params: {
+					thresholdMode: project.tissueSelection.thresholdMode,
+					activationThreshold: clampActivationThreshold(
+						project.tissueSelection.activationThreshold,
+					),
+					blockThreshold: project.tissueSelection.blockThreshold,
+					dbscanEps: project.tissueSelection.dbscanEps,
+					dbscanMinSamples: project.tissueSelection.dbscanMinSamples,
+					minConnectedSpotCount: project.tissueSelection.minConnectedSpotCount,
+				},
 			});
 
 			if (tissueDetectionRequestTokenRef.current !== requestToken) {
@@ -1219,33 +1187,29 @@ export function PreprocessWorkspace({
 					...current,
 					tissueSelection: {
 						...current.tissueSelection,
-						thresholdMode: tissuePatch.result.params.thresholdMode,
-						activationThreshold:
-							tissuePatch.result.params.activationThreshold,
-						blockThreshold: tissuePatch.result.params.blockThreshold,
-						dbscanEps: tissuePatch.result.params.dbscanEps,
-						dbscanMinSamples:
-							tissuePatch.result.params.dbscanMinSamples,
-						minConnectedSpotCount:
-							tissuePatch.result.params.minConnectedSpotCount,
-						forcedInSpotIds: [],
-						forcedOutSpotIds: [],
-						regions: tissuePatch.nextRegions,
-						selectedRegionId: tissuePatch.nextSelectedRegionId,
-						overrideNotice: tissuePatch.overrideNotice,
-						autoSelectedSpotIds: tissuePatch.result.selectedIds,
-						selectedSpotIds: tissuePatch.nextSelectedSpotIds,
-						paritySummary: tissuePatch.paritySummary,
-						warning: tissuePatch.result.warning,
-						status: tissuePatch.result.warning ? "error" : "complete",
+						mode: "matrix",
+						supportState: tissueSupport.supportState,
+						unsupportedReason: tissueSupport.unsupportedReason,
+						thresholdMode: result.params.thresholdMode,
+						activationThreshold: result.params.activationThreshold,
+						blockThreshold: result.params.blockThreshold,
+						dbscanEps: result.params.dbscanEps,
+						dbscanMinSamples: result.params.dbscanMinSamples,
+						minConnectedSpotCount: result.params.minConnectedSpotCount,
+						matrix: result.matrix,
+						autoSelectedSpotIds: result.selectedIds,
+						selectedSpotIds: result.selectedIds,
+						paritySummary: result.summary,
+						warning: result.warning,
+						status: result.warning ? "error" : "complete",
 						isStale: false,
 						updatedAt: new Date().toISOString(),
-						error: tissuePatch.result.warning,
+						error: result.warning,
 					},
 					exportState: {
 						...current.exportState,
-						status: tissuePatch.result.warning ? "stale" : "ready",
-						isStale: Boolean(tissuePatch.result.warning),
+						status: result.warning ? "stale" : "ready",
+						isStale: Boolean(result.warning),
 						updatedAt: new Date().toISOString(),
 						lastExportedAt: null,
 						artifacts: [],
@@ -1270,6 +1234,8 @@ export function PreprocessWorkspace({
 					...current,
 					tissueSelection: {
 						...current.tissueSelection,
+						supportState: tissueSupport.supportState,
+						unsupportedReason: tissueSupport.unsupportedReason,
 						warning: message,
 						status: "error",
 						isStale: false,
@@ -1292,12 +1258,11 @@ export function PreprocessWorkspace({
 				setIsDetectingTissue(false);
 			}
 		}
-	}, [onProjectMutate, project, tissueAutoDetectionImageArgs]);
+	}, [onProjectMutate, project, tissueAutoDetectionImageArgs, tissueSupport]);
 
 	const currentCopy = project
 		? placeholderCopyByStep[project.currentStep]
 		: placeholderCopyByStep.sourceAssets;
-	const isTissueInteractionDisabled = isDetectingTissue;
 	const tissueProjectedSpots = useMemo(
 		() => project?.chipConfig.projectedSpots ?? [],
 		[project?.chipConfig.projectedSpots],
@@ -1307,22 +1272,20 @@ export function PreprocessWorkspace({
 			return [];
 		}
 
-		if (project.tissueSelection.selectedSpotIds) {
-			return project.tissueSelection.selectedSpotIds;
-		}
-
-		if (project.tissueSelection.regions.length > 0) {
-			return deriveSelectedSpotIdsFromRegions(
-				project.tissueSelection.regions,
+		if (project.tissueSelection.matrix && tissueProjectedSpots.length > 0) {
+			return selectedSpotIdsFromMatrix(
+				project.tissueSelection.matrix,
 				tissueProjectedSpots,
 			);
 		}
 
-		return project.tissueSelection.autoSelectedSpotIds;
+		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [
 		project,
 		tissueProjectedSpots,
 	]);
+	const isTissueInteractionDisabled =
+		isDetectingTissue || tissueSupport.supportState === "unsupported";
 
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
@@ -1828,56 +1791,41 @@ export function PreprocessWorkspace({
 								<Box position="relative">
 									<Flex direction={{ base: "column", xl: "row" }} gap={5} align="stretch">
 										<Box flex="1" minW={0}>
-													<TissueSelectionPanel
-														eosinCropDataUrl={project.cropQc.eosinPreviewDataUrl}
-														projectedSpots={tissueProjectedSpots}
-														selectedSpotIds={tissueSelectedSpotIds}
-												regions={project.tissueSelection.regions}
-												selectedRegionId={project.tissueSelection.selectedRegionId}
-												showControls={false}
-												tool={tissueTool}
-												disabled={isTissueInteractionDisabled}
-												onToolChange={setTissueTool}
-													onRegionsChange={(nextRegions) => {
-														onProjectMutate((current) => {
-														const projectedSpots = current.chipConfig.projectedSpots ?? [];
-														const updatedAt = new Date().toISOString();
-														return {
-															...current,
-															tissueSelection: buildManualTissueSelectionState({
-																current: current.tissueSelection,
-																projectedSpots,
-																nextRegions,
-																updatedAt,
-															}),
-															exportState: {
-																...current.exportState,
-																status: "stale",
-																isStale: true,
-																updatedAt,
-																lastExportedAt: null,
-																artifacts: [],
-																error: null,
-															},
-																		};
-															}, { mode: "metadata", strategy: "debounced" });
-														}}
-													onSelectedRegionIdChange={(id) => {
-														onProjectMutate((current) => {
-															if (current.tissueSelection.selectedRegionId === id) {
-																return current;
-															}
+							<TissueSelectionPanel
+								eosinCropDataUrl={project.cropQc.cropAssets?.eosin?.lowres.dataUrl ?? null}
+								projectedSpots={tissueProjectedSpots}
+								selectedSpotIds={tissueSelectedSpotIds}
+								showControls={false}
+								tool={tissueTool}
+								disabled={isTissueInteractionDisabled}
+								onToolChange={setTissueTool}
+								onEditCommit={(editArea) => {
+									onProjectMutate((current) => {
+										const projectedSpots = current.chipConfig.projectedSpots ?? [];
+										const updatedAt = new Date().toISOString();
+										return {
+											...current,
+											tissueSelection: buildManualTissueSelectionState({
+												current: current.tissueSelection,
+												projectedSpots,
+												editArea,
+												nextValue: tissueTool === "activate" ? 1 : 0,
+												updatedAt,
+											}),
+											exportState: {
+												...current.exportState,
+												status: "stale",
+												isStale: true,
+												updatedAt,
+												lastExportedAt: null,
+												artifacts: [],
+												error: null,
+											},
+										};
+									}, { mode: "metadata", strategy: "debounced" });
+								}}
+							/>
 
-															return {
-																...current,
-																tissueSelection: {
-																	...current.tissueSelection,
-																	selectedRegionId: id,
-																},
-															};
-														}, { mode: "metadata", strategy: "debounced" });
-														}}
-											/>
 										</Box>
 										<Stack w={{ base: "100%", xl: "320px" }} spacing={4} flexShrink={0}>
 											<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
@@ -1938,25 +1886,21 @@ export function PreprocessWorkspace({
 																					updatedAt: timestamp,
 																					error: null,
 																				},
-																				tissueSelection: {
-																					...current.tissueSelection,
-																					forcedInSpotIds: [],
-																					forcedOutSpotIds: [],
-																					regions: [],
-																					selectedRegionId: null,
-																					overrideNotice: hasManualTissueEdits(current.tissueSelection)
-																						? OVERRIDES_CLEARED_NOTICE
-																						: null,
-																					autoSelectedSpotIds: [],
-																					selectedSpotIds: null,
-																					paritySummary: null,
-																					previewDataUrl: null,
-																					warning: null,
-																					status: "stale",
-																					isStale: true,
-																					updatedAt: timestamp,
-																					error: null,
-																				},
+												tissueSelection: {
+													...current.tissueSelection,
+													supportState: tissueSupport.supportState,
+													unsupportedReason: tissueSupport.unsupportedReason,
+													matrix: null,
+													autoSelectedSpotIds: [],
+													selectedSpotIds: [],
+													paritySummary: null,
+													warning: null,
+													status: "stale",
+													isStale: true,
+													updatedAt: timestamp,
+													error: null,
+												},
+
 																				exportState: {
 																					...current.exportState,
 																					status: "stale",
@@ -1984,20 +1928,21 @@ export function PreprocessWorkspace({
 																					updatedAt: new Date().toISOString(),
 																					error: message,
 																				},
-																				tissueSelection: {
-																					...current.tissueSelection,
-																					regions: [],
-																					selectedRegionId: null,
-																					autoSelectedSpotIds: [],
-																					selectedSpotIds: [],
-																					paritySummary: buildSelectedCountSummary([], 0),
-																					overrideNotice: null,
-																					warning: message,
-																					status: "error",
-																					isStale: false,
-																					updatedAt: new Date().toISOString(),
-																					error: message,
-																				},
+												tissueSelection: {
+													...current.tissueSelection,
+													supportState: tissueSupport.supportState,
+													unsupportedReason: tissueSupport.unsupportedReason,
+													matrix: null,
+													autoSelectedSpotIds: [],
+													selectedSpotIds: [],
+													paritySummary: null,
+													warning: message,
+													status: "error",
+													isStale: false,
+													updatedAt: new Date().toISOString(),
+													error: message,
+												},
+
 																				exportState: {
 																					...current.exportState,
 																					status: "stale",
@@ -2026,318 +1971,71 @@ export function PreprocessWorkspace({
 												</CardBody>
 											</Card>
 
+											<TissueSelectionControls
+												thresholdMode={project.tissueSelection.thresholdMode}
+												supportState={tissueSupport.supportState}
+												unsupportedReason={tissueSupport.unsupportedReason}
+												isDetecting={isDetectingTissue}
+												tissueTool={tissueTool}
+												onThresholdModeChange={(thresholdMode) => {
+													onProjectMutate((current) => {
+														const nextSupport = resolveTissueSelectionSupport({
+															chipType: current.chipConfig.chipType,
+															rows: current.chipConfig.rows,
+															columns: current.chipConfig.columns,
+														});
+
+														return {
+															...current,
+															tissueSelection: {
+																...current.tissueSelection,
+																thresholdMode,
+																supportState: nextSupport.supportState,
+																unsupportedReason: nextSupport.unsupportedReason,
+																status: "ready",
+																warning: null,
+																isStale: false,
+																updatedAt: new Date().toISOString(),
+															},
+															exportState: {
+																...current.exportState,
+																status: "stale",
+																isStale: true,
+																updatedAt: new Date().toISOString(),
+															},
+														};
+													}, { mode: "metadata", strategy: "debounced" });
+												}}
+												onTissueToolChange={setTissueTool}
+												onRunAutoDetection={() => {
+													void runTissueAutoDetection();
+												}}
+											/>
+
+
 											<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
 												<CardBody p={4}>
-													<Stack spacing={4}>
-														<Text fontSize="sm" fontWeight="semibold">Auto detection</Text>
-														<FormControl isDisabled={isTissueInteractionDisabled}>
-															<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Threshold mode</FormLabel>
-															<Select value="gray-min" isDisabled data-testid="tissue-threshold-mode-select">
-																<option value="gray-min">gray-min</option>
-															</Select>
-														</FormControl>
-														<FormControl isDisabled={isTissueInteractionDisabled}>
-															<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Activation threshold</FormLabel>
-															<Stack spacing={2}>
-																<Slider
-																	min={0}
-																	max={MAX_ACTIVATION_THRESHOLD}
-																	step={0.01}
-																	value={activationThresholdValue}
-																	onChange={(value) => {
-																		const nextActivationThreshold = clampActivationThreshold(value);
-																		onProjectMutate((current) => ({
-																			...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				activationThreshold: nextActivationThreshold,
-																				status: "ready",
-																				warning: null,
-																				isStale: false,
-																				updatedAt: new Date().toISOString(),
-																			},
-																			exportState: {
-																				...current.exportState,
-																									status: "stale",
-																									isStale: true,
-																									updatedAt: new Date().toISOString(),
-																								},
-																						}), { mode: "metadata", strategy: "debounced" });
-																			}}
-																	data-testid="tissue-activation-threshold-slider"
-																>
-																	<SliderTrack>
-																		<SliderFilledTrack bg="brand.500" />
-																	</SliderTrack>
-																	<SliderThumb />
-																</Slider>
-																<Input
-																	type="number"
-																	min={0}
-																	max={MAX_ACTIVATION_THRESHOLD}
-																	step={0.01}
-																	value={activationThresholdValue}
-																	onChange={(event) => {
-																		const next = Number(event.target.value);
-																				onProjectMutate((current) => ({
-																			...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				activationThreshold: clampActivationThreshold(
-																					next,
-																					clampActivationThreshold(current.tissueSelection.activationThreshold),
-																				),
-																				status: "ready",
-																				warning: null,
-																				isStale: false,
-																				updatedAt: new Date().toISOString(),
-																			},
-																			exportState: {
-																				...current.exportState,
-																							status: "stale",
-																							isStale: true,
-																							updatedAt: new Date().toISOString(),
-																						},
-																						}), { mode: "metadata", strategy: "debounced" });
-																			}}
-																	data-testid="tissue-activation-threshold-input"
-																/>
-															</Stack>
-														</FormControl>
-														<FormControl isDisabled={isTissueInteractionDisabled}>
-															<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Block threshold</FormLabel>
-															<Stack spacing={2}>
-																<Slider
-																	min={0}
-																	max={255}
-																	step={1}
-																	value={project.tissueSelection.blockThreshold}
-																	onChange={(value) => {
-																				onProjectMutate((current) => ({
-																			...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				blockThreshold: value,
-																				status: "ready",
-																				warning: null,
-																				isStale: false,
-																				updatedAt: new Date().toISOString(),
-																			},
-																			exportState: {
-																				...current.exportState,
-																							status: "stale",
-																							isStale: true,
-																							updatedAt: new Date().toISOString(),
-																						},
-																						}), { mode: "metadata", strategy: "debounced" });
-																			}}
-																	data-testid="tissue-block-threshold-slider"
-																>
-																	<SliderTrack>
-																		<SliderFilledTrack bg="brand.500" />
-																	</SliderTrack>
-																	<SliderThumb />
-																</Slider>
-																<Input
-																	type="number"
-																	min={0}
-																	max={255}
-																	step={1}
-																	value={project.tissueSelection.blockThreshold}
-																	onChange={(event) => {
-																		const next = Number(event.target.value);
-																				onProjectMutate((current) => ({
-																			...current,
-																			tissueSelection: {
-																				...current.tissueSelection,
-																				blockThreshold: Number.isFinite(next)
-																					? next
-																					: current.tissueSelection.blockThreshold,
-																				status: "ready",
-																				warning: null,
-																				isStale: false,
-																				updatedAt: new Date().toISOString(),
-																			},
-																			exportState: {
-																				...current.exportState,
-																							status: "stale",
-																							isStale: true,
-																							updatedAt: new Date().toISOString(),
-																						},
-																						}), { mode: "metadata", strategy: "debounced" });
-																			}}
-																	data-testid="tissue-block-threshold-input"
-																/>
-															</Stack>
-														</FormControl>
-														<Button
-															data-testid="tissue-run-auto"
-															colorScheme="brand"
-															isLoading={isDetectingTissue}
-															loadingText="Detecting tissue"
-															isDisabled={!tissueAutoDetectionImageArgs || !project.chipConfig.projectedSpots}
-															onClick={() => {
-																void runTissueAutoDetection();
-															}}
-														>
-															Run auto detection
-														</Button>
-														<Stack spacing={1}>
-															<Text fontSize="sm" color="gray.600" data-testid="tissue-selected-count">
-																Selected spots: {tissueSelectedSpotIds.length}
+													<Stack spacing={1}>
+														<Text fontSize="sm" color="gray.600" data-testid="tissue-selected-count">
+															Selected spots: {tissueSelectedSpotIds.length}
+														</Text>
+														{project.tissueSelection.warning ? (
+															<Text fontSize="sm" color="orange.700" data-testid="tissue-detection-warning">
+																{project.tissueSelection.warning}
 															</Text>
-															{project.tissueSelection.warning ? (
-																<Text fontSize="sm" color="orange.700" data-testid="tissue-detection-warning">
-																	{project.tissueSelection.warning}
-																</Text>
-															) : (
-																<Text fontSize="sm" color="gray.500" data-testid="tissue-detection-status">
-																	{isDetectingTissue
-																		? "Auto detection is running. Canvas editing and threshold changes are temporarily locked."
-																		: project.tissueSelection.status === "complete"
-																			? "Auto detection ready. The default region is selected and editable."
-																			: "Choose thresholds and run auto detection to regenerate the default region."}
-																</Text>
-															)}
-															{project.tissueSelection.overrideNotice ? (
-																<Text fontSize="sm" color="orange.700" data-testid="tissue-override-notice">
-																	{project.tissueSelection.overrideNotice}
-																</Text>
-															) : null}
-														</Stack>
+														) : (
+															<Text fontSize="sm" color="gray.500" data-testid="tissue-detection-status">
+																{isDetectingTissue
+																	? "Auto detection is running. Canvas editing is temporarily locked."
+																	: project.tissueSelection.status === "complete"
+																		? "Auto detection ready. Activate or deactivate spots directly on the matrix-backed canvas."
+																		: "Choose a threshold mode and run auto detection to refresh the tissue matrix."}
+															</Text>
+														)}
 													</Stack>
 												</CardBody>
 											</Card>
 
-											<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
-												<CardBody p={4}>
-													<Stack spacing={3}>
-														<Text fontSize="sm" fontWeight="semibold">Tools</Text>
-														<Button
-															data-testid="tissue-tool-edit"
-															variant={tissueTool === "edit" ? "solid" : "outline"}
-															colorScheme={tissueTool === "edit" ? "brand" : undefined}
-															justifyContent="flex-start"
-															isDisabled={isTissueInteractionDisabled}
-															onClick={() => setTissueTool("edit")}
-														>
-															Edit
-														</Button>
-														<Button
-															data-testid="tissue-tool-draw"
-															variant={tissueTool === "draw" ? "solid" : "outline"}
-															colorScheme={tissueTool === "draw" ? "brand" : undefined}
-															justifyContent="flex-start"
-															isDisabled={isTissueInteractionDisabled}
-															onClick={() => setTissueTool("draw")}
-														>
-															Draw
-														</Button>
-														<Button
-															data-testid="tissue-tool-erase"
-															variant={tissueTool === "erase" ? "solid" : "outline"}
-															colorScheme={tissueTool === "erase" ? "brand" : undefined}
-															justifyContent="flex-start"
-															isDisabled={isTissueInteractionDisabled}
-															onClick={() => setTissueTool("erase")}
-														>
-															Punch Out
-														</Button>
-														<Button
-															size="xs"
-															colorScheme="red"
-															variant="outline"
-															isDisabled={!project.tissueSelection.selectedRegionId || isTissueInteractionDisabled}
-															data-testid="tissue-delete-selected"
-															onClick={() => {
-																const selectedId = project.tissueSelection.selectedRegionId;
-															if (!selectedId) return;
-															onProjectMutate((current) => {
-																const nextRegions = current.tissueSelection.regions.filter(
-																	(region) => region.id !== selectedId,
-																);
-																const projectedSpots = current.chipConfig.projectedSpots ?? [];
-																const updatedAt = new Date().toISOString();
-																return {
-																	...current,
-																	tissueSelection: {
-																		...buildManualTissueSelectionState({
-																			current: current.tissueSelection,
-																			projectedSpots,
-																			nextRegions,
-																			updatedAt,
-																		}),
-																		selectedRegionId: nextRegions[0]?.id ?? null,
-																	},
-																	exportState: {
-																		...current.exportState,
-																		status: "stale",
-																		isStale: true,
-																		updatedAt,
-																		lastExportedAt: null,
-																		artifacts: [],
-																		error: null,
-																								},
-																							};
-																						}, { mode: "metadata", strategy: "debounced" });
-																			}}
-														>
-															Delete selected
-														</Button>
-													</Stack>
-												</CardBody>
-											</Card>
-
-											<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
-												<CardBody p={4}>
-													<Stack spacing={2}>
-														<Text fontSize="sm" fontWeight="semibold">Regions</Text>
-														<Stack spacing={2} maxH="260px" overflowY="auto">
-															{project.tissueSelection.regions.map((region) => (
-																<HStack
-																	key={region.id}
-																	p={3}
-																	bg={project.tissueSelection.selectedRegionId === region.id ? "brand.50" : "white"}
-																	border="1px solid"
-																	borderColor={project.tissueSelection.selectedRegionId === region.id ? "brand.200" : "gray.200"}
-																	borderRadius="lg"
-																	cursor={isTissueInteractionDisabled ? "not-allowed" : "pointer"}
-																	opacity={isTissueInteractionDisabled ? 0.6 : 1}
-																	data-testid={`tissue-region-row-${region.id}`}
-																onClick={() => {
-																	if (isTissueInteractionDisabled) {
-																		return;
-																	}
-																onProjectMutate((current) => {
-																if (current.tissueSelection.selectedRegionId === region.id) {
-																	return current;
-																}
-
-																return {
-																	...current,
-																	tissueSelection: {
-																		...current.tissueSelection,
-																		selectedRegionId: region.id,
-																	},
-																};
-															}, { mode: "metadata", strategy: "debounced" });
-																	}}
-																>
-																	<Box w="12px" h="12px" borderRadius="sm" bg={region.color} />
-																	<Text fontSize="sm" flex="1" fontWeight="medium">{region.label}</Text>
-																</HStack>
-															))}
-															{project.tissueSelection.regions.length === 0 ? (
-																<Box border="1px dashed" borderColor="gray.200" borderRadius="lg" px={3} py={4}>
-																	<Text fontSize="sm" color="gray.500">
-																		No tissue regions yet. Run auto detection to generate the default editable region.
-																	</Text>
-																</Box>
-															) : null}
-														</Stack>
-													</Stack>
-												</CardBody>
-											</Card>
 										</Stack>
 									</Flex>
 									{isDetectingTissue ? (

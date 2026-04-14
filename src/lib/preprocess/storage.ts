@@ -9,6 +9,7 @@ import type {
   SourceAssetsSlice,
   TissueSelectionSlice,
 } from '../../types/preprocess';
+import { loadChipConfigData } from './chipConfigs';
 import {
   PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
   PREPROCESS_DB_NAME,
@@ -97,6 +98,31 @@ type StoredCropQcSlice = Omit<
   };
 };
 
+type StoredTissueSelectionSlice = Omit<
+  TissueSelectionSlice,
+  | 'forcedInSpotIds'
+  | 'forcedOutSpotIds'
+  | 'overrideNotice'
+  | 'regions'
+  | 'selectedRegionId'
+  | 'previewDataUrl'
+  | 'selectedSpotIds'
+> & {
+  previewDataUrl: null;
+  selectedSpotIds: null;
+};
+
+type StoredProjectedSpotIndexEntry = {
+  id: string;
+  arrayRow: number;
+  arrayCol: number;
+};
+
+type StoredChipConfigSlice = Omit<ChipConfigSlice, 'projectedSpots'> & {
+  projectedSpots: null;
+  projectedSpotIndex: StoredProjectedSpotIndexEntry[] | null;
+};
+
 type CanonicalCropQcAssets = {
   cropAssets: {
     eosin: NonNullable<NonNullable<PreprocessProject['cropQc']['cropAssets']>['eosin']>;
@@ -125,11 +151,8 @@ export type PreprocessProjectMeta = Omit<
   heFocus: StoredHeFocusSlice;
   alignment: Omit<AlignmentSlice, 'previewDataUrl'> & { previewDataUrl: null };
   cropQc: StoredCropQcSlice;
-  chipConfig: Omit<ChipConfigSlice, 'projectedSpots'> & { projectedSpots: null };
-  tissueSelection: Omit<TissueSelectionSlice, 'previewDataUrl' | 'selectedSpotIds'> & {
-    previewDataUrl: null;
-    selectedSpotIds: null;
-  };
+  chipConfig: StoredChipConfigSlice;
+  tissueSelection: StoredTissueSelectionSlice;
   exportState: Omit<ExportStateSlice, 'artifacts'> & { artifacts: [] };
 };
 
@@ -181,6 +204,56 @@ const readRawProjects = (): unknown[] => {
     console.error('Failed to parse preprocess projects', error);
     return [];
   }
+};
+
+const selectedSpotIdsFromStoredIndex = (
+  matrix: PreprocessProject['tissueSelection']['matrix'],
+  projectedSpotIndex: StoredProjectedSpotIndexEntry[] | null,
+) => {
+  if (!matrix || !projectedSpotIndex) {
+    return null;
+  }
+
+  return projectedSpotIndex.flatMap((spot) => {
+    if (
+      !Number.isInteger(spot.arrayRow)
+      || !Number.isInteger(spot.arrayCol)
+      || spot.arrayRow < 1
+      || spot.arrayRow > matrix.rows
+      || spot.arrayCol < 1
+      || spot.arrayCol > matrix.columns
+    ) {
+      return [];
+    }
+
+    const index = (spot.arrayRow - 1) * matrix.columns + (spot.arrayCol - 1);
+    return matrix.values[index] === 1 ? [spot.id] : [];
+  });
+};
+
+const repairProjectedSpotIndex = async (
+  chipConfig: StoredChipConfigSlice,
+): Promise<StoredProjectedSpotIndexEntry[] | null> => {
+  if (chipConfig.projectedSpotIndex) {
+    return chipConfig.projectedSpotIndex;
+  }
+
+  if (chipConfig.chipType !== '50um' && chipConfig.chipType !== '15um') {
+    return null;
+  }
+
+  const chipConfigData = await loadChipConfigData(chipConfig.chipType);
+
+  return chipConfigData.templateEntries
+    .filter((entry) => (
+      (chipConfig.rows === null || entry.arrayRow <= chipConfig.rows)
+      && (chipConfig.columns === null || entry.arrayCol <= chipConfig.columns)
+    ))
+    .map((entry) => ({
+      id: entry.barcode,
+      arrayRow: entry.arrayRow,
+      arrayCol: entry.arrayCol,
+    }));
 };
 
 const persistMetas = (metas: PreprocessProjectMeta[]) => {
@@ -481,12 +554,25 @@ const toProjectMeta = (project: PreprocessProject): PreprocessProjectMeta => ({
   chipConfig: {
     ...project.chipConfig,
     projectedSpots: null,
+    projectedSpotIndex: project.chipConfig.projectedSpots?.map((spot) => ({
+      id: spot.id,
+      arrayRow: spot.arrayRow,
+      arrayCol: spot.arrayCol,
+    })) ?? null,
   },
-  tissueSelection: {
-    ...project.tissueSelection,
+  tissueSelection: (({
+    forcedInSpotIds: _forcedInSpotIds,
+    forcedOutSpotIds: _forcedOutSpotIds,
+    overrideNotice: _overrideNotice,
+    regions: _regions,
+    selectedRegionId: _selectedRegionId,
+    previewDataUrl: _previewDataUrl,
+    ...canonicalTissueSelection
+  }) => ({
+    ...canonicalTissueSelection,
     previewDataUrl: null,
     selectedSpotIds: null,
-  },
+  }))(project.tissueSelection),
   exportState: {
     ...project.exportState,
     artifacts: [],
@@ -590,6 +676,13 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
     writes.push(syncImageStores(meta.id, he, 'he'));
   }
 
+  const repairedProjectedSpotIndex = await repairProjectedSpotIndex(meta.chipConfig);
+
+  const runtimeSelectedSpotIds = selectedSpotIdsFromStoredIndex(
+    meta.tissueSelection.matrix,
+    repairedProjectedSpotIndex,
+  );
+
   const project = migratePreprocessProject({
     ...meta,
     sourceAssets: {
@@ -606,13 +699,43 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
         }
       : meta.heFocus,
     cropQc,
+    chipConfig: {
+      ...meta.chipConfig,
+      projectedSpots: null,
+    },
+    tissueSelection: meta.tissueSelection,
   });
+
+  const hydratedProject = {
+    ...project,
+    chipConfig: (({
+      projectedSpotIndex: _projectedSpotIndex,
+      ...runtimeChipConfig
+    }) => ({
+      ...runtimeChipConfig,
+      projectedSpots: null,
+    }))(project.chipConfig as PreprocessProject['chipConfig'] & {
+      projectedSpotIndex?: StoredProjectedSpotIndexEntry[] | null;
+    }),
+    tissueSelection: (({
+      forcedInSpotIds: _forcedInSpotIds,
+      forcedOutSpotIds: _forcedOutSpotIds,
+      overrideNotice: _overrideNotice,
+      regions: _regions,
+      selectedRegionId: _selectedRegionId,
+      previewDataUrl: _previewDataUrl,
+      ...runtimeTissueSelection
+    }) => ({
+      ...runtimeTissueSelection,
+      selectedSpotIds: runtimeSelectedSpotIds,
+    }))(project.tissueSelection),
+  };
 
   if (writes.length > 0) {
     await Promise.all(writes);
   }
 
-  return project;
+  return hydratedProject;
 };
 
 const readMetas = async (): Promise<PreprocessProjectMeta[]> => readRawProjects() as PreprocessProjectMeta[];

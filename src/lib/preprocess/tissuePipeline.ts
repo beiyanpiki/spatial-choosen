@@ -1,6 +1,7 @@
-import type { ProjectedSpot } from '@/types/preprocess';
+import type { ProjectedSpot, TissueActivationMatrix } from '@/types/preprocess';
 import { getProjectedSpotLowresBounds } from './spotProjection';
 import { applyConnectedSpotCleanup, applyDensityFilter } from './tissueCleanup';
+import { matrixFromSelectedSpotIds } from './tissueMatrix';
 import { normalizeTissueParams, type TissueParams } from './tissueThresholds';
 
 const SPOT_BATCH_YIELD_INTERVAL = 250;
@@ -39,7 +40,34 @@ const computeActivePixelRatio = (args: {
   return totalPixels > 0 ? activePixels / totalPixels : 0;
 };
 
-const buildActivePixelIntegralImage = (data: Uint8ClampedArray, width: number, height: number, blockThreshold: number) => {
+const transformChannels = (args: {
+  thresholdMode: TissueParams['thresholdMode'];
+  r: number;
+  g: number;
+  b: number;
+}) => {
+  const { thresholdMode, r, g, b } = args;
+
+  if (thresholdMode === 'gray-max') {
+    const value = Math.max(r, g, b);
+    return [value, value, value] as const;
+  }
+
+  if (thresholdMode === 'gray-min') {
+    const value = Math.min(r, g, b);
+    return [value, value, value] as const;
+  }
+
+  return [r, g, b] as const;
+};
+
+const buildActivePixelIntegralImage = (
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  blockThreshold: number,
+  thresholdMode: TissueParams['thresholdMode'],
+) => {
   const stride = width + 1;
   const integral = new Uint32Array((height + 1) * stride);
 
@@ -50,7 +78,10 @@ const buildActivePixelIntegralImage = (data: Uint8ClampedArray, width: number, h
       const r = data[offset] ?? 0;
       const g = data[offset + 1] ?? 0;
       const b = data[offset + 2] ?? 0;
-      if (Math.min(r, g, b) <= blockThreshold) {
+      const [workingR, workingG, workingB] = transformChannels({ thresholdMode, r, g, b });
+      const workingIntensity = (workingR + workingG + workingB) / 3;
+
+      if (workingIntensity <= blockThreshold) {
         rowSum += 1;
       }
       integral[(py + 1) * stride + (px + 1)] = integral[py * stride + (px + 1)] + rowSum;
@@ -98,9 +129,93 @@ export type TissueParitySummary = {
 
 export type TissuePipelineResult = {
   selectedIds: string[];
+  matrix: TissueActivationMatrix;
   summary: TissueParitySummary;
   params: TissueParams;
   warning: string | null;
+};
+
+type MatrixAxisResolution = {
+  size: number;
+  offset: number;
+};
+
+type MatrixResolution = {
+  rows: number;
+  columns: number;
+  rowOffset: number;
+  columnOffset: number;
+};
+
+const normalizeExplicitMatrixDimension = (value: number | undefined) => {
+	if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+		return null;
+	}
+
+  return value;
+};
+
+const resolveMatrixAxis = (args: {
+  values: number[];
+  explicitSize?: number;
+}): MatrixAxisResolution => {
+  const validValues = args.values.filter((value) => Number.isInteger(value));
+  const explicitSize = normalizeExplicitMatrixDimension(args.explicitSize);
+
+  if (validValues.length === 0) {
+    return {
+      size: explicitSize ?? 1,
+      offset: 0,
+    };
+  }
+
+  const min = Math.min(...validValues);
+  const max = Math.max(...validValues);
+  const offset = min <= 0 ? 1 - min : 0;
+  const inferredSize = Math.max(max + offset, 1);
+
+  return {
+    size: Math.max(explicitSize ?? 0, inferredSize),
+    offset,
+  };
+};
+
+const resolveMatrixDimensions = (args: {
+  projectedSpots: ProjectedSpot[];
+  explicitRows?: number;
+  explicitColumns?: number;
+}): MatrixResolution => {
+  const rowResolution = resolveMatrixAxis({
+    values: args.projectedSpots.map((spot) => spot.arrayRow),
+    explicitSize: args.explicitRows,
+  });
+  const columnResolution = resolveMatrixAxis({
+    values: args.projectedSpots.map((spot) => spot.arrayCol),
+    explicitSize: args.explicitColumns,
+  });
+
+  return {
+    rows: rowResolution.size,
+    columns: columnResolution.size,
+    rowOffset: rowResolution.offset,
+    columnOffset: columnResolution.offset,
+  };
+};
+
+const normalizeProjectedSpotsForMatrix = (args: {
+  projectedSpots: ProjectedSpot[];
+  rowOffset: number;
+  columnOffset: number;
+}) => {
+  if (args.rowOffset === 0 && args.columnOffset === 0) {
+    return args.projectedSpots;
+  }
+
+  return args.projectedSpots.map((spot) => ({
+    ...spot,
+    arrayRow: spot.arrayRow + args.rowOffset,
+    arrayCol: spot.arrayCol + args.columnOffset,
+  }));
 };
 
 export async function runTissueAutoSelection(args: {
@@ -108,6 +223,8 @@ export async function runTissueAutoSelection(args: {
   cropWidth: number;
   cropHeight: number;
   tissueLowresScaleFactor: number;
+  matrixRows?: number;
+  matrixColumns?: number;
   projectedSpots: ProjectedSpot[];
   params: Partial<TissueParams>;
 }) {
@@ -118,6 +235,7 @@ export async function runTissueAutoSelection(args: {
     imageData.width,
     imageData.height,
     params.blockThreshold,
+    params.thresholdMode,
   );
   const candidateIds: string[] = [];
 
@@ -176,6 +294,22 @@ export async function runTissueAutoSelection(args: {
 
   const selectedCount = selectedIds.length;
   const selectedPercent = args.projectedSpots.length > 0 ? (selectedCount / args.projectedSpots.length) * 100 : 0;
+  const matrixDimensions = resolveMatrixDimensions({
+    projectedSpots: args.projectedSpots,
+    explicitRows: args.matrixRows,
+    explicitColumns: args.matrixColumns,
+  });
+  const matrixProjectedSpots = normalizeProjectedSpotsForMatrix({
+    projectedSpots: args.projectedSpots,
+    rowOffset: matrixDimensions.rowOffset,
+    columnOffset: matrixDimensions.columnOffset,
+  });
+  const matrix = matrixFromSelectedSpotIds({
+    rows: matrixDimensions.rows,
+    columns: matrixDimensions.columns,
+    projectedSpots: matrixProjectedSpots,
+    selectedSpotIds: selectedIds,
+  });
   const summary: TissueParitySummary = {
     selectedCount,
     selectedPercent,
@@ -186,6 +320,7 @@ export async function runTissueAutoSelection(args: {
 
   return {
     selectedIds,
+    matrix,
     summary,
     params,
     warning,

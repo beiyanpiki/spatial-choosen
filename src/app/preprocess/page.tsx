@@ -11,16 +11,18 @@ import {
 import { migratePreprocessProject } from '@/lib/preprocess/migrations';
 import { deserializePreprocessImport } from '@/lib/preprocess/package';
 import { buildUpdatedProjectSnapshot } from '@/lib/preprocess/projectUpdates';
-import { DEFAULT_TISSUE_PARAMS } from '@/lib/preprocess/tissueThresholds';
 import {
   deletePreprocessProject,
   getPreprocessProject,
   readPreprocessProjectSummaries,
-  type PreprocessPersistMode,
   upsertPreprocessProject,
   upsertPreprocessProjectMetadata,
-  type PreprocessProjectSummary,
 } from '@/lib/preprocess/storage';
+import type {
+  PreprocessPersistMode,
+  PreprocessProjectSummary,
+} from '@/lib/preprocess/storage';
+import { DEFAULT_TISSUE_PARAMS } from '@/lib/preprocess/tissueThresholds';
 import type {
   HeFocusSlice,
   PreprocessProject,
@@ -215,17 +217,15 @@ const buildEmptyPreprocessProject = (name: string): PreprocessProject => {
     },
     tissueSelection: {
       ...createSlice('idle'),
-      mode: 'polygon',
       ...DEFAULT_TISSUE_PARAMS,
+      mode: 'matrix',
+      thresholdMode: 'raw',
       autoSelectedSpotIds: [],
-      forcedInSpotIds: [],
-      forcedOutSpotIds: [],
-      overrideNotice: null,
+      matrix: null,
+      supportState: 'unsupported',
+      unsupportedReason: null,
       paritySummary: null,
       warning: null,
-      regions: [],
-      selectedRegionId: null,
-      previewDataUrl: null,
       selectedSpotIds: null,
     },
     exportState: {

@@ -84,18 +84,18 @@ const invalidateChipConfigSlice = (slice: ChipConfigSlice): ChipConfigSlice => (
   projectedSpots: null,
 });
 
-const invalidateTissueSelectionSlice = (slice: TissueSelectionSlice): TissueSelectionSlice => ({
+const invalidateTissueSelectionSlice = (
+  slice: TissueSelectionSlice,
+  options?: { resetSupportMetadata?: boolean },
+): TissueSelectionSlice => ({
   ...markStale(slice),
   previewDataUrl: null,
+  matrix: null,
   autoSelectedSpotIds: [],
   selectedSpotIds: null,
-  forcedInSpotIds: [],
-  forcedOutSpotIds: [],
-  regions: [],
-  selectedRegionId: null,
-  overrideNotice: slice.forcedInSpotIds.length > 0 || slice.forcedOutSpotIds.length > 0 || slice.regions.length > 0
-    ? 'Overrides cleared due to geometry change.'
-    : null,
+  paritySummary: null,
+  supportState: options?.resetSupportMetadata ? 'unsupported' : slice.supportState,
+  unsupportedReason: options?.resetSupportMetadata ? null : slice.unsupportedReason,
 });
 
 const invalidateExportStateSlice = (slice: ExportStateSlice): ExportStateSlice => ({
@@ -104,7 +104,11 @@ const invalidateExportStateSlice = (slice: ExportStateSlice): ExportStateSlice =
   lastExportedAt: null,
 });
 
-const invalidateStep = (project: PreprocessProject, stepId: PreprocessStepId): PreprocessProject => {
+const invalidateStep = (
+  project: PreprocessProject,
+  stepId: PreprocessStepId,
+  causeStepId: PreprocessStepId = stepId,
+): PreprocessProject => {
   switch (stepId) {
     case "sourceAssets":
       return { ...project, sourceAssets: markStale(project.sourceAssets) };
@@ -119,7 +123,12 @@ const invalidateStep = (project: PreprocessProject, stepId: PreprocessStepId): P
     case "chipConfig":
       return { ...project, chipConfig: invalidateChipConfigSlice(project.chipConfig) };
     case "tissueSelection":
-      return { ...project, tissueSelection: invalidateTissueSelectionSlice(project.tissueSelection) };
+      return {
+        ...project,
+        tissueSelection: invalidateTissueSelectionSlice(project.tissueSelection, {
+          resetSupportMetadata: causeStepId !== 'tissueSelection',
+        }),
+      };
     case "exportState":
       return { ...project, exportState: invalidateExportStateSlice(project.exportState) };
     default:
@@ -133,7 +142,7 @@ export function getInvalidatedSteps(stepId: PreprocessStepId): readonly Preproce
 
 export function invalidateFromStep(project: PreprocessProject, stepId: PreprocessStepId): PreprocessProject {
   return PREPROCESS_INVALIDATION_GRAPH[stepId].reduce(
-    (nextProject, downstreamStepId) => invalidateStep(nextProject, downstreamStepId),
+    (nextProject, downstreamStepId) => invalidateStep(nextProject, downstreamStepId, stepId),
     project,
   );
 }
@@ -159,7 +168,7 @@ export function invalidateOnCropQcChange(project: PreprocessProject): Preprocess
 }
 
 export function invalidateOnChipConfigChange(project: PreprocessProject): PreprocessProject {
-  return invalidateFromStep(invalidateStep(project, 'chipConfig'), 'chipConfig');
+  return invalidateFromStep(invalidateStep(project, 'chipConfig', 'chipConfig'), 'chipConfig');
 }
 
 export function invalidateOnTissueSelectionChange(project: PreprocessProject): PreprocessProject {

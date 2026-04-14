@@ -1,8 +1,8 @@
 {
   "id": "50um",
   "label": "Square grid 50um",
-  "gridRows": 50,
-  "gridCols": 50,
+  "gridRows": 64,
+  "gridCols": 64,
   "spotDiameter": 50,
   "spotGap": 50,
   "barcodeTemplatePath": "/preprocess-chip-configs/50um/tissue_positions.csv",

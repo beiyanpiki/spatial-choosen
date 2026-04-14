@@ -322,33 +322,81 @@ export type TissueRegion = {
   paths?: PreprocessPoint[][];
 };
 
-export type TissueSelectionSlice = PreprocessSliceBase & {
-  mode: "polygon" | "brush" | "threshold" | "imported";
-  thresholdMode: 'gray-min';
+export type TissueActivationValue = 0 | 1;
+
+export type TissueActivationMatrix = {
+  rows: number;
+  columns: number;
+  values: TissueActivationValue[];
+};
+
+export type TissueSelectionSupportState = 'supported' | 'unsupported';
+
+export type TissueThresholdMode = 'raw' | 'gray-max' | 'gray-min';
+
+export type LegacyTissueThresholdMode = TissueThresholdMode | 'dark' | 'light';
+
+export type CanonicalTissueSelectionMode = 'matrix' | 'imported';
+
+export type LegacyTissueSelectionMode = CanonicalTissueSelectionMode | 'polygon' | 'brush' | 'threshold';
+
+export type CanonicalTissueSelectionSlice = PreprocessSliceBase & {
+  mode: CanonicalTissueSelectionMode;
+  thresholdMode: TissueThresholdMode;
   activationThreshold: number;
   blockThreshold: number;
   dbscanEps: number;
   dbscanMinSamples: number;
   minConnectedSpotCount: number;
   autoSelectedSpotIds: string[];
-  forcedInSpotIds: string[];
-  forcedOutSpotIds: string[];
-  overrideNotice: string | null;
+  matrix: TissueActivationMatrix | null;
+  supportState: TissueSelectionSupportState;
+  unsupportedReason: string | null;
+  selectedSpotIds: string[] | null;
   paritySummary: {
     selectedCount: number;
     selectedPercent: number;
     maskCoverage: number;
   } | null;
   warning: string | null;
+};
+
+type TissueSelectionLegacyCompatibilityFields = {
+  forcedInSpotIds: string[];
+  forcedOutSpotIds: string[];
+  overrideNotice: string | null;
   regions: TissueRegion[];
   selectedRegionId: string | null;
   previewDataUrl: string | null;
-  selectedSpotIds: string[] | null;
 };
 
-export type LegacyTissueSelectionSlice = Omit<TissueSelectionSlice, 'thresholdMode'> & {
-  thresholdMode: 'dark' | 'light' | 'gray-min';
-};
+/**
+ * Transitional runtime contract for Task 2.
+ *
+ * Canonical tissue state is matrix-first, but the legacy region-based fields
+ * remain available so downstream consumers can keep compiling until later
+ * rewiring tasks land.
+ */
+export type TissueSelectionSlice = CanonicalTissueSelectionSlice
+  & Partial<TissueSelectionLegacyCompatibilityFields> & {
+    mode: LegacyTissueSelectionMode;
+    thresholdMode: LegacyTissueThresholdMode;
+  };
+
+/**
+ * Legacy migration input contract.
+ *
+ * Older stored/package payloads may still arrive region-first and without the
+ * canonical matrix/support fields until the dedicated migration rewiring lands.
+ */
+export type LegacyTissueSelectionSlice = Omit<CanonicalTissueSelectionSlice, 'mode' | 'thresholdMode' | 'matrix' | 'supportState' | 'unsupportedReason'>
+  & TissueSelectionLegacyCompatibilityFields & {
+    mode: LegacyTissueSelectionMode;
+    thresholdMode: LegacyTissueThresholdMode;
+    matrix?: TissueActivationMatrix | null;
+    supportState?: TissueSelectionSupportState;
+    unsupportedReason?: string | null;
+  };
 
 export type LegacyCropQcSlice = Omit<
   CropQcSlice,
