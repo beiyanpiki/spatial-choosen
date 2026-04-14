@@ -458,6 +458,7 @@ export function PreprocessWorkspace({
 	const [tissueTool, setTissueTool] = useState<TissueTool>("activate");
 	const [isDetectingTissue, setIsDetectingTissue] = useState(false);
 	const tissueDetectionRequestTokenRef = useRef(0);
+	const chipConfigRequestTokenRef = useRef(0);
 
 	useEffect(() => () => {
 		if (focusedHeMovingImage?.thumbnailObjectUrl) {
@@ -1080,7 +1081,8 @@ export function PreprocessWorkspace({
 							? error.message
 							: "Failed to load chip manifests";
 					setChipConfigError(message);
-																								onProjectMutate((current) => ({
+					onProjectMutate((current) => ({
+
 						...current,
 						chipConfig: {
 							...current.chipConfig,
@@ -1092,6 +1094,7 @@ export function PreprocessWorkspace({
 					}));
 				}
 			});
+
 
 		return () => {
 			cancelled = true;
@@ -1286,6 +1289,7 @@ export function PreprocessWorkspace({
 	]);
 	const isTissueInteractionDisabled =
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
+	const isChipSelectorDisabled = isDetectingTissue;
 
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
@@ -1832,7 +1836,7 @@ export function PreprocessWorkspace({
 												<CardBody p={4}>
 													<Stack spacing={3}>
 														<Text fontSize="sm" fontWeight="semibold">Chip size</Text>
-														<FormControl isDisabled={isTissueInteractionDisabled}>
+														<FormControl isDisabled={isChipSelectorDisabled}>
 															<FormLabel fontSize="xs" color="gray.500" mb={1.5}>Capture pitch</FormLabel>
 															<Select
 																value={project.chipConfig.chipType ?? ""}
@@ -1844,80 +1848,114 @@ export function PreprocessWorkspace({
 																	if (!project.cropQc.cropWidth || !project.cropQc.cropHeight) return;
 																	const cropWidth = project.cropQc.cropWidth;
 																	const cropHeight = project.cropQc.cropHeight;
-																	void (async () => {
-																		try {
-																			setChipConfigError(null);
-																			const config = await loadChipConfigData(chipId);
-													const projectedSpots = projectSpotsForCrop({
-														chip: config.manifest,
-														templateEntries: config.templateEntries,
-														cropWidth,
-														cropHeight,
-													});
-													const spotDiameterFullres = resolveAuthoritativeSpotDiameterFullres({
-														projectedSpots,
-														cropWidth,
-														cropHeight,
-													});
-													if (spotDiameterFullres === null) {
-														throw new Error("Projected spot diameter metadata is unavailable.");
-													}
-													const timestamp = new Date().toISOString();
+																const chipRequestToken = ++chipConfigRequestTokenRef.current;
+																void (async () => {
+																	try {
+																		setChipConfigError(null);
+																		const config = await loadChipConfigData(chipId);
+																		if (chipConfigRequestTokenRef.current !== chipRequestToken) {
+																			return;
+																		}
+																		const nextSupport = resolveTissueSelectionSupport({
+																			chipType: config.manifest.id,
+																			rows: config.manifest.gridRows,
+																			columns: config.manifest.gridCols,
+																		});
 
-													onProjectMutate((current) => ({
-														...current,
-														cropQc: {
-															...current.cropQc,
-															spot_diameter_fullres: spotDiameterFullres,
-															updatedAt: timestamp,
-														},
-														chipConfig: {
-															...current.chipConfig,
-															chipType: config.manifest.id,
-																					rows: config.manifest.gridRows,
-																					columns: config.manifest.gridCols,
-																					pitchX: config.manifest.spotGap,
-																					pitchY: config.manifest.spotGap,
-																					origin: { x: 0, y: 0 },
-																					rotationDegrees: 0,
-																					projectedSpots,
-																					status: "complete",
-																					isStale: false,
-																					updatedAt: timestamp,
-																					error: null,
-																				},
-												tissueSelection: {
-													...current.tissueSelection,
-													supportState: tissueSupport.supportState,
-													unsupportedReason: tissueSupport.unsupportedReason,
-													matrix: null,
-													autoSelectedSpotIds: [],
-													selectedSpotIds: [],
-													paritySummary: null,
-													warning: null,
-													status: "stale",
-													isStale: true,
-													updatedAt: timestamp,
-													error: null,
-												},
+																	const projectedSpots = projectSpotsForCrop({
+																		chip: config.manifest,
+																		templateEntries: config.templateEntries,
+																		cropWidth,
+																		cropHeight,
+																	});
+																	const spotDiameterFullres = resolveAuthoritativeSpotDiameterFullres({
+																		projectedSpots,
+																		cropWidth,
+																		cropHeight,
+																	});
+																	if (spotDiameterFullres === null) {
+																		throw new Error("Projected spot diameter metadata is unavailable.");
+																	}
+																	const timestamp = new Date().toISOString();
 
-																				exportState: {
-																					...current.exportState,
-																					status: "stale",
-																					isStale: true,
-																					updatedAt: timestamp,
-																					lastExportedAt: null,
-																					artifacts: [],
-																					error: null,
-																				},
-																			}));
-																		} catch (error) {
-																			const message =
-																				error instanceof Error
-																					? error.message
-																					: "Failed to load chip config";
-																			setChipConfigError(message);
-																			onProjectMutate((current) => ({
+																	onProjectMutate((current) => {
+																		if (
+																			chipConfigRequestTokenRef.current !== chipRequestToken
+																			|| current.cropQc.cropWidth !== cropWidth
+																			|| current.cropQc.cropHeight !== cropHeight
+																		) {
+																			return current;
+																		}
+																		return {
+																			...current,
+																			cropQc: {
+																				...current.cropQc,
+																				spot_diameter_fullres: spotDiameterFullres,
+																				updatedAt: timestamp,
+																			},
+																			chipConfig: {
+																				...current.chipConfig,
+																				chipType: config.manifest.id,
+																				rows: config.manifest.gridRows,
+																				columns: config.manifest.gridCols,
+																				pitchX: config.manifest.spotGap,
+																				pitchY: config.manifest.spotGap,
+																				origin: { x: 0, y: 0 },
+																				rotationDegrees: 0,
+																				projectedSpots,
+																				status: "complete",
+																				isStale: false,
+																				updatedAt: timestamp,
+																				error: null,
+																			},
+																			tissueSelection: {
+																				...current.tissueSelection,
+																				supportState: nextSupport.supportState,
+																				unsupportedReason: nextSupport.unsupportedReason,
+																				matrix: null,
+																				autoSelectedSpotIds: [],
+																				selectedSpotIds: null,
+																				paritySummary: null,
+																				warning: null,
+																				status: "stale",
+																				isStale: true,
+																				updatedAt: timestamp,
+																				error: null,
+																			},
+																			exportState: {
+																				...current.exportState,
+																				status: "stale",
+																				isStale: true,
+																				updatedAt: timestamp,
+																				lastExportedAt: null,
+																				artifacts: [],
+																				error: null,
+																			},
+																		};
+																	});
+																	} catch (error) {
+																		if (chipConfigRequestTokenRef.current !== chipRequestToken) {
+																			return;
+																		}
+																		const message =
+																			error instanceof Error
+																				? error.message
+																				: "Failed to load chip config";
+																		const nextSupport = resolveTissueSelectionSupport({
+																			chipType: chipId,
+																			rows: null,
+																			columns: null,
+																		});
+																		setChipConfigError(message);
+																		onProjectMutate((current) => {
+																			if (
+																				chipConfigRequestTokenRef.current !== chipRequestToken
+																				|| current.cropQc.cropWidth !== cropWidth
+																				|| current.cropQc.cropHeight !== cropHeight
+																			) {
+																				return current;
+																			}
+																			return {
 																				...current,
 																				chipConfig: {
 																					...current.chipConfig,
@@ -1928,21 +1966,20 @@ export function PreprocessWorkspace({
 																					updatedAt: new Date().toISOString(),
 																					error: message,
 																				},
-												tissueSelection: {
-													...current.tissueSelection,
-													supportState: tissueSupport.supportState,
-													unsupportedReason: tissueSupport.unsupportedReason,
-													matrix: null,
-													autoSelectedSpotIds: [],
-													selectedSpotIds: [],
-													paritySummary: null,
-													warning: message,
-													status: "error",
-													isStale: false,
-													updatedAt: new Date().toISOString(),
-													error: message,
-												},
-
+																				tissueSelection: {
+																					...current.tissueSelection,
+																					supportState: nextSupport.supportState,
+																					unsupportedReason: nextSupport.unsupportedReason,
+																					matrix: null,
+																					autoSelectedSpotIds: [],
+																					selectedSpotIds: null,
+																					paritySummary: null,
+																					warning: null,
+																					status: "error",
+																					isStale: false,
+																					updatedAt: new Date().toISOString(),
+																					error: message,
+																				},
 																				exportState: {
 																					...current.exportState,
 																					status: "stale",
@@ -1952,9 +1989,11 @@ export function PreprocessWorkspace({
 																					artifacts: [],
 																					error: null,
 																				},
-																			}));
-																		}
-																	})();
+																			};
+																		});
+																	}
+																})();
+
 																}}
 															>
 																<option value="15um">15um</option>
@@ -1971,46 +2010,125 @@ export function PreprocessWorkspace({
 												</CardBody>
 											</Card>
 
-											<TissueSelectionControls
-												thresholdMode={project.tissueSelection.thresholdMode}
-												supportState={tissueSupport.supportState}
-												unsupportedReason={tissueSupport.unsupportedReason}
-												isDetecting={isDetectingTissue}
-												tissueTool={tissueTool}
-												onThresholdModeChange={(thresholdMode) => {
-													onProjectMutate((current) => {
-														const nextSupport = resolveTissueSelectionSupport({
-															chipType: current.chipConfig.chipType,
-															rows: current.chipConfig.rows,
-															columns: current.chipConfig.columns,
-														});
+										<TissueSelectionControls
+											thresholdMode={project.tissueSelection.thresholdMode}
+											activationThreshold={project.tissueSelection.activationThreshold}
+											blockThreshold={project.tissueSelection.blockThreshold}
+											supportState={tissueSupport.supportState}
+											unsupportedReason={tissueSupport.unsupportedReason}
+											isDetecting={isDetectingTissue}
+											tissueTool={tissueTool}
+											onThresholdModeChange={(thresholdMode) => {
+												onProjectMutate((current) => {
+													const nextSupport = resolveTissueSelectionSupport({
+														chipType: current.chipConfig.chipType,
+														rows: current.chipConfig.rows,
+														columns: current.chipConfig.columns,
+													});
+													const updatedAt = new Date().toISOString();
 
-														return {
-															...current,
-															tissueSelection: {
-																...current.tissueSelection,
-																thresholdMode,
-																supportState: nextSupport.supportState,
-																unsupportedReason: nextSupport.unsupportedReason,
-																status: "ready",
-																warning: null,
-																isStale: false,
-																updatedAt: new Date().toISOString(),
-															},
-															exportState: {
-																...current.exportState,
-																status: "stale",
-																isStale: true,
-																updatedAt: new Date().toISOString(),
-															},
-														};
-													}, { mode: "metadata", strategy: "debounced" });
-												}}
-												onTissueToolChange={setTissueTool}
-												onRunAutoDetection={() => {
-													void runTissueAutoDetection();
-												}}
-											/>
+													return {
+														...current,
+																			tissueSelection: {
+																				...current.tissueSelection,
+																				thresholdMode,
+																				supportState: nextSupport.supportState,
+																				unsupportedReason: nextSupport.unsupportedReason,
+																				status: "stale",
+																				warning: null,
+																				error: null,
+																				isStale: true,
+																				updatedAt,
+																			},
+
+														exportState: {
+															...current.exportState,
+															status: "stale",
+															isStale: true,
+															updatedAt,
+															lastExportedAt: null,
+															artifacts: [],
+															error: null,
+														},
+													};
+												}, { mode: "metadata", strategy: "debounced" });
+											}}
+											onActivationThresholdChange={(activationThreshold) => {
+												onProjectMutate((current) => {
+													const nextSupport = resolveTissueSelectionSupport({
+														chipType: current.chipConfig.chipType,
+														rows: current.chipConfig.rows,
+														columns: current.chipConfig.columns,
+													});
+													const updatedAt = new Date().toISOString();
+
+													return {
+														...current,
+																			tissueSelection: {
+																				...current.tissueSelection,
+																				activationThreshold,
+																				supportState: nextSupport.supportState,
+																				unsupportedReason: nextSupport.unsupportedReason,
+																				status: "stale",
+																				warning: null,
+																				error: null,
+																				isStale: true,
+																				updatedAt,
+																			},
+
+														exportState: {
+															...current.exportState,
+															status: "stale",
+															isStale: true,
+															updatedAt,
+															lastExportedAt: null,
+															artifacts: [],
+															error: null,
+														},
+													};
+												}, { mode: "metadata", strategy: "debounced" });
+											}}
+											onBlockThresholdChange={(blockThreshold) => {
+												onProjectMutate((current) => {
+													const nextSupport = resolveTissueSelectionSupport({
+														chipType: current.chipConfig.chipType,
+														rows: current.chipConfig.rows,
+														columns: current.chipConfig.columns,
+													});
+													const updatedAt = new Date().toISOString();
+
+													return {
+														...current,
+																			tissueSelection: {
+																				...current.tissueSelection,
+																				blockThreshold,
+																				supportState: nextSupport.supportState,
+																				unsupportedReason: nextSupport.unsupportedReason,
+																				status: "stale",
+																				warning: null,
+																				error: null,
+																				isStale: true,
+																				updatedAt,
+																			},
+
+														exportState: {
+															...current.exportState,
+															status: "stale",
+															isStale: true,
+															updatedAt,
+															lastExportedAt: null,
+															artifacts: [],
+															error: null,
+														},
+													};
+												}, { mode: "metadata", strategy: "debounced" });
+											}}
+											onTissueToolChange={setTissueTool}
+											onRunAutoDetection={() => {
+												void runTissueAutoDetection();
+											}}
+										/>
+
 
 
 											<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">

@@ -363,6 +363,153 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     mockLoadChipConfigData.mockResolvedValue(null);
   });
 
+  it('uses edited activation and block thresholds for the next auto-detection run without auto-running on edit', async () => {
+    mockRunTissueAutoSelection.mockResolvedValue({
+      selectedIds: [],
+      matrix: {
+        rows: 96,
+        columns: 96,
+        values: Array.from({ length: 96 * 96 }, () => 0 as const),
+      },
+      summary: {
+        selectedCount: 0,
+        selectedPercent: 0,
+        maskCoverage: 0,
+      },
+      params: {
+        thresholdMode: 'raw',
+        activationThreshold: 0.25,
+        blockThreshold: 120,
+        dbscanEps: 0.2,
+        dbscanMinSamples: 2,
+        minConnectedSpotCount: 2,
+      },
+      warning: null,
+    });
+
+    const user = userEvent.setup();
+    render(<WorkspaceHarness />);
+
+    const activationInput = screen.getByTestId('tissue-activation-threshold-input');
+    const blockInput = screen.getByTestId('tissue-block-threshold-input');
+    const runAutoButton = screen.getByTestId('tissue-run-auto');
+
+    expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('raw');
+    expect(activationInput).toHaveValue(0.1);
+    expect(blockInput).toHaveValue(120);
+
+    await user.clear(activationInput);
+    await user.type(activationInput, '0.25');
+
+    expect(activationInput).toHaveValue(0.25);
+    expect(mockRunTissueAutoSelection).not.toHaveBeenCalled();
+    expect(screen.getByTestId('tissue-detection-status')).toHaveTextContent(
+      'Choose a threshold mode and run auto detection to refresh the tissue matrix.',
+    );
+
+    await user.clear(blockInput);
+    await user.type(blockInput, '140');
+
+    expect(blockInput).toHaveValue(140);
+    expect(mockRunTissueAutoSelection).not.toHaveBeenCalled();
+    expect(screen.getByTestId('tissue-detection-status')).toHaveTextContent(
+      'Choose a threshold mode and run auto detection to refresh the tissue matrix.',
+    );
+
+    await user.click(runAutoButton);
+
+    await waitFor(() => {
+      expect(mockRunTissueAutoSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            activationThreshold: 0.25,
+            blockThreshold: 140,
+          }),
+        }),
+      );
+    });
+  });
+
+  it('keeps chip switching available for unsupported tissue support and clears matrix-backed selection state on chip change', async () => {
+    mockLoadChipConfigData.mockResolvedValue({
+      manifest: {
+        id: '50um',
+        gridRows: 78,
+        gridCols: 64,
+        spotGap: 2,
+      },
+      templateEntries: [],
+    });
+
+    const user = userEvent.setup();
+    render(<WorkspaceHarness />);
+
+    const chipSizeSelect = screen.getByTestId('tissue-chip-size-select');
+    const thresholdModeSelect = screen.getByTestId('tissue-threshold-mode-select');
+    const runAutoButton = screen.getByTestId('tissue-run-auto');
+    const activateButton = screen.getByTestId('tissue-tool-activate');
+    const deactivateButton = screen.getByTestId('tissue-tool-deactivate');
+
+    mockRunTissueAutoSelection.mockResolvedValueOnce({
+      selectedIds: ['spot-a'],
+      matrix: {
+        rows: 96,
+        columns: 96,
+        values: [1, 0, ...Array.from({ length: 96 * 96 - 2 }, () => 0 as 0 | 1)],
+      },
+      summary: {
+        selectedCount: 1,
+        selectedPercent: 50,
+        maskCoverage: 50,
+      },
+      params: {
+        thresholdMode: 'raw',
+        activationThreshold: 0.1,
+        blockThreshold: 120,
+        dbscanEps: 0.2,
+        dbscanMinSamples: 2,
+        minConnectedSpotCount: 2,
+      },
+      warning: null,
+    });
+
+    expect(chipSizeSelect).toBeEnabled();
+    expect(thresholdModeSelect).not.toBeDisabled();
+    expect(runAutoButton).not.toBeDisabled();
+    expect(activateButton).not.toBeDisabled();
+    expect(deactivateButton).not.toBeDisabled();
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Selected spots: 0');
+
+    await user.click(runAutoButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Selected spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Selected spots: 1');
+    });
+
+    await user.selectOptions(thresholdModeSelect, 'gray-max');
+    expect(thresholdModeSelect).toHaveValue('gray-max');
+    expect(chipSizeSelect).toBeEnabled();
+
+    await user.selectOptions(chipSizeSelect, '50um');
+
+    await waitFor(() => {
+      expect(chipSizeSelect).toHaveValue('50um');
+    });
+
+    expect(
+      screen.getByText('Tissue selection currently supports only 15um and 50um chips.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('50um tissue selection requires a 64x64 grid.')).toBeInTheDocument();
+    expect(chipSizeSelect).toBeEnabled();
+    expect(thresholdModeSelect).toBeDisabled();
+    expect(runAutoButton).toBeDisabled();
+    expect(activateButton).toBeDisabled();
+    expect(deactivateButton).toBeDisabled();
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Selected spots: 0');
+    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Selected spots: 0');
+  });
+
   it('keeps only the latest auto-detection result when an older request resolves last', async () => {
     const requestA = createDeferred<{
       selectedIds: string[];
@@ -402,6 +549,10 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     const user = userEvent.setup();
     await user.click(screen.getByTestId('tissue-run-auto'));
 
+    await waitFor(() => {
+      expect(mockRunTissueAutoSelection).toHaveBeenCalledTimes(1);
+    });
+
     requestA.resolve({
       selectedIds: ['spot-a'],
       matrix: {
@@ -426,11 +577,17 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     });
     await flushPromises();
 
-    expect(screen.getByTestId('tissue-threshold-mode-select')).not.toBeDisabled();
-    await user.selectOptions(screen.getByTestId('tissue-threshold-mode-select'), 'gray-max');
-    expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
+    await waitFor(() => {
+      expect(screen.getByTestId('tissue-threshold-mode-select')).not.toBeDisabled();
+      expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('raw');
+    });
 
+    await user.selectOptions(screen.getByTestId('tissue-threshold-mode-select'), 'gray-max');
     await user.click(screen.getByTestId('tissue-run-auto'));
+
+    await waitFor(() => {
+      expect(mockRunTissueAutoSelection).toHaveBeenCalledTimes(2);
+    });
 
     requestB.resolve({
       selectedIds: ['spot-b'],
@@ -446,6 +603,35 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
       },
       params: {
         thresholdMode: 'gray-max',
+        activationThreshold: 0.1,
+        blockThreshold: 120,
+        dbscanEps: 0.2,
+        dbscanMinSamples: 2,
+        minConnectedSpotCount: 2,
+      },
+      warning: null,
+    });
+    await flushPromises();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Selected spots: 1');
+    });
+
+    requestA.resolve({
+      selectedIds: ['spot-a'],
+      matrix: {
+        rows: 96,
+        columns: 96,
+        values: [1, 0, ...Array.from({ length: 96 * 96 - 2 }, () => 0 as 0 | 1)],
+      },
+      summary: {
+        selectedCount: 1,
+        selectedPercent: 50,
+        maskCoverage: 50,
+      },
+      params: {
+        thresholdMode: 'raw',
         activationThreshold: 0.1,
         blockThreshold: 120,
         dbscanEps: 0.2,
