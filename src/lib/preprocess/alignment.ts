@@ -1095,15 +1095,11 @@ export function solveAffineAlignment({
 			qualityFlags.scaleRange &&
 			hasSufficientCoverage;
 
-		const solveAccepted = effectiveSolveMode === "allPoints" || effectiveSolveMode === "inlierSubset"
-			? finiteMatrix && affineMatrix !== null
-			: qualityFlags.accepted;
+		const solveAccepted = qualityFlags.accepted;
 
-		const failureReason = effectiveSolveMode === "allPoints" || effectiveSolveMode === "inlierSubset"
-			? null
-			: hasSufficientCoverage
-				? resolveFailureReason(qualityFlags, solveFailed)
-				: "insufficient-inliers";
+		const failureReason = hasSufficientCoverage
+			? resolveFailureReason(qualityFlags, solveFailed)
+			: "insufficient-inliers";
 
 		return {
 			inlierMask,

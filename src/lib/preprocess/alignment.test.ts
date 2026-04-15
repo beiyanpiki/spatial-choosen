@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AlignmentControlPoint } from '@/types/preprocess';
-import { solveAffineAlignment } from './alignment';
+import { computeAlignmentStatus, solveAffineAlignment } from './alignment';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
 
 class FakeMat implements CvMat {
@@ -98,8 +98,51 @@ const controlPoints: AlignmentControlPoint[] = [
 	},
 ];
 
+const acceptedControlPoints: AlignmentControlPoint[] = [
+	{
+		id: 'a1',
+		target: { x: 0.1, y: 0.1 },
+		source: { x: 0.14, y: 0.13 },
+	},
+	{
+		id: 'a2',
+		target: { x: 0.9, y: 0.1 },
+		source: { x: 0.86, y: 0.13 },
+	},
+	{
+		id: 'a3',
+		target: { x: 0.1, y: 0.9 },
+		source: { x: 0.14, y: 0.85 },
+	},
+	{
+		id: 'a4',
+		target: { x: 0.9, y: 0.9 },
+		source: { x: 0.86, y: 0.85 },
+	},
+	{
+		id: 'a5',
+		target: { x: 0.5, y: 0.2 },
+		source: { x: 0.5, y: 0.22 },
+	},
+	{
+		id: 'a6',
+		target: { x: 0.2, y: 0.5 },
+		source: { x: 0.23, y: 0.49 },
+	},
+	{
+		id: 'a7',
+		target: { x: 0.35, y: 0.75 },
+		source: { x: 0.365, y: 0.715 },
+	},
+	{
+		id: 'a8',
+		target: { x: 0.75, y: 0.35 },
+		source: { x: 0.725, y: 0.355 },
+	},
+];
+
 describe('solveAffineAlignment', () => {
-	it('uses every marked point in all-points mode without filtering them into valid inliers', () => {
+	it('keeps every marked point in all-points mode while strict acceptance rejects the solve', () => {
 		const result = solveAffineAlignment({
 			cv: fakeCv,
 			controlPoints,
@@ -109,10 +152,58 @@ describe('solveAffineAlignment', () => {
 			solveMode: 'allPoints',
 		});
 
-		expect(result.solveAccepted).toBe(true);
-		expect(result.failureReason).toBeNull();
+		expect(result.solveAccepted).toBe(false);
+		expect(result.qualityFlags.accepted).toBe(false);
+		expect(result.failureReason).not.toBeNull();
 		expect(result.inlierMask).toEqual(Array.from({ length: controlPoints.length }, () => true));
 		expect(result.inlierRatio).toBe(1);
 		expect(result.affineMatrix).not.toBeNull();
+	});
+
+	it('keeps solveAccepted separate from strict quality acceptance in all-points mode', () => {
+		const result = solveAffineAlignment({
+			cv: fakeCv,
+			controlPoints,
+			chipBounds: null,
+			referenceImageSize: { width: 1000, height: 1000 },
+			movingImageSize: { width: 1000, height: 1000 },
+			solveMode: 'allPoints',
+		});
+
+		expect(result.affineMatrix).not.toBeNull();
+		expect(result.qualityFlags.accepted).toBe(false);
+		expect(result.solveAccepted).toBe(false);
+		expect(result.failureReason).not.toBeNull();
+		expect(
+			computeAlignmentStatus({
+				hasReferenceImage: true,
+				hasMovingImage: true,
+				solveAccepted: result.solveAccepted,
+				failureReason: result.failureReason,
+			}),
+		).not.toBe('complete');
+	});
+
+	it('accepts a clean all-points solve and reports a complete alignment status', () => {
+		const result = solveAffineAlignment({
+			cv: fakeCv,
+			controlPoints: acceptedControlPoints,
+			chipBounds: null,
+			referenceImageSize: { width: 1000, height: 1000 },
+			movingImageSize: { width: 1000, height: 1000 },
+			solveMode: 'allPoints',
+		});
+
+		expect(result.affineMatrix).not.toBeNull();
+		expect(result.qualityFlags.accepted).toBe(true);
+		expect(result.solveAccepted).toBe(true);
+		expect(
+			computeAlignmentStatus({
+				hasReferenceImage: true,
+				hasMovingImage: true,
+				solveAccepted: result.solveAccepted,
+				failureReason: result.failureReason,
+			}),
+		).toBe('complete');
 	});
 });
