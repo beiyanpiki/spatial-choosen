@@ -195,6 +195,25 @@ const createLegacyProject = (): LegacyPreprocessProject => ({
   },
 });
 
+const applyCanonicalEmptyCropContract = (project: LegacyPreprocessProject) => {
+  Object.assign(project.cropQc, {
+    cropAssets: {
+      eosin: null,
+      he: null,
+    },
+    tissue_hires_scalef: null,
+    tissue_lowres_scalef: null,
+    spot_diameter_fullres: null,
+    fiducial_diameter_fullres: null,
+    checkerboardPreview: {
+      dataUrl: null,
+    },
+    featureMatchesPreview: {
+      dataUrl: null,
+    },
+  });
+};
+
 describe('migratePreprocessProject tissue matrix migration', () => {
   it('migrates selectedSpotIds legacy state into canonical matrix-first tissue data', () => {
     const project = createLegacyProject();
@@ -308,5 +327,63 @@ describe('migratePreprocessProject tissue matrix migration', () => {
     });
     expect(migrated.tissueSelection.selectedSpotIds).toEqual([]);
     expect(migrated.tissueSelection.warning).toMatch(/50um/i);
+  });
+
+  it('rewinds legacy projects on crop or later back to alignment when strict alignment acceptance is false', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'cropQc';
+    project.alignment.status = 'complete';
+    project.alignment.qualityFlags.accepted = false;
+    project.alignment.solveAccepted = false;
+    applyCanonicalEmptyCropContract(project);
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.currentStep).toBe('alignment');
+    expect(migrated.alignment.status).not.toBe('complete');
+  });
+
+  it('stales downstream slices when legacy alignment is complete-looking but strict acceptance is false', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'tissueSelection';
+    project.alignment.status = 'complete';
+    project.alignment.qualityFlags.accepted = false;
+    project.alignment.solveAccepted = false;
+    project.cropQc.status = 'complete';
+    project.cropQc.qcAccepted = true;
+    project.chipConfig.status = 'complete';
+    project.tissueSelection.status = 'complete';
+    project.exportState.status = 'ready';
+    applyCanonicalEmptyCropContract(project);
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.currentStep).toBe('alignment');
+    expect(migrated.cropQc.status).toBe('stale');
+    expect(migrated.chipConfig.status).toBe('stale');
+    expect(migrated.tissueSelection.status).toBe('stale');
+    expect(migrated.exportState.status).toBe('stale');
+  });
+
+  it('keeps currentStep on alignment but still stales downstream slices for invalid legacy complete alignment', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'alignment';
+    project.alignment.status = 'complete';
+    project.alignment.qualityFlags.accepted = false;
+    project.alignment.solveAccepted = false;
+    project.cropQc.status = 'complete';
+    project.cropQc.qcAccepted = true;
+    project.chipConfig.status = 'complete';
+    project.tissueSelection.status = 'complete';
+    project.exportState.status = 'ready';
+    applyCanonicalEmptyCropContract(project);
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.currentStep).toBe('alignment');
+    expect(migrated.cropQc.status).toBe('stale');
+    expect(migrated.chipConfig.status).toBe('stale');
+    expect(migrated.tissueSelection.status).toBe('stale');
+    expect(migrated.exportState.status).toBe('stale');
   });
 });

@@ -17,6 +17,7 @@ import {
 	PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
 	PREPROCESS_STORAGE_SCHEMA_VERSION,
 } from "./constants";
+import { computeAlignmentStatus, normalizeAlignmentSlice } from "./alignment";
 import { DEFAULT_LOCALIZATION_IMAGE_TRANSFORM } from "./localization";
 import {
 	createEmptyMatrix,
@@ -43,6 +44,13 @@ const STEPS_BEYOND_LOCALIZATION = new Set<PreprocessStepId>([
 ]);
 
 const STEPS_BEYOND_CROP_QC = new Set<PreprocessStepId>([
+	"chipConfig",
+	"tissueSelection",
+	"exportState",
+]);
+
+const STEPS_AT_OR_BEYOND_CROP_QC = new Set<PreprocessStepId>([
+	"cropQc",
 	"chipConfig",
 	"tissueSelection",
 	"exportState",
@@ -100,6 +108,8 @@ const shouldRewindToHeFocus = (stepId: PreprocessStepId) =>
 	STEPS_BEYOND_LOCALIZATION.has(stepId);
 const shouldRewindToCropQc = (stepId: PreprocessStepId) =>
 	STEPS_BEYOND_CROP_QC.has(stepId);
+const shouldRewindToAlignment = (stepId: PreprocessStepId) =>
+	STEPS_AT_OR_BEYOND_CROP_QC.has(stepId);
 const shouldRewindToChipConfig = (stepId: PreprocessStepId) =>
 	STEPS_BEYOND_CHIP_CONFIG.has(stepId);
 
@@ -736,6 +746,43 @@ export function migratePreprocessProject(
 			(project.chipConfig.projectedSpots?.length ?? 0) > 0 ||
 			project.chipConfig.status === "complete" ||
 			project.chipConfig.status === "processing");
+	const normalizedAlignment = normalizeAlignmentSlice(project.alignment);
+	const strictAcceptedAlignment =
+		normalizedAlignment.solveAccepted &&
+		normalizedAlignment.qualityFlags.accepted;
+	const normalizedAlignmentStatus = computeAlignmentStatus({
+		hasReferenceImage: Boolean(
+			project.sourceAssets.images[normalizedAlignment.referenceImage],
+		),
+		hasMovingImage: Boolean(
+			project.sourceAssets.images[normalizedAlignment.movingImage],
+		),
+		solveAccepted: strictAcceptedAlignment,
+		failureReason: normalizedAlignment.failureReason,
+	});
+	const migratedAlignmentStatus =
+		project.alignment.status === "complete"
+			? normalizedAlignmentStatus
+			: normalizedAlignment.status;
+	const hasInvalidLegacyCompleteAlignment =
+		project.alignment.status === "complete" &&
+		migratedAlignmentStatus !== "complete";
+	const needsAlignmentRewind =
+		hasInvalidLegacyCompleteAlignment &&
+		shouldRewindToAlignment(project.currentStep);
+	const needsAlignmentDownstreamReset =
+		hasInvalidLegacyCompleteAlignment &&
+		(shouldRewindToAlignment(project.currentStep) ||
+			project.cropQc.qcAccepted ||
+			project.cropQc.status === "complete" ||
+			project.cropQc.status === "processing" ||
+			project.chipConfig.status === "complete" ||
+			project.chipConfig.status === "processing" ||
+			project.tissueSelection.status === "complete" ||
+			project.tissueSelection.status === "processing" ||
+			project.exportState.status === "ready" ||
+			project.exportState.status === "complete" ||
+			project.exportState.status === "processing");
 
 	const tissueSelection = normalizeCanonicalTissueSelection(project);
 
@@ -750,6 +797,8 @@ export function migratePreprocessProject(
 		currentStep:
 			needsHeFocusMigration && shouldRewindToHeFocus(project.currentStep)
 				? "heFocus"
+				: needsAlignmentRewind
+					? "alignment"
 				: needsCropQcReset && shouldRewindToCropQc(project.currentStep)
 					? "cropQc"
 					: needsChipConfigReset &&
@@ -758,26 +807,35 @@ export function migratePreprocessProject(
 						: project.currentStep,
 		tissueSelection: needsHeFocusMigration
 			? markSliceStale(tissueSelection)
-			: needsCropQcReset || needsChipConfigReset
+			: needsAlignmentDownstreamReset ||
+					needsCropQcReset ||
+					needsChipConfigReset
 				? markSliceStale(tissueSelection)
 				: tissueSelection,
 		heFocus: normalizeHeFocusSlice(project.heFocus),
 		alignment: needsHeFocusMigration
 			? markSliceStale(project.alignment)
-			: project.alignment,
+			: {
+				...normalizedAlignment,
+				status: migratedAlignmentStatus,
+			},
 		cropQc: needsHeFocusMigration
 			? markSliceStale(normalizedCropQc.slice)
-			: needsCropQcReset
+			: needsAlignmentDownstreamReset || needsCropQcReset
 				? markSliceStale(normalizedCropQc.slice)
 				: normalizedCropQc.slice,
 		chipConfig: needsHeFocusMigration
 			? markSliceStale(normalizedChipConfig.slice)
-			: needsCropQcReset || needsChipConfigReset
+			: needsAlignmentDownstreamReset ||
+					needsCropQcReset ||
+					needsChipConfigReset
 				? markSliceStale(normalizedChipConfig.slice)
 				: normalizedChipConfig.slice,
 		exportState: needsHeFocusMigration
 			? markSliceStale(project.exportState)
-			: needsCropQcReset || needsChipConfigReset
+			: needsAlignmentDownstreamReset ||
+					needsCropQcReset ||
+					needsChipConfigReset
 				? markSliceStale(project.exportState)
 				: project.exportState,
 	};

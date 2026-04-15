@@ -371,6 +371,25 @@ describe('preprocess storage tissue metadata', () => {
     expect(Object.hasOwn(hydrated?.tissueSelection ?? {}, 'selectedRegionId')).toBe(false);
   });
 
+  it('keeps a rejected alignment blocked after metadata round-trip hydration', async () => {
+    const project = createProject();
+    project.currentStep = 'alignment';
+    project.alignment.status = 'error';
+    project.alignment.error = 'Rejected alignment';
+    project.alignment.qualityFlags = {
+      ...project.alignment.qualityFlags,
+      accepted: false,
+    };
+    project.alignment.solveAccepted = false;
+
+    upsertPreprocessProjectMetadata(project);
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated?.alignment.status).toBe('error');
+    expect(hydrated?.alignment.qualityFlags.accepted).toBe(false);
+    expect(hydrated?.alignment.solveAccepted).toBe(false);
+  });
+
   it('preserves canonical matrix truth on storage round-trip when autoSelectedSpotIds do not imply the active cells', async () => {
     const project = createProject();
     project.tissueSelection.autoSelectedSpotIds = [];
