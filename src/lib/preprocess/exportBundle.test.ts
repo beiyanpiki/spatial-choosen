@@ -37,6 +37,18 @@ const createProjectedSpot = (
   diameterY: 0.008,
 });
 
+const createSourceImage = (kind: 'eosin' | 'he') => ({
+  id: `source-${kind}`,
+  kind,
+  fileName: `${kind}.png`,
+  mimeType: 'image/png',
+  sizeBytes: 1,
+  width: 1,
+  height: 1,
+  lastModified: 0,
+  dataUrl: PNG_DATA_URL,
+});
+
 const createMatrix = (
   rows: number,
   columns: number,
@@ -88,7 +100,7 @@ const createBaseProject = (): PreprocessProject => {
     updatedAt: '2026-04-14T00:00:00.000Z',
     workflowVersion: 3,
     storageVersion: 5,
-    currentStep: 'export',
+    currentStep: 'exportState',
     sourceAssets: {
       status: 'complete',
       isStale: false,
@@ -96,8 +108,8 @@ const createBaseProject = (): PreprocessProject => {
       error: null,
       activeImage: 'eosin',
       images: {
-        eosin: null,
-        he: null,
+        eosin: createSourceImage('eosin'),
+        he: createSourceImage('he'),
       },
       oversizedImageWarning: null,
     },
@@ -161,9 +173,9 @@ const createBaseProject = (): PreprocessProject => {
         rmse: false,
         finiteMatrix: false,
         scaleRange: false,
-        accepted: false,
+        accepted: true,
       },
-      solveAccepted: false,
+      solveAccepted: true,
       failureReason: null,
       transform: null,
       previewDataUrl: null,
