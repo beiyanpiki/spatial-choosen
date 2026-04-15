@@ -365,6 +365,37 @@ describe('runCropQc feature match preview', () => {
     expect(summary.arcCount).toBe(2);
   });
 
+  it('keeps rejected alignments on the non-accepted full-frame preview path when both acceptance flags are false', async () => {
+    installBrowserStubs();
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      alignmentAccepted: false,
+      solveAccepted: false,
+      chipBounds: {
+        x: 0.25,
+        y: 0.25,
+        width: 0.5,
+        height: 0.5,
+      },
+      controlPoints: [
+        { id: 'point-a', source: { x: 0.5, y: 0.5 }, target: { x: 0.5, y: 0.5 } },
+      ],
+      inlierMask: [true],
+    });
+
+    const summary = parsePreviewSummary(result.featureMatchesDataUrl);
+
+    expect(summary.arcPoints).toEqual([
+      { x: 50, y: 50 },
+      { x: 174, y: 50 },
+    ]);
+    expect(summary.lineSegments).toContainEqual({
+      from: { x: 50, y: 50 },
+      to: { x: 174, y: 50 },
+    });
+  });
+
   it('prefers solve acceptance when quality acceptance disagrees', async () => {
     installBrowserStubs();
 

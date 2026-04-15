@@ -1787,6 +1787,7 @@ export function PreprocessWorkspace({
 								}}
 					canRun={Boolean(
 						project.alignment.status === "complete" &&
+						project.alignment.qualityFlags.accepted &&
 							alignmentReferenceImage?.dataUrl &&
 							alignmentMovingImage?.dataUrl,
 					)}
