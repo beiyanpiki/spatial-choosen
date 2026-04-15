@@ -102,7 +102,7 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
     case 'alignment':
       return project.heFocus.status === 'complete';
     case 'cropQc':
-      return project.alignment.status === 'complete';
+      return project.alignment.status === 'complete' && project.alignment.qualityFlags.accepted;
     case 'chipConfig':
       return project.cropQc.status === 'complete';
     case 'tissueSelection':
