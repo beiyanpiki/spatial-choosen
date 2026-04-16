@@ -5,6 +5,7 @@ import type {
 	AlignmentQualityFlags,
 	AlignmentSlice,
 	AlignmentTransform,
+	HeFocusAutoProposal,
 	LocalizationImageTransform,
 	PreprocessRect,
 	PreprocessStepStatus,
@@ -14,8 +15,11 @@ import { normalizeLocalizationImageTransform } from "./localization";
 
 export const ALIGNMENT_MIN_PAIRS = 7;
 export const ALIGNMENT_TARGET_PAIRS = 15;
-export const ALIGNMENT_MIN_INLIER_RATIO = 0.2;
-export const ALIGNMENT_COVERAGE_THRESHOLD = 0.55;
+export const AUTO_ECC_MIN = 0.75;
+export const MANUAL_MIN_INLIERS = 6;
+export const MANUAL_MIN_INLIER_RATIO = 0.5;
+export const MANUAL_MIN_COVERAGE = 0.35;
+export const ALIGNMENT_COVERAGE_THRESHOLD = MANUAL_MIN_COVERAGE;
 export const ALIGNMENT_SCALE_MIN = 0.067;
 export const ALIGNMENT_SCALE_MAX = 15;
 export const ALIGNMENT_RANSAC_MAX_ITERS = 2000;
@@ -46,6 +50,7 @@ export type AlignmentCoverage = {
 export function computeCoverageWarning(
 	points: readonly AlignmentControlPoint[],
 	chipBounds: PreprocessRect | null,
+	minimumCoverage = MANUAL_MIN_COVERAGE,
 ): AlignmentCoverage {
 	if (points.length === 0) {
 		return {
@@ -82,13 +87,158 @@ export function computeCoverageWarning(
 		coverageRatioX,
 		coverageRatioY,
 		warning:
-			coverageRatioX < ALIGNMENT_COVERAGE_THRESHOLD ||
-			coverageRatioY < ALIGNMENT_COVERAGE_THRESHOLD,
+			coverageRatioX < minimumCoverage || coverageRatioY < minimumCoverage,
 	};
 }
 
+export type AlignmentAutoFallbackReason =
+	| "no-proposal"
+	| "ecc-failed"
+	| "ecc-rejected"
+	| "manual-required";
+
+export type AutoRefinementAcceptedTransform = {
+	affineMatrix: AlignmentAffineMatrix;
+	transform: AlignmentTransform;
+};
+
+export type ClassifyAutoRefinementInput = {
+	coarseBounds: PreprocessRect | null;
+	eccCorrelation: number | null;
+	acceptedTransform: AutoRefinementAcceptedTransform | null;
+	failureReason: string | null;
+};
+
+export type AutoRefinementClassification = {
+	accepted: boolean;
+	fallbackReason: AlignmentAutoFallbackReason | null;
+};
+
+export type ApplyAcceptedAutoAlignmentInput = {
+	current: AlignmentSlice;
+	autoProposal: HeFocusAutoProposal;
+	acceptedTransform: AutoRefinementAcceptedTransform | null;
+	hasReferenceImage: boolean;
+	hasMovingImage: boolean;
+};
+
+const hasAcceptedAutoEcc = (eccCorrelation: number | null) =>
+	typeof eccCorrelation === "number" &&
+	Number.isFinite(eccCorrelation) &&
+	eccCorrelation >= AUTO_ECC_MIN;
+
+export const resolveAutoRefinementFallbackReason = ({
+	coarseBounds,
+	eccCorrelation,
+	acceptedTransform,
+	failureReason,
+}: ClassifyAutoRefinementInput): AlignmentAutoFallbackReason | null => {
+	if (!coarseBounds || failureReason === "no-coarse-match") {
+		return "no-proposal";
+	}
+
+	if (failureReason === "ecc-failed") {
+		return "ecc-failed";
+	}
+
+	if (
+		failureReason === "ecc-below-threshold" ||
+		(typeof eccCorrelation === "number" && Number.isFinite(eccCorrelation) && !hasAcceptedAutoEcc(eccCorrelation))
+	) {
+		return "ecc-rejected";
+	}
+
+	if (acceptedTransform) {
+		return hasAcceptedAutoEcc(eccCorrelation) ? null : "ecc-rejected";
+	}
+
+	return "manual-required";
+};
+
+export const classifyAutoRefinementOutcome = (
+	input: ClassifyAutoRefinementInput,
+): AutoRefinementClassification => {
+	const fallbackReason = resolveAutoRefinementFallbackReason(input);
+	return {
+		accepted: fallbackReason === null,
+		fallbackReason,
+	};
+};
+
 const safeNumber = (value: number, fallback = 0) =>
 	Number.isFinite(value) ? value : fallback;
+
+export function applyAcceptedAutoAlignment({
+  current,
+  autoProposal,
+  acceptedTransform,
+	hasReferenceImage,
+	hasMovingImage,
+}: ApplyAcceptedAutoAlignmentInput): AlignmentSlice | null {
+	if (
+		autoProposal.status !== "accepted" ||
+		!hasAcceptedAutoEcc(autoProposal.eccCorrelation) ||
+		!acceptedTransform
+	) {
+		return null;
+	}
+
+	const { affineMatrix, transform } = acceptedTransform;
+	const finiteMatrix = affineMatrix.every((value) => Number.isFinite(value));
+	const scaleX = Number.isFinite(transform.scaleX)
+		? transform.scaleX
+		: Math.hypot(affineMatrix[0], affineMatrix[3]);
+	const scaleY = Number.isFinite(transform.scaleY)
+		? transform.scaleY
+		: Math.hypot(affineMatrix[1], affineMatrix[4]);
+	const scaleRange =
+		Number.isFinite(scaleX) &&
+		Number.isFinite(scaleY) &&
+		scaleX >= ALIGNMENT_SCALE_MIN &&
+		scaleX <= ALIGNMENT_SCALE_MAX &&
+		scaleY >= ALIGNMENT_SCALE_MIN &&
+		scaleY <= ALIGNMENT_SCALE_MAX;
+	const finiteTransform =
+		Number.isFinite(transform.translationX) &&
+		Number.isFinite(transform.translationY) &&
+		Number.isFinite(transform.rotationDegrees) &&
+		Number.isFinite(transform.scaleX) &&
+		Number.isFinite(transform.scaleY);
+	const qualityFlags: AlignmentQualityFlags = {
+		minPairs: true,
+		inlierRatio: true,
+		rmse: true,
+		finiteMatrix,
+		scaleRange,
+		accepted: finiteMatrix && finiteTransform && scaleRange,
+	};
+	const solveAccepted = qualityFlags.accepted;
+
+  return {
+    ...current,
+    source: "auto",
+    controlPoints: [],
+    inlierMask: [],
+    affineMatrix: affineMatrix,
+    reprojectionRmse: 0,
+    inlierRatio: 1,
+    ransacReprojThreshold: null,
+    qualityFlags,
+		solveAccepted,
+		failureReason: null,
+		transform,
+		previewDataUrl: null,
+		status: computeAlignmentStatus({
+			hasReferenceImage,
+			hasMovingImage,
+			solveAccepted,
+			failureReason: null,
+		}),
+		isStale: false,
+		updatedAt: new Date().toISOString(),
+		error: null,
+	};
+}
 
 const deriveTransform = (matrix: AlignmentAffineMatrix): AlignmentTransform => {
 	const [a, b, tx, c, d, ty] = matrix;
@@ -714,6 +864,15 @@ const resolveFailureReason = (
 	return null;
 };
 
+const countAcceptedInliers = (inlierMask: readonly boolean[]) =>
+	inlierMask.reduce((count, isInlier) => count + (isInlier ? 1 : 0), 0);
+
+const hasAcceptedManualInlierQuality = (
+	inlierCount: number,
+	inlierRatio: number,
+) =>
+	inlierCount >= MANUAL_MIN_INLIERS && inlierRatio >= MANUAL_MIN_INLIER_RATIO;
+
 export type SolveAffineAlignmentInput = {
 	cv: OpenCvRuntime;
 	controlPoints: readonly AlignmentControlPoint[];
@@ -1005,9 +1164,10 @@ export function solveAffineAlignment({
 					similarityScaleY >= ALIGNMENT_SCALE_MIN &&
 					similarityScaleY <= ALIGNMENT_SCALE_MAX;
 				const similarityInlierRatio =
-					(pointCount > 0
-						? similarityCandidate.inlierIndices.length / pointCount
-						: 0) >= ALIGNMENT_MIN_INLIER_RATIO;
+					hasAcceptedManualInlierQuality(
+						similarityCandidate.inlierIndices.length,
+						pointCount > 0 ? similarityCandidate.inlierIndices.length / pointCount : 0,
+					);
 				const similarityRmseOk =
 					similarityCandidate.rmse <=
 					ALIGNMENT_RMSE_MULTIPLIER * ransacReprojThreshold;
@@ -1079,7 +1239,11 @@ export function solveAffineAlignment({
 
 		qualityFlags.finiteMatrix = finiteMatrix;
 		qualityFlags.scaleRange = scaleRange;
-		qualityFlags.inlierRatio = inlierRatio >= ALIGNMENT_MIN_INLIER_RATIO;
+		const acceptedInlierCount = countAcceptedInliers(inlierMask);
+		qualityFlags.inlierRatio = hasAcceptedManualInlierQuality(
+			acceptedInlierCount,
+			inlierRatio,
+		);
 		qualityFlags.rmse =
 			reprojectionRmse !== null &&
 			reprojectionRmse <= ALIGNMENT_RMSE_MULTIPLIER * ransacReprojThreshold;
@@ -1121,51 +1285,61 @@ export function solveAffineAlignment({
 }
 
 export function normalizeAlignmentSlice(slice: AlignmentSlice): AlignmentSlice {
-	return {
-		...slice,
-		movingImageTransform: normalizeLocalizationImageTransform(
-			slice.movingImageTransform as
-				| Partial<LocalizationImageTransform>
-				| null
-				| undefined,
-		),
-		inlierMask: Array.isArray(slice.inlierMask)
-			? slice.inlierMask.map(Boolean)
-			: null,
-		affineMatrix:
-			slice.affineMatrix && slice.affineMatrix.length === 6
-				? [
-						safeNumber(slice.affineMatrix[0]),
-						safeNumber(slice.affineMatrix[1]),
-						safeNumber(slice.affineMatrix[2]),
-						safeNumber(slice.affineMatrix[3]),
-						safeNumber(slice.affineMatrix[4]),
-						safeNumber(slice.affineMatrix[5]),
-					]
-				: null,
-		reprojectionRmse:
-			typeof slice.reprojectionRmse === "number" &&
-			Number.isFinite(slice.reprojectionRmse)
-				? slice.reprojectionRmse
-				: null,
-		inlierRatio:
-			typeof slice.inlierRatio === "number" &&
-			Number.isFinite(slice.inlierRatio)
-				? slice.inlierRatio
-				: null,
-		ransacReprojThreshold:
-			typeof slice.ransacReprojThreshold === "number" &&
-			Number.isFinite(slice.ransacReprojThreshold)
-				? slice.ransacReprojThreshold
-				: null,
-		qualityFlags: {
-			...defaultQualityFlags(),
-			...(slice.qualityFlags ?? {}),
-			accepted: Boolean(slice.qualityFlags?.accepted),
-		},
-		solveAccepted: Boolean(slice.solveAccepted),
-		failureReason: slice.failureReason ?? null,
-	};
+  return {
+    status: slice.status,
+    isStale: slice.isStale,
+    updatedAt: slice.updatedAt,
+    error: slice.error,
+    referenceImage: slice.referenceImage,
+    movingImage: slice.movingImage,
+    movingImageTransform: normalizeLocalizationImageTransform(
+      slice.movingImageTransform as
+        | Partial<LocalizationImageTransform>
+        | null
+        | undefined,
+    ),
+    overlayOpacity: slice.overlayOpacity,
+    source: slice.source,
+    controlPoints: slice.controlPoints,
+    inlierMask: Array.isArray(slice.inlierMask)
+      ? slice.inlierMask.map(Boolean)
+      : null,
+    affineMatrix:
+      slice.affineMatrix && slice.affineMatrix.length === 6
+        ? [
+            safeNumber(slice.affineMatrix[0]),
+            safeNumber(slice.affineMatrix[1]),
+            safeNumber(slice.affineMatrix[2]),
+            safeNumber(slice.affineMatrix[3]),
+            safeNumber(slice.affineMatrix[4]),
+            safeNumber(slice.affineMatrix[5]),
+          ]
+        : null,
+    reprojectionRmse:
+      typeof slice.reprojectionRmse === "number" &&
+      Number.isFinite(slice.reprojectionRmse)
+        ? slice.reprojectionRmse
+        : null,
+    inlierRatio:
+      typeof slice.inlierRatio === "number" &&
+      Number.isFinite(slice.inlierRatio)
+        ? slice.inlierRatio
+        : null,
+    ransacReprojThreshold:
+      typeof slice.ransacReprojThreshold === "number" &&
+      Number.isFinite(slice.ransacReprojThreshold)
+        ? slice.ransacReprojThreshold
+        : null,
+    qualityFlags: {
+      ...defaultQualityFlags(),
+      ...(slice.qualityFlags ?? {}),
+      accepted: Boolean(slice.qualityFlags?.accepted),
+    },
+    solveAccepted: Boolean(slice.solveAccepted),
+    failureReason: slice.failureReason ?? null,
+    transform: slice.transform,
+    previewDataUrl: slice.previewDataUrl,
+  };
 }
 
 export function computeAlignmentStatus(args: {
