@@ -14,6 +14,20 @@ type Size = { width: number; height: number };
 type PixelRect = { x: number; y: number; width: number; height: number };
 type PixelPoint = { x: number; y: number };
 
+export type CropQcBlockedReason = 'missing-accepted-transform' | 'missing-accepted-chip-bounds';
+
+export class CropQcBlockedError extends Error {
+  readonly code: CropQcBlockedReason;
+
+  constructor(code: CropQcBlockedReason, message?: string) {
+    super(message ?? (code === 'missing-accepted-transform'
+      ? 'Crop/QC is blocked until an accepted alignment transform is available.'
+      : 'Crop/QC is blocked until canonical accepted chip geometry is available.'));
+    this.name = 'CropQcBlockedError';
+    this.code = code;
+  }
+}
+
 const disposeCanvas = (canvas: HTMLCanvasElement) => {
   canvas.width = 0;
   canvas.height = 0;
@@ -221,6 +235,41 @@ const normalizeRect = (
   };
 };
 
+const getRectCornerPoints = (chipBounds: PreprocessRect, imageSize: Size): PixelPoint[] => {
+  const normalized = normalizeRect(chipBounds, imageSize);
+  const minX = normalized.rect.x * imageSize.width;
+  const minY = normalized.rect.y * imageSize.height;
+  const maxX = (normalized.rect.x + normalized.rect.width) * imageSize.width;
+  const maxY = (normalized.rect.y + normalized.rect.height) * imageSize.height;
+
+  return [
+    { x: minX, y: minY },
+    { x: maxX, y: minY },
+    { x: maxX, y: maxY },
+    { x: minX, y: maxY },
+  ];
+};
+
+const normalizeProjectedRect = (args: {
+  corners: PixelPoint[];
+  imageSize: Size;
+}) => {
+  const { corners, imageSize } = args;
+  const xs = corners.map((corner) => corner.x);
+  const ys = corners.map((corner) => corner.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  return normalizeRect({
+    x: minX / imageSize.width,
+    y: minY / imageSize.height,
+    width: (maxX - minX) / imageSize.width,
+    height: (maxY - minY) / imageSize.height,
+  }, imageSize);
+};
+
 const makeCheckerboard = (
   eosinCrop: HTMLCanvasElement,
   heCrop: HTMLCanvasElement,
@@ -264,6 +313,44 @@ const applyAffineToPoint = (
   x: affineMatrix[0] * point.x + affineMatrix[1] * point.y + affineMatrix[2],
   y: affineMatrix[3] * point.x + affineMatrix[4] * point.y + affineMatrix[5],
 });
+
+const usesCanonicalAcceptedGeometryContract = (args: {
+  acceptedChipBounds?: PreprocessRect | null;
+  coarseChipBounds?: PreprocessRect | null;
+}) => args.acceptedChipBounds !== undefined || args.coarseChipBounds !== undefined;
+
+const resolveCropBounds = (args: {
+  chipBounds: PreprocessRect;
+  acceptedChipBounds?: PreprocessRect | null;
+  coarseChipBounds?: PreprocessRect | null;
+  referenceSize: Size;
+  movingSize: Size;
+  affineMatrix: AlignmentAffineMatrix;
+  alignmentAccepted?: boolean;
+  solveAccepted?: boolean;
+}) => {
+  const usesAcceptedGeometryContract = usesCanonicalAcceptedGeometryContract(args);
+  if (!usesAcceptedGeometryContract) {
+    return normalizeRect(args.chipBounds, args.referenceSize);
+  }
+
+  const hasAcceptedTransform = args.solveAccepted ?? args.alignmentAccepted ?? false;
+  if (!hasAcceptedTransform) {
+    throw new CropQcBlockedError('missing-accepted-transform');
+  }
+
+  if (!args.acceptedChipBounds) {
+    throw new CropQcBlockedError('missing-accepted-chip-bounds');
+  }
+
+  const projectedCorners = getRectCornerPoints(args.acceptedChipBounds, args.movingSize)
+    .map((corner) => applyAffineToPoint(corner, args.affineMatrix));
+
+  return normalizeProjectedRect({
+    corners: projectedCorners,
+    imageSize: args.referenceSize,
+  });
+};
 
 const toCropLocalPoint = (point: PixelPoint, pixelRect: PixelRect): PixelPoint => ({
   x: point.x - pixelRect.x,
@@ -431,6 +518,8 @@ export async function runCropQc(args: {
   eosinDataUrl: string;
   heDataUrl: string;
   chipBounds: PreprocessRect;
+  acceptedChipBounds?: PreprocessRect | null;
+  coarseChipBounds?: PreprocessRect | null;
   imageTransform: LocalizationImageTransform;
   affineMatrix: AlignmentAffineMatrix;
   alignmentAccepted?: boolean;
@@ -441,7 +530,16 @@ export async function runCropQc(args: {
   const eosin = await imageToCanvas(args.eosinDataUrl);
   const he = await imageToCanvas(args.heDataUrl);
 
-  const normalized = normalizeRect(args.chipBounds, { width: eosin.width, height: eosin.height });
+  const normalized = resolveCropBounds({
+    chipBounds: args.chipBounds,
+    acceptedChipBounds: args.acceptedChipBounds,
+    coarseChipBounds: args.coarseChipBounds,
+    referenceSize: { width: eosin.width, height: eosin.height },
+    movingSize: { width: he.width, height: he.height },
+    affineMatrix: args.affineMatrix,
+    alignmentAccepted: args.alignmentAccepted,
+    solveAccepted: args.solveAccepted,
+  });
 
   const eosinCrop = cropCanvas(eosin.canvas, normalized.pixelRect);
   const heCrop = makeWarpedHeCrop(args.cv, he.canvas, args.affineMatrix, normalized.pixelRect);

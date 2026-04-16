@@ -5,7 +5,7 @@ import type {
   LocalizationImageTransform,
   PreprocessRect,
 } from '@/types/preprocess';
-import { runCropQc } from './cropQc';
+import { CropQcBlockedError, runCropQc } from './cropQc';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
 
 type CanvasOperation =
@@ -272,7 +272,9 @@ const parsePreviewSummary = (dataUrl: string): PreviewSummary => {
 const runCropQcWithArgs = async (args: {
   affineMatrix: AlignmentAffineMatrix;
   alignmentAccepted?: boolean;
+  acceptedChipBounds?: PreprocessRect | null;
   solveAccepted?: boolean;
+  coarseChipBounds?: PreprocessRect | null;
   controlPoints: AlignmentControlPoint[];
   inlierMask: boolean[] | null;
   chipBounds?: PreprocessRect;
@@ -283,6 +285,8 @@ const runCropQcWithArgs = async (args: {
     eosinDataUrl: 'data:image/png;base64,eosin',
     heDataUrl: 'data:image/png;base64,he',
     chipBounds: args.chipBounds ?? CHIP_BOUNDS,
+    acceptedChipBounds: args.acceptedChipBounds,
+    coarseChipBounds: args.coarseChipBounds,
     imageTransform: args.imageTransform ?? IDENTITY_TRANSFORM,
     affineMatrix: args.affineMatrix,
     alignmentAccepted: args.alignmentAccepted ?? true,
@@ -347,6 +351,117 @@ describe('runCropQc feature match preview', () => {
     expect(result.cropRect.y).toBeCloseTo(chipBounds.y);
     expect(result.cropRect.width).toBeCloseTo(chipBounds.width);
     expect(result.cropRect.height).toBeCloseTo(chipBounds.height);
+  });
+
+  it('prefers accepted chip geometry over coarse envelope', async () => {
+    installBrowserStubs();
+
+    const coarseChipBounds: PreprocessRect = {
+      x: 0.05,
+      y: 0.1,
+      width: 0.8,
+      height: 0.75,
+    };
+    const acceptedChipBounds: PreprocessRect = {
+      x: 0.3,
+      y: 0.35,
+      width: 0.2,
+      height: 0.15,
+    };
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      chipBounds: coarseChipBounds,
+      acceptedChipBounds,
+      coarseChipBounds,
+      solveAccepted: true,
+      controlPoints: [
+        { id: 'point-a', source: { x: 0.35, y: 0.4 }, target: { x: 0.35, y: 0.4 } },
+      ],
+      inlierMask: [true],
+    });
+
+    expect(result.cropRect.x).toBeCloseTo(acceptedChipBounds.x);
+    expect(result.cropRect.y).toBeCloseTo(acceptedChipBounds.y);
+    expect(result.cropRect.width).toBeCloseTo(acceptedChipBounds.width);
+    expect(result.cropRect.height).toBeCloseTo(acceptedChipBounds.height);
+    expect(result.cropWidth).toBe(20);
+    expect(result.cropHeight).toBe(15);
+  });
+
+  it('produces the same downstream crop contract for automatic and manual accepted alignment inputs', async () => {
+    installBrowserStubs();
+
+    const acceptedChipBounds: PreprocessRect = {
+      x: 0.22,
+      y: 0.28,
+      width: 0.24,
+      height: 0.18,
+    };
+    const coarseChipBounds: PreprocessRect = {
+      x: 0.05,
+      y: 0.08,
+      width: 0.76,
+      height: 0.7,
+    };
+
+    const automaticAccepted = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      chipBounds: coarseChipBounds,
+      acceptedChipBounds,
+      coarseChipBounds,
+      solveAccepted: true,
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    const manualAccepted = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      chipBounds: CHIP_BOUNDS,
+      acceptedChipBounds,
+      solveAccepted: true,
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    expect(automaticAccepted.cropRect).toEqual(manualAccepted.cropRect);
+    expect(automaticAccepted.cropWidth).toBe(manualAccepted.cropWidth);
+    expect(automaticAccepted.cropHeight).toBe(manualAccepted.cropHeight);
+    expect(automaticAccepted.cropRect.x).toBeCloseTo(acceptedChipBounds.x);
+    expect(automaticAccepted.cropRect.y).toBeCloseTo(acceptedChipBounds.y);
+    expect(automaticAccepted.cropRect.width).toBeCloseTo(acceptedChipBounds.width);
+    expect(automaticAccepted.cropRect.height).toBeCloseTo(acceptedChipBounds.height);
+  });
+
+  it('fails cleanly when no accepted transform exists', async () => {
+    installBrowserStubs();
+
+    const blockedError = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      alignmentAccepted: false,
+      solveAccepted: false,
+      chipBounds: {
+        x: 0.05,
+        y: 0.1,
+        width: 0.8,
+        height: 0.75,
+      },
+      acceptedChipBounds: null,
+      coarseChipBounds: {
+        x: 0.05,
+        y: 0.1,
+        width: 0.8,
+        height: 0.75,
+      },
+      controlPoints: [],
+      inlierMask: null,
+    }).catch((error: unknown) => error);
+
+    expect(blockedError).toBeInstanceOf(CropQcBlockedError);
+    expect(blockedError).toMatchObject({
+      code: 'missing-accepted-transform',
+      message: 'Crop/QC is blocked until an accepted alignment transform is available.',
+    });
   });
 
   it('includes points even when the warped match falls outside the crop bounds', async () => {
