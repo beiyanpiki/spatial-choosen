@@ -53,14 +53,17 @@ import type {
 
 type AlignmentPanelProps = {
 	alignment: AlignmentSlice;
+	autoProposalStatus?: "idle" | "accepted" | "fallback" | "failed";
+	autoProposalMethod?: string | null;
 	chipBounds: PreprocessRect | null;
 	movingImage: PreprocessSourceImage | null;
 	onSolveAccepted: () => void;
-	referenceImage: PreprocessSourceImage | null;
 	onAlignmentChange: (
 		updater: (current: AlignmentSlice) => AlignmentSlice,
 		options?: { invalidateDownstream?: boolean },
 	) => void;
+	onRecomputeAutoLocalization?: () => void;
+	referenceImage: PreprocessSourceImage | null;
 };
 
 type InteractionMode =
@@ -619,11 +622,14 @@ function LandmarkCanvas({
 
 export function AlignmentPanel({
 	alignment,
+	autoProposalStatus = "idle",
+	autoProposalMethod = null,
 	chipBounds,
 	movingImage,
 	onSolveAccepted,
-	referenceImage,
 	onAlignmentChange,
+	onRecomputeAutoLocalization,
+	referenceImage,
 }: AlignmentPanelProps) {
 	const [interactionMode, setInteractionMode] =
 		useState<InteractionMode>("awaiting-source");
@@ -674,15 +680,16 @@ export function AlignmentPanel({
 		};
 	}, [hasBothImages]);
 
-	const resetSolveState = useCallback(
-		(current: AlignmentSlice): AlignmentSlice => ({
-			...current,
-			inlierMask: null,
-			affineMatrix: null,
-			reprojectionRmse: null,
-			inlierRatio: null,
-			ransacReprojThreshold: null,
-			qualityFlags: {
+  const resetSolveState = useCallback(
+    (current: AlignmentSlice): AlignmentSlice => ({
+      ...current,
+      source: null,
+      inlierMask: null,
+      affineMatrix: null,
+      reprojectionRmse: null,
+      inlierRatio: null,
+      ransacReprojThreshold: null,
+      qualityFlags: {
 				minPairs: current.controlPoints.length >= ALIGNMENT_MIN_PAIRS,
 				inlierRatio: false,
 				rmse: false,
@@ -898,6 +905,11 @@ export function AlignmentPanel({
 	);
 
 	const workflowInstruction = useMemo(() => {
+		if (alignment.solveAccepted) {
+			return alignment.source === "auto"
+				? "Review the automatic solution, then keep it or clear it before placing manual landmarks."
+				: "Alignment accepted. Continue to crop QC or keep adjusting landmarks if something looks off.";
+		}
 		if (interactionMode === "awaiting-source") {
 			return "Use wheel zoom and drag pan on the eosin canvas, then click it to place the reference landmark for a new pair.";
 		}
@@ -913,7 +925,13 @@ export function AlignmentPanel({
 		return selectedPair
 			? "Selected pair ready. Reposition either point, delete the pair, or continue solving while using pan and zoom directly on the canvases."
 			: "Start on the eosin canvas, using wheel zoom and drag pan as needed before placing the next reference point.";
-	}, [interactionMode, selectedPair]);
+	}, [alignment.solveAccepted, alignment.source, interactionMode, selectedPair]);
+
+	const autoAlignmentAccepted =
+		alignment.source === "auto" && alignment.solveAccepted;
+	const autoAlignmentFallback =
+		autoProposalStatus === "fallback" || autoProposalStatus === "failed";
+	const autoAlignmentMethodLabel = autoProposalMethod ?? "mask-ecc-v1";
 
 	const sourcePoints = useMemo<EditorPoint[]>(
 		() =>
@@ -990,14 +1008,15 @@ export function AlignmentPanel({
 					seedInlierMask,
 				});
 
-				onAlignmentChange((current) => ({
-					...current,
-					inlierMask: result.inlierMask,
-					affineMatrix: result.affineMatrix,
-					reprojectionRmse: result.reprojectionRmse,
-					inlierRatio: result.inlierRatio,
-					ransacReprojThreshold: result.ransacReprojThreshold,
-					qualityFlags: result.qualityFlags,
+                onAlignmentChange((current) => ({
+                  ...current,
+                  source: result.solveAccepted ? "manual" : null,
+                  inlierMask: result.inlierMask,
+                  affineMatrix: result.affineMatrix,
+                  reprojectionRmse: result.reprojectionRmse,
+                  inlierRatio: result.inlierRatio,
+                  ransacReprojThreshold: result.ransacReprojThreshold,
+                  qualityFlags: result.qualityFlags,
 					solveAccepted: result.solveAccepted,
 					failureReason: result.failureReason,
 					transform: result.transform,
@@ -1184,6 +1203,83 @@ export function AlignmentPanel({
 						) : null}
 					</Flex>
 				</Flex>
+				{autoAlignmentAccepted ? (
+					<Box
+						border="1px solid"
+						borderColor="green.200"
+						bg="green.50"
+						borderRadius="lg"
+						px={3}
+						py={2}
+						data-testid="alignment-auto-status"
+					>
+						<Flex
+							direction={{ base: "column", md: "row" }}
+							align={{ base: "flex-start", md: "center" }}
+							justify="space-between"
+							gap={3}
+						>
+							<Stack spacing={0.5}>
+								<Text fontSize="sm" fontWeight="semibold" color="green.800">
+									Automatic alignment accepted ({autoAlignmentMethodLabel})
+								</Text>
+								<Text fontSize="xs" color="green.700">
+									Keep this result or clear it to return to manual landmarks.
+								</Text>
+							</Stack>
+							<Button
+								size="xs"
+								variant="outline"
+								colorScheme="green"
+								onClick={() => {
+									onAlignmentChange((current) => resetSolveState(current));
+									clearLocalInteractionState();
+								}}
+								data-testid="alignment-auto-clear"
+							>
+								Clear automatic result
+							</Button>
+						</Flex>
+					</Box>
+				) : null}
+				{autoAlignmentFallback ? (
+					<Box
+						border="1px solid"
+						borderColor="orange.200"
+						bg="orange.50"
+						borderRadius="lg"
+						px={3}
+						py={2}
+						data-testid="alignment-auto-recovery"
+					>
+						<Flex
+							direction={{ base: "column", md: "row" }}
+							align={{ base: "flex-start", md: "center" }}
+							justify="space-between"
+							gap={3}
+						>
+							<Stack spacing={0.5}>
+								<Text fontSize="sm" fontWeight="semibold" color="orange.800">
+									Automatic refinement unavailable; add manual points or adjust HE focus
+								</Text>
+								<Text fontSize="xs" color="orange.700">
+									After editing HE focus, rerun auto-localization from the existing focus step.
+								</Text>
+							</Stack>
+							<Button
+								size="xs"
+								variant="outline"
+								colorScheme="orange"
+								onClick={() => {
+									onRecomputeAutoLocalization?.();
+								}}
+								data-testid="alignment-auto-recompute"
+							>
+								Adjust HE focus
+							</Button>
+						</Flex>
+					</Box>
+				) : null}
 				<Flex gap={2} wrap="wrap" align="center">
 					<Button
 						size="sm"
@@ -1289,11 +1385,17 @@ export function AlignmentPanel({
 						onClick={() => {
 							setPendingSourcePoint(null);
 							setRepositionPairId(null);
-							mutateControlPoints(() => [], {
-								afterApply: clearLocalInteractionState,
-							});
+							if (alignment.controlPoints.length > 0) {
+								mutateControlPoints(() => [], {
+									afterApply: clearLocalInteractionState,
+								});
+								return;
+							}
+
+							onAlignmentChange((current) => resetSolveState(current));
+							clearLocalInteractionState();
 						}}
-						isDisabled={alignment.controlPoints.length === 0}
+						isDisabled={alignment.controlPoints.length === 0 && alignment.source !== "auto"}
 						data-testid="alignment-reset"
 					>
 						Reset pairs
