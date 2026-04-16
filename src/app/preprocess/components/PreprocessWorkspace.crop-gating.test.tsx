@@ -156,6 +156,9 @@ const createProject = (overrides?: {
   alignmentStatus?: PreprocessProject['alignment']['status'];
   alignmentAccepted?: boolean;
   solveAccepted?: boolean;
+  alignmentSource?: PreprocessProject['alignment']['source'];
+  heFocusChipBounds?: PreprocessProject['heFocus']['chipBounds'];
+  autoProposalCoarseBounds?: PreprocessProject['heFocus']['autoProposal']['coarseBounds'];
 }): PreprocessProject => ({
   id: 'workspace-crop-gating-project',
   name: 'Workspace crop gating project',
@@ -230,13 +233,23 @@ const createProject = (overrides?: {
     updatedAt: null,
     error: null,
     targetImage: 'he',
-    chipBounds: null,
+    chipBounds: overrides?.heFocusChipBounds ?? null,
     handles: [],
     imageTransform: {
       rotationDegrees: 0,
       flipHorizontal: false,
       flipVertical: false,
       scale: 1,
+    },
+    autoProposal: {
+      status: overrides?.autoProposalCoarseBounds ? 'fallback' : 'idle',
+      method: overrides?.autoProposalCoarseBounds ? 'mask-ecc-v1' : null,
+      coarseBounds: overrides?.autoProposalCoarseBounds ?? null,
+      refinedBounds: null,
+      refinedQuad: null,
+      rotationDegrees: null,
+      eccCorrelation: null,
+      failureReason: null,
     },
     focusedImageDataUrl: null,
   },
@@ -254,6 +267,7 @@ const createProject = (overrides?: {
       scale: 1,
     },
     overlayOpacity: 0.5,
+    source: overrides?.alignmentSource ?? null,
     controlPoints: [
       {
         id: 'point-a',
@@ -428,5 +442,51 @@ describe('PreprocessWorkspace crop gating contract', () => {
     await act(async () => {
       await Promise.resolve();
     });
+  });
+
+  it('forwards the same canonical accepted chip geometry contract for automatic and manual accepted alignment', async () => {
+    const acceptedChipBounds = { x: 0.31, y: 0.34, width: 0.22, height: 0.16 };
+    const coarseChipBounds = { x: 0.08, y: 0.12, width: 0.74, height: 0.68 };
+
+    render(
+      <WorkspaceHarness
+        initialProject={createProject({
+          alignmentSource: 'auto',
+          heFocusChipBounds: acceptedChipBounds,
+          autoProposalCoarseBounds: coarseChipBounds,
+        })}
+      />,
+    );
+
+    await act(async () => {
+      capturedCropQcPanelProps?.onRunCrop();
+    });
+
+    render(
+      <WorkspaceHarness
+        initialProject={createProject({
+          alignmentSource: 'manual',
+          heFocusChipBounds: acceptedChipBounds,
+        })}
+      />,
+    );
+
+    await act(async () => {
+      capturedCropQcPanelProps?.onRunCrop();
+    });
+
+    await waitFor(() => {
+      expect(mockRunCropQc).toHaveBeenCalledTimes(2);
+    });
+
+    const [automaticRequest] = mockRunCropQc.mock.calls[0] as Array<Record<string, unknown>>;
+    const [manualRequest] = mockRunCropQc.mock.calls[1] as Array<Record<string, unknown>>;
+
+    expect(automaticRequest.acceptedChipBounds).toEqual(acceptedChipBounds);
+    expect(automaticRequest.coarseChipBounds).toEqual(coarseChipBounds);
+    expect(manualRequest.acceptedChipBounds).toEqual(acceptedChipBounds);
+    expect(manualRequest.coarseChipBounds).toBeUndefined();
+    expect(automaticRequest.solveAccepted).toBe(true);
+    expect(manualRequest.solveAccepted).toBe(true);
   });
 });

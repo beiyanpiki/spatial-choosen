@@ -20,7 +20,11 @@ import {
 	useToast,
 } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { normalizeAlignmentSlice } from "../../../lib/preprocess/alignment";
+import {
+	applyAcceptedAutoAlignment,
+	classifyAutoRefinementOutcome,
+	normalizeAlignmentSlice,
+} from "../../../lib/preprocess/alignment";
 import {
 	type ChipConfigManifest,
 	loadAllChipConfigManifests,
@@ -34,10 +38,13 @@ import {
 import {
 	invalidateOnAlignmentChange,
 	invalidateOnCropQcChange,
+	invalidateOnHeFocusAutoProposalChange,
 	invalidateOnHeFocusChange,
+	invalidateOnHeFocusChipBoundsChange,
 	invalidateOnLocalizationChange,
 	invalidateOnSourceAssetsChange,
 } from "../../../lib/preprocess/invalidation";
+import { runHeAutoLocalization } from "../../../lib/preprocess/heAutoLocalization";
 import { loadOpenCv } from "../../../lib/preprocess/loadOpenCv";
 import {
 	buildLocalizationHandles,
@@ -63,6 +70,7 @@ import { resolveTissueSelectionSupport } from "../../../lib/preprocess/tissueSup
 import type {
 	AlignmentSlice,
 	CropQcSlice,
+	HeFocusAutoProposalStatus,
 	HeFocusSlice,
 	LocalizationBoxColor,
 	LocalizationImageTransform,
@@ -926,44 +934,232 @@ export function PreprocessWorkspace({
 		if (currentStepId !== "heFocus") return;
 		if (!currentHeImageDataUrl || hasHeFocusChipBounds) return;
 
-		onProjectMutate((current) => {
-			const currentImage = current.sourceAssets.images[current.heFocus.targetImage];
-			if (
-				current.currentStep !== "heFocus" ||
-				!currentImage?.dataUrl ||
-				current.heFocus.chipBounds
-			) {
-				return current;
-			}
+		const localizationBounds = project.localization.chipBounds;
+		const eosinImageDataUrl = localizationImageDataUrl;
+		if (!localizationBounds || !eosinImageDataUrl) {
+			onProjectMutate((current) => {
+				const currentImage = current.sourceAssets.images[current.heFocus.targetImage];
+				if (
+					current.currentStep !== "heFocus" ||
+					!currentImage?.dataUrl ||
+					current.heFocus.chipBounds
+				) {
+					return current;
+				}
 
-			const heAspectRatio =
-				currentImage.width && currentImage.height
-					? currentImage.width / currentImage.height
-					: 1;
+				const heAspectRatio =
+					currentImage.width && currentImage.height
+						? currentImage.width / currentImage.height
+						: 1;
 
-			const nextHeFocusBase = normalizeHeFocusSlice(
-				{
-					...current.heFocus,
-					chipBounds: createDefaultChipBounds(heAspectRatio),
+				const nextHeFocusBase = normalizeHeFocusSlice(
+					{
+						...current.heFocus,
+						chipBounds: createDefaultChipBounds(heAspectRatio),
+						focusedImageDataUrl: null,
+					},
+					heAspectRatio,
+				);
+				const nextHeFocus: HeFocusSlice = {
+					...nextHeFocusBase,
 					focusedImageDataUrl: null,
-				},
-				heAspectRatio,
-			);
-			const nextHeFocus: HeFocusSlice = {
-				...nextHeFocusBase,
-				focusedImageDataUrl: null,
-				status: computeLocalizationStatus(true, nextHeFocusBase.chipBounds),
-				isStale: false,
-				error: null,
-				updatedAt: new Date().toISOString(),
-			};
+					status: computeLocalizationStatus(true, nextHeFocusBase.chipBounds),
+					isStale: false,
+					error: null,
+					updatedAt: new Date().toISOString(),
+				};
 
-			return invalidateOnHeFocusChange({
-				...current,
-				heFocus: nextHeFocus,
+				return invalidateOnHeFocusChipBoundsChange({
+					...current,
+					heFocus: nextHeFocus,
+				});
 			});
-		});
+			return;
+		}
+
+		let cancelled = false;
+
+		void (async () => {
+			try {
+				const autoLocalizationResult = await runHeAutoLocalization({
+					eosinSource: { dataUrl: eosinImageDataUrl },
+					heSource: { dataUrl: currentHeImageDataUrl },
+					localizationBounds,
+				});
+				if (cancelled) return;
+
+				onProjectMutate((current) => {
+					const currentImage = current.sourceAssets.images[current.heFocus.targetImage];
+					const referenceImage =
+						current.sourceAssets.images[current.localization.targetImage];
+					if (
+						current.currentStep !== "heFocus" ||
+						!currentImage?.dataUrl ||
+						current.heFocus.chipBounds
+					) {
+						return current;
+					}
+
+					const heAspectRatio =
+						currentImage.width && currentImage.height
+							? currentImage.width / currentImage.height
+							: 1;
+					const autoClassification = classifyAutoRefinementOutcome({
+						coarseBounds: autoLocalizationResult.coarseBounds,
+						eccCorrelation: autoLocalizationResult.eccCorrelation,
+						acceptedTransform: autoLocalizationResult.acceptedTransform,
+						failureReason: autoLocalizationResult.failureReason,
+					});
+
+					const proposalStatus: HeFocusAutoProposalStatus = autoClassification.accepted
+						? "accepted"
+						: autoLocalizationResult.coarseBounds
+							? "fallback"
+							: "failed";
+
+					const nextAutoProposal = {
+						status: proposalStatus,
+						method: autoLocalizationResult.method,
+						coarseBounds: autoLocalizationResult.coarseBounds,
+						refinedBounds: autoLocalizationResult.refinedBounds,
+						refinedQuad: autoLocalizationResult.refinedQuad,
+						rotationDegrees: autoLocalizationResult.rotationDegrees,
+						eccCorrelation: autoLocalizationResult.eccCorrelation,
+						failureReason: autoLocalizationResult.failureReason,
+					};
+
+					const acceptedBounds =
+						autoClassification.accepted && autoLocalizationResult.refinedBounds
+							? autoLocalizationResult.refinedBounds
+							: null;
+					const fallbackBounds =
+						!autoClassification.accepted && autoLocalizationResult.coarseBounds
+							? autoLocalizationResult.coarseBounds
+							: null;
+					const nextChipBounds = acceptedBounds ?? fallbackBounds;
+
+					if (!nextChipBounds) {
+						const nextHeFocusBase = normalizeHeFocusSlice(
+							{
+								...current.heFocus,
+								autoProposal: nextAutoProposal,
+								chipBounds: createDefaultChipBounds(heAspectRatio),
+								focusedImageDataUrl: null,
+							},
+							heAspectRatio,
+						);
+						const nextHeFocus: HeFocusSlice = {
+							...nextHeFocusBase,
+							focusedImageDataUrl: null,
+							status: computeLocalizationStatus(true, nextHeFocusBase.chipBounds),
+							isStale: false,
+							error: null,
+							updatedAt: new Date().toISOString(),
+						};
+
+						return invalidateOnHeFocusChipBoundsChange({
+							...current,
+							heFocus: nextHeFocus,
+						});
+					}
+
+					const nextHeFocusBase = normalizeHeFocusSlice(
+						{
+							...current.heFocus,
+							autoProposal: nextAutoProposal,
+							chipBounds: nextChipBounds,
+							focusedImageDataUrl: null,
+						},
+						heAspectRatio,
+					);
+					const nextHeFocus: HeFocusSlice = {
+						...nextHeFocusBase,
+						focusedImageDataUrl: null,
+						status: computeLocalizationStatus(true, nextHeFocusBase.chipBounds),
+						isStale: false,
+						error: null,
+						updatedAt: new Date().toISOString(),
+					};
+
+					const nextProject = {
+						...current,
+						heFocus: nextHeFocus,
+					};
+
+					const acceptedAutoAlignment = applyAcceptedAutoAlignment({
+						current: nextProject.alignment,
+						autoProposal: nextAutoProposal,
+						acceptedTransform: autoLocalizationResult.acceptedTransform,
+						hasReferenceImage: Boolean(referenceImage?.dataUrl),
+						hasMovingImage: Boolean(currentImage?.dataUrl),
+					});
+
+					if (current.heFocus.chipBounds !== nextHeFocus.chipBounds) {
+						const invalidatedProject = invalidateOnHeFocusChipBoundsChange(nextProject);
+						return acceptedAutoAlignment
+							? {
+								...invalidatedProject,
+								alignment: acceptedAutoAlignment,
+							}
+							: invalidatedProject;
+					}
+
+					const invalidatedProject = invalidateOnHeFocusAutoProposalChange(nextProject);
+					return acceptedAutoAlignment
+						? {
+							...invalidatedProject,
+							alignment: acceptedAutoAlignment,
+						}
+						: invalidatedProject;
+				});
+			} catch (error) {
+				if (!cancelled) {
+					console.error("Failed to auto-bootstrap H&E focus", error);
+					onProjectMutate((current) => {
+						const currentImage = current.sourceAssets.images[current.heFocus.targetImage];
+						if (
+							current.currentStep !== "heFocus" ||
+							!currentImage?.dataUrl ||
+							current.heFocus.chipBounds
+						) {
+							return current;
+						}
+
+						const heAspectRatio =
+							currentImage.width && currentImage.height
+								? currentImage.width / currentImage.height
+								: 1;
+						const nextHeFocusBase = normalizeHeFocusSlice(
+							{
+								...current.heFocus,
+								chipBounds: createDefaultChipBounds(heAspectRatio),
+								focusedImageDataUrl: null,
+							},
+							heAspectRatio,
+						);
+						const nextHeFocus: HeFocusSlice = {
+							...nextHeFocusBase,
+							focusedImageDataUrl: null,
+							status: computeLocalizationStatus(true, nextHeFocusBase.chipBounds),
+							isStale: false,
+							error: null,
+							updatedAt: new Date().toISOString(),
+						};
+
+						return invalidateOnHeFocusChipBoundsChange({
+							...current,
+							heFocus: nextHeFocus,
+						});
+					});
+				}
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
 	}, [
+		localizationImageDataUrl,
 		currentHeImageDataUrl,
 		currentStepId,
 		hasHeFocusChipBounds,
@@ -973,6 +1169,15 @@ export function PreprocessWorkspace({
 
 	const runCropQcStep = useCallback(async () => {
 		if (!project) return;
+		const acceptedHeChipBounds = project.heFocus.chipBounds ?? undefined;
+		const coarseHeChipBounds = project.heFocus.autoProposal.coarseBounds ?? undefined;
+		const cropQcCanonicalGeometryArgs =
+			acceptedHeChipBounds || coarseHeChipBounds
+				? {
+					acceptedChipBounds: acceptedHeChipBounds,
+					coarseChipBounds: coarseHeChipBounds,
+				}
+				: {};
 		if (
 			!alignmentReferenceImage?.dataUrl ||
 			!alignmentMovingImage?.dataUrl ||
@@ -1004,6 +1209,7 @@ export function PreprocessWorkspace({
 				eosinDataUrl: alignmentReferenceImage.dataUrl,
 				heDataUrl: alignmentMovingImage.dataUrl,
 				chipBounds: project.localization.chipBounds,
+				...cropQcCanonicalGeometryArgs,
 				imageTransform: project.localization.imageTransform,
 				affineMatrix: project.alignment.affineMatrix,
 				controlPoints: project.alignment.controlPoints,
@@ -1728,10 +1934,30 @@ export function PreprocessWorkspace({
 													) : project.currentStep === "alignment" ? (
 								<AlignmentPanel
 									alignment={project.alignment}
+									autoProposalStatus={project.heFocus.autoProposal.status}
+									autoProposalMethod={project.heFocus.autoProposal.method}
 									chipBounds={project.localization.chipBounds}
 									movingImage={alignmentMovingImage}
 									onSolveAccepted={() => {
 										onStepChange("cropQc");
+									}}
+									onRecomputeAutoLocalization={() => {
+										onProjectMutate((current) => {
+											const nextHeFocus: HeFocusSlice = {
+												...current.heFocus,
+												chipBounds: null,
+												focusedImageDataUrl: null,
+												status: "idle",
+												updatedAt: new Date().toISOString(),
+											};
+
+											return invalidateOnHeFocusAutoProposalChange({
+												...current,
+												currentStep: "heFocus",
+												heFocus: nextHeFocus,
+											});
+										});
+										onStepChange("heFocus");
 									}}
 									referenceImage={alignmentReferenceImage}
 									onAlignmentChange={applyAlignmentUpdate}
