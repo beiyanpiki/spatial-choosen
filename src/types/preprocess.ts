@@ -105,7 +105,32 @@ export type HeFocusSlice = PreprocessSliceBase & {
   chipBounds: PreprocessRect | null;
   handles: LocalizationHandle[];
   imageTransform: LocalizationImageTransform;
+  autoProposal: HeFocusAutoProposal;
   focusedImageDataUrl: string | null;
+};
+
+export type HeFocusAutoProposalStatus = "idle" | "accepted" | "fallback" | "failed";
+
+export type HeFocusAutoProposalQuad = [
+  PreprocessPoint,
+  PreprocessPoint,
+  PreprocessPoint,
+  PreprocessPoint,
+];
+
+export type HeFocusAutoProposal = {
+  status: HeFocusAutoProposalStatus;
+  method: string | null;
+  coarseBounds: PreprocessRect | null;
+  refinedBounds: PreprocessRect | null;
+  refinedQuad: HeFocusAutoProposalQuad | null;
+  rotationDegrees: number | null;
+  eccCorrelation: number | null;
+  failureReason: string | null;
+};
+
+export type LegacyHeFocusSlice = Omit<HeFocusSlice, "autoProposal"> & {
+  autoProposal?: HeFocusAutoProposal | null;
 };
 
 export type AlignmentControlPoint = {
@@ -147,6 +172,7 @@ export type AlignmentSlice = PreprocessSliceBase & {
   movingImage: PreprocessImageKind;
   movingImageTransform: LocalizationImageTransform;
   overlayOpacity: number;
+  source: "auto" | "manual" | null;
   controlPoints: AlignmentControlPoint[];
   inlierMask: boolean[] | null;
   affineMatrix: AlignmentAffineMatrix | null;
@@ -158,6 +184,10 @@ export type AlignmentSlice = PreprocessSliceBase & {
   failureReason: AlignmentFailureReason | null;
   transform: AlignmentTransform | null;
   previewDataUrl: string | null;
+};
+
+export type LegacyAlignmentSlice = Omit<AlignmentSlice, "source"> & {
+  source?: AlignmentSlice["source"];
 };
 
 export type CropQcIssue = {
@@ -445,8 +475,9 @@ export type PreprocessProject = {
   exportState: ExportStateSlice;
 };
 
-export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "cropQc" | "chipConfig" | "tissueSelection"> & {
-  heFocus?: HeFocusSlice;
+export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "alignment" | "cropQc" | "chipConfig" | "tissueSelection"> & {
+  heFocus?: LegacyHeFocusSlice;
+  alignment: LegacyAlignmentSlice;
   cropQc: LegacyCropQcSlice;
   chipConfig: LegacyChipConfigSlice;
   tissueSelection: LegacyTissueSelectionSlice;

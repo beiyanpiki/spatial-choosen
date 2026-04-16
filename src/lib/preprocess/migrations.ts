@@ -2,8 +2,10 @@ import type {
 	CanonicalCropQcSlice,
 	CanonicalProjectedSpot,
 	HeFocusSlice,
+	LegacyAlignmentSlice,
 	LegacyChipConfigSlice,
 	LegacyCropQcSlice,
+	LegacyHeFocusSlice,
 	LegacyPreprocessProject,
 	LegacyProjectedSpot,
 	LegacyTissueSelectionSlice,
@@ -78,11 +80,21 @@ const createHeFocusSlice = (): HeFocusSlice => ({
 	imageTransform: {
 		...DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 	},
+	autoProposal: {
+		status: "idle",
+		method: null,
+		coarseBounds: null,
+		refinedBounds: null,
+		refinedQuad: null,
+		rotationDegrees: null,
+		eccCorrelation: null,
+		failureReason: null,
+	},
 	focusedImageDataUrl: null,
 });
 
 const normalizeHeFocusSlice = (
-	slice: HeFocusSlice | undefined,
+	slice: HeFocusSlice | LegacyHeFocusSlice | undefined,
 ): HeFocusSlice => {
 	if (!slice) {
 		return createHeFocusSlice();
@@ -91,9 +103,20 @@ const normalizeHeFocusSlice = (
 	return {
 		...slice,
 		targetImage: "he",
+		autoProposal: slice.autoProposal ?? createHeFocusSlice().autoProposal,
 		focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
 	};
 };
+
+const normalizeLegacyAlignmentSource = (
+	slice: LegacyAlignmentSlice | PreprocessProject["alignment"],
+): PreprocessProject["alignment"] => ({
+	...slice,
+	source:
+		slice.source === "auto" || slice.source === "manual"
+			? slice.source
+			: null,
+});
 
 const markSliceStale = <TSlice extends PreprocessSliceBase>(
 	slice: TSlice,
@@ -746,7 +769,9 @@ export function migratePreprocessProject(
 			(project.chipConfig.projectedSpots?.length ?? 0) > 0 ||
 			project.chipConfig.status === "complete" ||
 			project.chipConfig.status === "processing");
-	const normalizedAlignment = normalizeAlignmentSlice(project.alignment);
+	const normalizedAlignment = normalizeAlignmentSlice(
+		normalizeLegacyAlignmentSource(project.alignment),
+	);
 	const strictAcceptedAlignment =
 		normalizedAlignment.solveAccepted &&
 		normalizedAlignment.qualityFlags.accepted;
@@ -814,7 +839,7 @@ export function migratePreprocessProject(
 				: tissueSelection,
 		heFocus: normalizeHeFocusSlice(project.heFocus),
 		alignment: needsHeFocusMigration
-			? markSliceStale(project.alignment)
+			? markSliceStale(normalizedAlignment)
 			: {
 				...normalizedAlignment,
 				status: migratedAlignmentStatus,
