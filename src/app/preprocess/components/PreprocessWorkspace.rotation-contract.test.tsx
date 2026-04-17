@@ -4,9 +4,15 @@ import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { LegacyPreprocessProject, PreprocessProject, PreprocessRect } from '@/types/preprocess';
+import type {
+  LegacyPreprocessProject,
+  LocalizationImageTransform,
+  PreprocessProject,
+  PreprocessRect,
+} from '@/types/preprocess';
 
 const mockRunHeAutoLocalization = vi.fn();
+const alignmentPanelSpy = vi.fn();
 
 vi.mock('../../../lib/preprocess/alignment', () => ({
   applyAcceptedAutoAlignment: vi.fn(),
@@ -67,7 +73,10 @@ vi.mock('../../../lib/preprocess/chipConfigs', async () => {
 });
 
 vi.mock('./AlignmentPanel', () => ({
-  AlignmentPanel: () => null,
+  AlignmentPanel: (props: unknown) => {
+    alignmentPanelSpy(props);
+    return null;
+  },
 }));
 
 vi.mock('./CropQcPanel', () => ({
@@ -289,7 +298,62 @@ const parsePoints = (value: string | null) => {
 describe('PreprocessWorkspace rotation contract', () => {
   beforeEach(() => {
     mockRunHeAutoLocalization.mockReset();
+    alignmentPanelSpy.mockReset();
   });
+
+	it('passes localization orientation into the alignment reference canvas boundary with normalized scale', async () => {
+		const alignmentProject = createBaseProject();
+		alignmentProject.currentStep = 'alignment';
+		alignmentProject.localization.imageTransform = {
+			rotationDegrees: 90,
+			flipHorizontal: true,
+			flipVertical: false,
+			scale: 1.25,
+		};
+
+		render(<WorkspaceHarness initialProject={alignmentProject} />);
+
+		await waitFor(() => {
+			expect(alignmentPanelSpy).toHaveBeenCalled();
+		});
+
+		const alignmentProps = alignmentPanelSpy.mock.calls.at(-1)?.[0] as
+			| { referenceImageTransform?: LocalizationImageTransform }
+			| undefined;
+		expect(alignmentProps?.referenceImageTransform).toEqual({
+			rotationDegrees: 90,
+			flipHorizontal: true,
+			flipVertical: false,
+			scale: 1,
+		});
+	});
+
+	it('does not leak localization scale into the alignment reference canvas boundary', async () => {
+		const alignmentProject = createBaseProject();
+		alignmentProject.currentStep = 'alignment';
+		alignmentProject.localization.imageTransform = {
+			rotationDegrees: -90,
+			flipHorizontal: false,
+			flipVertical: true,
+			scale: 2.5,
+		};
+
+		render(<WorkspaceHarness initialProject={alignmentProject} />);
+
+		await waitFor(() => {
+			expect(alignmentPanelSpy).toHaveBeenCalled();
+		});
+
+		const alignmentProps = alignmentPanelSpy.mock.calls.at(-1)?.[0] as
+			| { referenceImageTransform?: LocalizationImageTransform }
+			| undefined;
+		expect(alignmentProps?.referenceImageTransform?.scale).toBe(1);
+		expect(alignmentProps?.referenceImageTransform).toMatchObject({
+			rotationDegrees: -90,
+			flipHorizontal: false,
+			flipVertical: true,
+		});
+	});
 
 	it('keeps Localization overlay fixed while stored image rotation changes', async () => {
 		const user = userEvent.setup();

@@ -1932,36 +1932,43 @@ export function PreprocessWorkspace({
 															</Flex>
 														</Stack>
 													) : project.currentStep === "alignment" ? (
-								<AlignmentPanel
-									alignment={project.alignment}
-									autoProposalStatus={project.heFocus.autoProposal.status}
-									autoProposalMethod={project.heFocus.autoProposal.method}
-									chipBounds={project.localization.chipBounds}
-									movingImage={alignmentMovingImage}
-									onSolveAccepted={() => {
-										onStepChange("cropQc");
-									}}
-									onRecomputeAutoLocalization={() => {
-										onProjectMutate((current) => {
-											const nextHeFocus: HeFocusSlice = {
-												...current.heFocus,
-												chipBounds: null,
-												focusedImageDataUrl: null,
-												status: "idle",
-												updatedAt: new Date().toISOString(),
-											};
+							<AlignmentPanel
+								alignment={project.alignment}
+								autoProposalStatus={project.heFocus.autoProposal.status}
+								autoProposalMethod={project.heFocus.autoProposal.method}
+								chipBounds={project.localization.chipBounds}
+								movingImage={alignmentMovingImage}
+								onSolveAccepted={() => {
+									onStepChange("cropQc");
+								}}
+								onRecomputeAutoLocalization={() => {
+									onProjectMutate((current) => {
+										const nextHeFocus: HeFocusSlice = {
+											...current.heFocus,
+											chipBounds: null,
+											focusedImageDataUrl: null,
+											status: "idle",
+											updatedAt: new Date().toISOString(),
+										};
 
-											return invalidateOnHeFocusAutoProposalChange({
-												...current,
-												currentStep: "heFocus",
-												heFocus: nextHeFocus,
-											});
+										return invalidateOnHeFocusAutoProposalChange({
+											...current,
+											currentStep: "heFocus",
+											heFocus: nextHeFocus,
 										});
-										onStepChange("heFocus");
-									}}
-									referenceImage={alignmentReferenceImage}
-									onAlignmentChange={applyAlignmentUpdate}
-								/>
+									});
+									onStepChange("heFocus");
+								}}
+								referenceImage={alignmentReferenceImage}
+								referenceImageTransform={{
+									rotationDegrees: project.localization.imageTransform.rotationDegrees,
+									flipHorizontal: project.localization.imageTransform.flipHorizontal,
+									flipVertical: project.localization.imageTransform.flipVertical,
+									scale: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM.scale,
+								}}
+								onAlignmentChange={applyAlignmentUpdate}
+							/>
+
 							) : project.currentStep === "cropQc" ? (
 								<CropQcPanel
 									cropHeight={project.cropQc.cropHeight}
