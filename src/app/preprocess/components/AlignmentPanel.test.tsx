@@ -7,6 +7,7 @@ import { theme } from '../../../theme';
 import type {
   AlignmentControlPoint,
   AlignmentSlice,
+  LocalizationImageTransform,
   PreprocessSourceImage,
 } from '../../../types/preprocess';
 import { AlignmentPanel } from './AlignmentPanel';
@@ -107,6 +108,13 @@ const createClusteredControlPoints = (): AlignmentControlPoint[] => [
   { id: 'pair-7', source: { x: 0.506, y: 0.509 }, target: { x: 0.516, y: 0.519 } },
 ];
 
+const createReferenceImageTransform = (): LocalizationImageTransform => ({
+  rotationDegrees: 0,
+  flipHorizontal: false,
+  flipVertical: false,
+  scale: 1,
+});
+
 const createAlignmentSlice = (): AlignmentSlice => ({
   status: 'ready',
   isStale: false,
@@ -183,6 +191,7 @@ describe('AlignmentPanel', () => {
           movingImage={createSourceImage('he')}
           onSolveAccepted={onSolveAccepted}
           referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
           onAlignmentChange={vi.fn()}
         />
       </ChakraProvider>,
@@ -220,6 +229,7 @@ describe('AlignmentPanel', () => {
 					movingImage={createSourceImage('he')}
 					onSolveAccepted={vi.fn()}
 					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
 					onAlignmentChange={onAlignmentChange}
 				/>
 			</ChakraProvider>,
@@ -268,6 +278,7 @@ describe('AlignmentPanel', () => {
 					onSolveAccepted={vi.fn()}
 					onRecomputeAutoLocalization={onRecomputeAutoLocalization}
 					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
 					onAlignmentChange={vi.fn()}
 				/>
 			</ChakraProvider>,

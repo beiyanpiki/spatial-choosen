@@ -64,6 +64,7 @@ type AlignmentPanelProps = {
 	) => void;
 	onRecomputeAutoLocalization?: () => void;
 	referenceImage: PreprocessSourceImage | null;
+	referenceImageTransform: LocalizationImageTransform;
 };
 
 type InteractionMode =
@@ -630,6 +631,7 @@ export function AlignmentPanel({
 	onAlignmentChange,
 	onRecomputeAutoLocalization,
 	referenceImage,
+	referenceImageTransform,
 }: AlignmentPanelProps) {
 	const [interactionMode, setInteractionMode] =
 		useState<InteractionMode>("awaiting-source");
@@ -1714,7 +1716,7 @@ export function AlignmentPanel({
 					<LandmarkCanvas
 						image={referenceImage}
 						imageKey="source"
-						imageTransform={DEFAULT_LOCALIZATION_IMAGE_TRANSFORM}
+						imageTransform={referenceImageTransform}
 						points={sourcePoints}
 						pendingPoint={pendingSourcePoint}
 						title="Eosin landmarks (reference)"
