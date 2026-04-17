@@ -4,10 +4,6 @@ import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@ch
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { computeBaseView, getTransform, relativeToImage } from '@/lib/canvasViewport';
 import {
-  applyImageDisplayTransform,
-  invertImageDisplayTransform,
-} from '@/lib/preprocess/imageTransforms';
-import {
   clampNormalizedSquareRect,
   LOCALIZATION_BOX_COLOR_SWATCHS,
   resizeChipBounds,
@@ -78,6 +74,11 @@ type RotationOverlay = {
   handlePoint: { x: number; y: number };
 };
 
+type ScreenPoint = {
+  x: number;
+  y: number;
+};
+
 const CORNER_HANDLE_ORDER: readonly LocalizationResizeHandle[] = ['nw', 'ne', 'se', 'sw'];
 const EDGE_HANDLE_ORDER: readonly LocalizationResizeHandle[] = ['n', 'e', 's', 'w'];
 const ALL_HANDLE_ORDER: readonly LocalizationResizeHandle[] = [
@@ -111,6 +112,26 @@ const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve
   image.onerror = () => reject(new Error('Unable to load image preview'));
   image.src = src;
 });
+
+const projectNormalizedImagePointToScreen = (
+  point: PreprocessPoint,
+  displayTransform: ReturnType<typeof getTransform>,
+): ScreenPoint | null => {
+  if (!displayTransform) return null;
+
+  return {
+    x: displayTransform.originX + point.x * displayTransform.width,
+    y: displayTransform.originY + point.y * displayTransform.height,
+  };
+};
+
+const projectScreenPointToNormalizedImage = (
+  point: ScreenPoint | null,
+  displayTransform: ReturnType<typeof getTransform>,
+): PreprocessPoint | null => {
+  if (!point || !displayTransform) return null;
+  return relativeToImage(point, displayTransform);
+};
 
 export function CanvasStage({
   boxColor,
@@ -281,15 +302,14 @@ export function CanvasStage({
     };
   }, []);
 
-  const getImagePoint = useCallback((clientX: number, clientY: number) => {
+  const getOverlayImagePoint = useCallback((clientX: number, clientY: number) => {
     const relativePoint = getRelativePoint(clientX, clientY);
-    if (!relativePoint || !displayTransform) return null;
+    return projectScreenPointToNormalizedImage(relativePoint, displayTransform);
+  }, [displayTransform, getRelativePoint]);
 
-    const normalized = relativeToImage(relativePoint, displayTransform);
-    if (!normalized) return null;
-
-    return invertImageDisplayTransform(normalized, imageTransform);
-  }, [displayTransform, getRelativePoint, imageTransform]);
+  const getInteractionImagePoint = useCallback((clientX: number, clientY: number) => (
+    getOverlayImagePoint(clientX, clientY)
+  ), [getOverlayImagePoint]);
 
   useEffect(() => {
     if (!dragState) return;
@@ -306,7 +326,7 @@ export function CanvasStage({
         return;
       }
 
-      const imagePoint = getImagePoint(event.clientX, event.clientY);
+      const imagePoint = getInteractionImagePoint(event.clientX, event.clientY);
       if (!imagePoint) return;
 
       const nextBounds = dragState.kind === 'move'
@@ -330,7 +350,7 @@ export function CanvasStage({
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
     };
-  }, [dragState, getImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsChange, onRotationChange, rotationOverlay]);
+  }, [dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsChange, onRotationChange, rotationOverlay]);
 
   useEffect(() => {
     const host = hostElement;
@@ -347,38 +367,32 @@ export function CanvasStage({
     };
   }, [hostElement, image, imageTransform.scale, onScaleChange]);
 
-  const toScreenPoint = useCallback((point: PreprocessPoint) => {
-    if (!displayTransform) return null;
-
-    const displayPoint = applyImageDisplayTransform(point, imageTransform);
-
-    return {
-      x: displayTransform.originX + displayPoint.x * displayTransform.width,
-      y: displayTransform.originY + displayPoint.y * displayTransform.height,
-    };
-  }, [displayTransform, imageTransform]);
+  const projectOverlayPointToScreen = useCallback((point: PreprocessPoint) => (
+    projectNormalizedImagePointToScreen(point, displayTransform)
+  ), [displayTransform]);
 
   const overlay = useMemo(() => {
     if (!displayTransform || !normalizedChipBounds) return null;
 
+    const overlayBounds = normalizedChipBounds;
     const polygonPoints = [
-      { x: normalizedChipBounds.x, y: normalizedChipBounds.y },
-      { x: normalizedChipBounds.x + normalizedChipBounds.width, y: normalizedChipBounds.y },
-      { x: normalizedChipBounds.x + normalizedChipBounds.width, y: normalizedChipBounds.y + normalizedChipBounds.height },
-      { x: normalizedChipBounds.x, y: normalizedChipBounds.y + normalizedChipBounds.height },
+      { x: overlayBounds.x, y: overlayBounds.y },
+      { x: overlayBounds.x + overlayBounds.width, y: overlayBounds.y },
+      { x: overlayBounds.x + overlayBounds.width, y: overlayBounds.y + overlayBounds.height },
+      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height },
     ]
-      .map((point) => toScreenPoint(point))
+      .map((point) => projectOverlayPointToScreen(point))
       .filter((point): point is NonNullable<typeof point> => Boolean(point));
 
     if (polygonPoints.length !== 4) return null;
 
-    const markerSize = Math.max(0.04, Math.min(normalizedChipBounds.width, normalizedChipBounds.height) * 0.18);
+    const markerSize = Math.max(0.04, Math.min(overlayBounds.width, overlayBounds.height) * 0.18);
     const markerPoints = [
-      { x: normalizedChipBounds.x, y: normalizedChipBounds.y + normalizedChipBounds.height - markerSize },
-      { x: normalizedChipBounds.x, y: normalizedChipBounds.y + normalizedChipBounds.height },
-      { x: normalizedChipBounds.x + markerSize, y: normalizedChipBounds.y + normalizedChipBounds.height },
+      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height - markerSize },
+      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height },
+      { x: overlayBounds.x + markerSize, y: overlayBounds.y + overlayBounds.height },
     ]
-      .map((point) => toScreenPoint(point))
+      .map((point) => projectOverlayPointToScreen(point))
       .filter((point): point is NonNullable<typeof point> => Boolean(point));
 
     if (markerPoints.length !== 3) return null;
@@ -415,7 +429,7 @@ export function CanvasStage({
       markerPoints,
       handlePoints,
     };
-  }, [displayTransform, normalizedChipBounds, toScreenPoint]);
+  }, [displayTransform, normalizedChipBounds, projectOverlayPointToScreen]);
 
   const swatch = LOCALIZATION_BOX_COLOR_SWATCHS[boxColor];
 
@@ -478,7 +492,7 @@ export function CanvasStage({
                     style={{ cursor: dragState ? 'grabbing' : 'move' }}
                     onPointerDown={(event) => {
                       if (!normalizedChipBounds) return;
-                      const point = getImagePoint(event.clientX, event.clientY);
+                      const point = getOverlayImagePoint(event.clientX, event.clientY);
                       if (!point) return;
                       event.preventDefault();
                       setDragState({ kind: 'move', startPoint: point, startRect: normalizedChipBounds });
