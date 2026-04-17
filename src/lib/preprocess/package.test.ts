@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PreprocessProject, ProjectedSpot } from '@/types/preprocess';
+import type { PreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
 import { deserializePreprocessProject, PACKAGE_VERSION } from './package';
 
@@ -73,6 +73,16 @@ const createProject = (): PreprocessProject => ({
       flipVertical: false,
       scale: 1,
     },
+    autoProposal: {
+      status: 'idle',
+      method: null,
+      coarseBounds: null,
+      refinedBounds: null,
+      refinedQuad: null,
+      rotationDegrees: null,
+      eccCorrelation: null,
+      failureReason: null,
+    },
     focusedImageDataUrl: null,
   },
   alignment: {
@@ -103,11 +113,12 @@ const createProject = (): PreprocessProject => ({
       scaleRange: false,
       accepted: false,
     },
-    solveAccepted: false,
-    failureReason: null,
-    transform: null,
-    previewDataUrl: null,
-  },
+      solveAccepted: false,
+      failureReason: null,
+      transform: null,
+      previewDataUrl: null,
+      source: null,
+    },
   cropQc: {
     status: 'complete',
     isStale: false,
@@ -203,13 +214,19 @@ const createPackageBlob = (payload: Record<string, unknown>) => new Blob([
 
 const toCanonicalProjectPayload = (project: PreprocessProject) => {
   const {
-    forcedInSpotIds: _forcedInSpotIds,
-    forcedOutSpotIds: _forcedOutSpotIds,
-    overrideNotice: _overrideNotice,
-    regions: _regions,
-    selectedRegionId: _selectedRegionId,
+    forcedInSpotIds,
+    forcedOutSpotIds,
+    overrideNotice,
+    regions,
+    selectedRegionId,
     ...canonicalTissueSelection
   } = project.tissueSelection;
+
+  void forcedInSpotIds;
+  void forcedOutSpotIds;
+  void overrideNotice;
+  void regions;
+  void selectedRegionId;
 
   return {
     ...project,
@@ -276,7 +293,7 @@ describe('preprocess package matrix-first validation', () => {
     project.tissueSelection.matrix = {
       rows: 64,
       columns: 64,
-      values: Array.from({ length: 4096 }, (_, index) => (index === 0 ? 2 : 0)),
+      values: Array.from({ length: 4096 }, (_, index) => (index === 0 ? 2 : 0)) as TissueActivationValue[],
     };
 
     await expect(deserializePreprocessProject(createPackageBlob({
@@ -361,5 +378,47 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.workflowVersion).toBe(3);
     expect(result.tissueSelection.thresholdMode).toBe('gray-min');
     expect(result.tissueSelection.matrix?.values[0]).toBe(1);
+  });
+
+  it('preserves localization and heFocus geometry through canonical package deserialization when transforms are rotated or flipped', async () => {
+    const project = createProject();
+
+    project.localization.chipBounds = {
+      x: 0.14,
+      y: 0.24,
+      width: 0.32,
+      height: 0.32,
+    };
+    project.localization.handles = [];
+    project.localization.imageTransform = {
+      rotationDegrees: 90,
+      flipHorizontal: true,
+      flipVertical: false,
+      scale: 1.5,
+    };
+
+    project.heFocus.chipBounds = {
+      x: 0.18,
+      y: 0.28,
+      width: 0.22,
+      height: 0.22,
+    };
+    project.heFocus.handles = [];
+    project.heFocus.imageTransform = {
+      rotationDegrees: -90,
+      flipHorizontal: false,
+      flipVertical: true,
+      scale: 0.75,
+    };
+
+    const result = await deserializePreprocessProject(createPackageBlob({
+      version: PACKAGE_VERSION,
+      project: toCanonicalProjectPayload(project),
+    }));
+
+    expect(result.localization.chipBounds).toEqual(project.localization.chipBounds);
+    expect(result.localization.imageTransform).toEqual(project.localization.imageTransform);
+    expect(result.heFocus.chipBounds).toEqual(project.heFocus.chipBounds);
+    expect(result.heFocus.imageTransform).toEqual(project.heFocus.imageTransform);
   });
 });

@@ -18,8 +18,8 @@ const createProjectedSpot = (
   y: arrayRow / 10,
   width: 0.08,
   height: 0.08,
-  diameterX: 0.08,
-  diameterY: 0.08,
+    diameterX: 0.08,
+    diameterY: 0.08,
 });
 
 const createRegion = (spotIds: string[]) => ({
@@ -385,5 +385,41 @@ describe('migratePreprocessProject tissue matrix migration', () => {
     expect(migrated.chipConfig.status).toBe('stale');
     expect(migrated.tissueSelection.status).toBe('stale');
     expect(migrated.exportState.status).toBe('stale');
+  });
+
+  it('preserves localization and heFocus bounds when migrating legacy rotated or flipped transforms', () => {
+    const project = createLegacyProject();
+    const heFocus = project.heFocus as NonNullable<typeof project.heFocus>;
+    project.localization.chipBounds = {
+      x: 0.12,
+      y: 0.26,
+      width: 0.24,
+      height: 0.24,
+    };
+    project.localization.imageTransform = {
+      rotationDegrees: 90,
+      flipHorizontal: true,
+      flipVertical: false,
+      scale: 1.25,
+    };
+    heFocus.chipBounds = {
+      x: 0.18,
+      y: 0.3,
+      width: 0.2,
+      height: 0.2,
+    };
+    heFocus.imageTransform = {
+      rotationDegrees: -90,
+      flipHorizontal: false,
+      flipVertical: true,
+      scale: 0.75,
+    };
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.localization.chipBounds).toEqual(project.localization.chipBounds);
+    expect(migrated.localization.imageTransform).toEqual(project.localization.imageTransform);
+    expect(migrated.heFocus.chipBounds).toEqual(heFocus.chipBounds);
+    expect(migrated.heFocus.imageTransform).toEqual(heFocus.imageTransform);
   });
 });
