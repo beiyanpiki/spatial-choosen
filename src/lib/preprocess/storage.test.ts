@@ -74,6 +74,16 @@ const createProject = (): PreprocessProject => ({
       flipVertical: false,
       scale: 1,
     },
+    autoProposal: {
+      status: 'idle',
+      method: null,
+      coarseBounds: null,
+      refinedBounds: null,
+      refinedQuad: null,
+      rotationDegrees: null,
+      eccCorrelation: null,
+      failureReason: null,
+    },
     focusedImageDataUrl: null,
   },
   alignment: {
@@ -90,6 +100,7 @@ const createProject = (): PreprocessProject => ({
       scale: 1,
     },
     overlayOpacity: 0.5,
+    source: null,
     controlPoints: [],
     inlierMask: null,
     affineMatrix: null,
@@ -389,6 +400,73 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.alignment.qualityFlags.accepted).toBe(false);
     expect(hydrated?.alignment.solveAccepted).toBe(false);
   });
+
+	it('drops stale legacy blob focused H&E previews during hydration when no derived image blob survives', async () => {
+		const project = createProject();
+		project.heFocus.focusedImageDataUrl = 'blob:stale-focused-he-preview';
+    project.chipConfig = {
+      ...project.chipConfig,
+      chipType: null,
+      rows: null,
+      columns: null,
+      projectedSpots: null,
+    };
+    project.tissueSelection = {
+      ...project.tissueSelection,
+      matrix: null,
+      selectedSpotIds: [],
+    };
+
+    upsertPreprocessProjectMetadata(project);
+    const hydrated = await getPreprocessProject(project.id);
+
+		expect(hydrated).toBeDefined();
+		expect(hydrated?.heFocus.focusedImageDataUrl).toBeNull();
+	});
+
+	it('does not reconstruct stale crop geometry from legacy aliases when explicit repaired geometry is null', async () => {
+		const project = createProject();
+
+		upsertPreprocessProjectMetadata(project);
+
+		const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<Record<string, unknown>>;
+		stored[0] = {
+			...stored[0],
+			cropQc: {
+				...(stored[0]?.cropQc as Record<string, unknown>),
+				status: 'stale',
+				eosinReferenceGeometry: null,
+				heQcGeometry: {
+					rect: {
+						x: 0.1,
+						y: 0.2,
+						width: 0.3,
+						height: 0.4,
+					},
+					width: 300,
+					height: 400,
+				},
+				cropRect: {
+					x: 0.25,
+					y: 0,
+					width: 0.75,
+					height: 0.95,
+				},
+				cropWidth: 1799,
+				cropHeight: 2413,
+			},
+		};
+		localStorage.setItem('spatial-preprocess-projects', JSON.stringify(stored));
+
+		const hydrated = await getPreprocessProject(project.id);
+
+		expect(hydrated?.cropQc.status).toBe('stale');
+		expect(hydrated?.cropQc.eosinReferenceGeometry).toBeNull();
+		expect(hydrated?.cropQc.heQcGeometry).toBeNull();
+		expect(hydrated?.cropQc.cropRect).toBeNull();
+		expect(hydrated?.cropQc.cropWidth).toBeNull();
+		expect(hydrated?.cropQc.cropHeight).toBeNull();
+	});
 
   it('preserves canonical matrix truth on storage round-trip when autoSelectedSpotIds do not imply the active cells', async () => {
     const project = createProject();
