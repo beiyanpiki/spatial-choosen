@@ -233,6 +233,41 @@ export type CropQcCheckerboardPreview = {
   dataUrl: string | null;
 };
 
+export type CanonicalCropQcGeometry = {
+  rect: PreprocessRect;
+  width: number;
+  height: number;
+};
+
+/**
+ * Transitional runtime contract for Task 2.
+ *
+ * `eosinReferenceGeometry` is the authoritative crop-domain geometry in
+ * eosin/reference-image space. It is not the derived H&E QC projection.
+ * `heQcGeometry` is derived QC evidence in crop-local space, produced from the
+ * projected H&E geometry when available. It may remain null for workflows that
+ * lack accepted/projectable H&E geometry.
+ */
+export type CropQcTransitionalGeometryContract = {
+  eosinReferenceGeometry?: CanonicalCropQcGeometry | null;
+  heQcGeometry?: CanonicalCropQcGeometry | null;
+};
+
+export type DeprecatedCropQcGeometryAliases = {
+  /**
+   * @deprecated Transitional alias for `eosinReferenceGeometry.rect`.
+   */
+  cropRect: PreprocessRect | null;
+  /**
+   * @deprecated Transitional alias for `eosinReferenceGeometry.width`.
+   */
+  cropWidth: number | null;
+  /**
+   * @deprecated Transitional alias for `eosinReferenceGeometry.height`.
+   */
+  cropHeight: number | null;
+};
+
 export type DeprecatedCropQcPreviewAliases = {
   /**
    * @deprecated Transitional alias for `cropAssets.eosin.fullres.dataUrl`.
@@ -252,16 +287,16 @@ export type DeprecatedCropQcPreviewAliases = {
   featureMatchesPreviewDataUrl: string | null;
 };
 
-export type CropQcSliceCore = PreprocessSliceBase & DeprecatedCropQcPreviewAliases & {
-  cropRect: PreprocessRect | null;
-  cropWidth: number | null;
-  cropHeight: number | null;
-  paddingRatio: number;
-  checkerboardTileSize: number;
-  overlayOpacity: number;
-  qcAccepted: boolean;
-  issues: CropQcIssue[];
-};
+export type CropQcSliceCore = PreprocessSliceBase
+  & CropQcTransitionalGeometryContract
+  & DeprecatedCropQcGeometryAliases
+  & DeprecatedCropQcPreviewAliases & {
+    paddingRatio: number;
+    checkerboardTileSize: number;
+    overlayOpacity: number;
+    qcAccepted: boolean;
+    issues: CropQcIssue[];
+  };
 
 export type CanonicalCropQcSlice = CropQcSliceCore & CropQcCanonicalCropState & {
   checkerboardPreview: CropQcCheckerboardPreview;
