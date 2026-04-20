@@ -464,6 +464,22 @@ const assertPreprocessRect = (value: unknown, fieldName: string) => {
   assertNumber(rect.height, `${fieldName}.height`);
 };
 
+const assertCanonicalCropQcGeometry = (value: unknown, fieldName: string) => {
+  assertObject(value, fieldName);
+  const geometry = value as Record<string, unknown>;
+  assertPreprocessRect(geometry.rect, `${fieldName}.rect`);
+  assertNumber(geometry.width, `${fieldName}.width`);
+  assertNumber(geometry.height, `${fieldName}.height`);
+};
+
+const assertNullableCanonicalCropQcGeometry = (value: unknown, fieldName: string) => {
+  if (value === null) {
+    return;
+  }
+
+  assertCanonicalCropQcGeometry(value, fieldName);
+};
+
 const assertPreprocessPoint = (value: unknown, fieldName: string) => {
   assertObject(value, fieldName);
   const point = value as Record<string, unknown>;
@@ -689,6 +705,12 @@ const assertLegacyCropQcContract = (slice: Record<string, unknown>) => {
 const assertCropQcSlice = (value: unknown) => {
   assertPreprocessSliceBase(value, "cropQc");
   const slice = value as Record<string, unknown>;
+  if ('eosinReferenceGeometry' in slice) {
+    assertNullableCanonicalCropQcGeometry(slice.eosinReferenceGeometry, 'cropQc.eosinReferenceGeometry');
+  }
+  if ('heQcGeometry' in slice) {
+    assertNullableCanonicalCropQcGeometry(slice.heQcGeometry, 'cropQc.heQcGeometry');
+  }
   if (slice.cropRect !== null) assertPreprocessRect(slice.cropRect, "cropQc.cropRect");
   if (slice.cropWidth !== null) assertNumber(slice.cropWidth, "cropQc.cropWidth");
   if (slice.cropHeight !== null) assertNumber(slice.cropHeight, "cropQc.cropHeight");

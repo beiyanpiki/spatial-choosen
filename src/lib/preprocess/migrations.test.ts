@@ -22,6 +22,17 @@ const createProjectedSpot = (
     diameterY: 0.08,
 });
 
+const createSourceImage = (kind: 'eosin' | 'he') => ({
+  id: `${kind}-source`,
+  kind,
+  fileName: `${kind}.png`,
+  mimeType: 'image/png',
+  sizeBytes: 1,
+  width: 2048,
+  height: 2048,
+  lastModified: 0,
+});
+
 const createRegion = (spotIds: string[]) => ({
   id: 'region-1',
   label: 'Region 1',
@@ -127,6 +138,8 @@ const createLegacyProject = (): LegacyPreprocessProject => ({
     isStale: false,
     updatedAt: null,
     error: null,
+    eosinReferenceGeometry: null,
+    heQcGeometry: null,
     cropRect: null,
     cropWidth: null,
     cropHeight: null,
@@ -212,6 +225,16 @@ const applyCanonicalEmptyCropContract = (project: LegacyPreprocessProject) => {
       dataUrl: null,
     },
   });
+};
+
+const removeRepairedCropGeometry = (project: LegacyPreprocessProject) => {
+  const cropQc = project.cropQc as typeof project.cropQc & {
+    eosinReferenceGeometry?: unknown;
+    heQcGeometry?: unknown;
+  };
+
+  delete cropQc.eosinReferenceGeometry;
+  delete cropQc.heQcGeometry;
 };
 
 describe('migratePreprocessProject tissue matrix migration', () => {
@@ -385,6 +408,47 @@ describe('migratePreprocessProject tissue matrix migration', () => {
     expect(migrated.chipConfig.status).toBe('stale');
     expect(migrated.tissueSelection.status).toBe('stale');
     expect(migrated.exportState.status).toBe('stale');
+  });
+
+  it('rewinds completed legacy projects missing repaired crop metadata back to cropQc and clears downstream derived state', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'exportState';
+    project.sourceAssets.images = {
+      eosin: createSourceImage('eosin'),
+      he: createSourceImage('he'),
+    };
+    project.alignment.solveAccepted = true;
+    project.alignment.qualityFlags.accepted = true;
+    project.cropQc.cropRect = {
+      x: 0.25,
+      y: 0,
+      width: 0.75,
+      height: 0.95,
+    };
+    project.cropQc.cropWidth = 1799;
+    project.cropQc.cropHeight = 2413;
+    project.cropQc.qcAccepted = true;
+    project.tissueSelection.selectedSpotIds = ['spot-a'];
+    applyCanonicalEmptyCropContract(project);
+    removeRepairedCropGeometry(project);
+
+    const migrated = migratePreprocessProject(project);
+
+		expect(migrated.currentStep).toBe('cropQc');
+		expect(migrated.cropQc.status).toBe('stale');
+		expect(migrated.cropQc.eosinReferenceGeometry).toBeNull();
+		expect(migrated.cropQc.heQcGeometry).toBeNull();
+		expect(migrated.cropQc.cropRect).toBeNull();
+		expect(migrated.cropQc.cropWidth).toBeNull();
+		expect(migrated.cropQc.cropHeight).toBeNull();
+		expect(migrated.chipConfig.status).toBe('stale');
+		expect(migrated.chipConfig.projectedSpots).toBeNull();
+		expect(migrated.tissueSelection.status).toBe('stale');
+		expect(migrated.tissueSelection.matrix).toBeNull();
+    expect(migrated.tissueSelection.selectedSpotIds).toBeNull();
+    expect(migrated.tissueSelection.supportState).toBe('unsupported');
+    expect(migrated.exportState.status).toBe('stale');
+    expect(migrated.exportState.lastExportedAt).toBeNull();
   });
 
   it('preserves localization and heFocus bounds when migrating legacy rotated or flipped transforms', () => {
