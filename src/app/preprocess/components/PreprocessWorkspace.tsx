@@ -56,6 +56,7 @@ import {
 	invalidateOnHeFocusAutoProposalChange,
 	invalidateOnHeFocusChange,
 	invalidateOnHeFocusChipBoundsChange,
+	invalidateOnHeFocusCommit,
 	invalidateOnLocalizationChange,
 	invalidateOnSourceAssetsChange,
 } from "../../../lib/preprocess/invalidation";
@@ -113,6 +114,12 @@ type PreprocessWorkspaceProps = {
 	onProjectNameChange: (value: string) => void;
 	onStepChange: (stepId: PreprocessStepId) => void;
 	project: PreprocessProject | null;
+};
+
+type HeFocusComparisonSource = {
+	sourceDataUrl: string;
+	chipBounds: PreprocessRect;
+	imageTransform: LocalizationImageTransform;
 };
 
 const autosaveTone: Record<AutosaveStatus, string> = {
@@ -295,6 +302,27 @@ const generateFocusedHeDataUrl = async (args: {
 
 	return focusedCanvas.toDataURL("image/png");
 };
+
+export const getHeFocusComparisonSource = (
+	project: PreprocessProject | null,
+): HeFocusComparisonSource | null => {
+	if (!project?.localization.chipBounds) {
+		return null;
+	}
+
+	const localizationImage =
+		project.sourceAssets.images[project.localization.targetImage] ?? null;
+	if (!localizationImage?.dataUrl) {
+		return null;
+	}
+
+	return {
+		sourceDataUrl: localizationImage.dataUrl,
+		chipBounds: project.localization.chipBounds,
+		imageTransform: project.localization.imageTransform,
+	};
+};
+
 const placeholderCopyByStep: Record<
 	PreprocessStepId,
 	{ title: string; body: string }
@@ -309,7 +337,7 @@ const placeholderCopyByStep: Record<
 	},
 	heFocus: {
 		title: "H&E focus",
-		body: "Adjust a square H&E working region between localization and alignment. Saved focus bounds stay in original H&E image coordinates, and any stored focused-image preview reappears here when available.",
+		body: "Adjust a square H&E working region between localization and alignment. Saved focus bounds stay in original H&E image coordinates while the Localize inner-chip pane remains a static reference for comparison.",
 	},
 	alignment: {
 		title: "Image alignment",
@@ -604,8 +632,12 @@ export function PreprocessWorkspace({
 	const [isExporting, setIsExporting] = useState(false);
 	const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 	const [projectNameDraft, setProjectNameDraft] = useState("");
+	const [heFocusComparisonImageDataUrl, setHeFocusComparisonImageDataUrl] =
+		useState<string | null>(null);
 	const [focusedHeMovingImage, setFocusedHeMovingImage] =
 		useState<PreprocessSourceImage | null>(null);
+	const [heFocusDraftChipBounds, setHeFocusDraftChipBounds] =
+		useState<PreprocessRect | null>(null);
 	const [tissueTool, setTissueTool] = useState<TissueTool>("activate");
 	const [isDetectingTissue, setIsDetectingTissue] = useState(false);
 	const tissueDetectionRequestTokenRef = useRef(0);
@@ -626,7 +658,6 @@ export function PreprocessWorkspace({
 	const currentHeImageSource = project
 		? (project.sourceAssets.images[project.heFocus.targetImage] ?? null)
 		: null;
-	const heFocusImageSource = project?.heFocus.focusedImageDataUrl ?? null;
 	const alignmentReferenceImage = project
 		? (project.sourceAssets.images[project.alignment.referenceImage] ?? null)
 		: null;
@@ -637,8 +668,26 @@ export function PreprocessWorkspace({
 			: (project.sourceAssets.images[project.alignment.movingImage] ?? null)
 		: null;
 	const localizationImageDataUrl = localizationImage?.dataUrl ?? null;
+	const localizationChipBounds = project?.localization.chipBounds ?? null;
+	const localizationImageTransform = project?.localization.imageTransform ?? null;
 	const currentHeImageDataUrl = currentHeImageSource?.dataUrl ?? null;
 	const focusedHeImageDataUrl = project?.heFocus.focusedImageDataUrl ?? null;
+	const heFocusStageChipBounds =
+		heFocusDraftChipBounds ?? project?.heFocus.chipBounds ?? null;
+	const heFocusComparisonSource = useMemo(() => {
+		if (!localizationImageDataUrl || !localizationChipBounds || !localizationImageTransform) {
+			return null;
+		}
+
+		return {
+			sourceDataUrl: localizationImageDataUrl,
+			chipBounds: localizationChipBounds,
+			imageTransform: localizationImageTransform,
+		};
+	}, [localizationChipBounds, localizationImageDataUrl, localizationImageTransform]);
+	const heFocusChipBounds = project?.heFocus.chipBounds ?? null;
+	const heFocusImageTransform = project?.heFocus.imageTransform ?? null;
+	const heFocusStatus = project?.heFocus.status ?? null;
 	const alignmentMovingImageKind = project?.alignment.movingImage ?? null;
 	const currentStepId = project?.currentStep ?? null;
 	const hasLocalizationChipBounds = Boolean(project?.localization.chipBounds);
@@ -662,6 +711,15 @@ export function PreprocessWorkspace({
 		project?.cropQc.cropAssets?.eosin?.fullres.dataUrl &&
 			project?.cropQc.cropAssets?.he?.fullres.dataUrl,
 	);
+
+	useEffect(() => {
+		if (project?.currentStep !== "heFocus" || !project?.heFocus.chipBounds) {
+			setHeFocusDraftChipBounds(null);
+			return;
+		}
+
+		setHeFocusDraftChipBounds(null);
+	}, [project?.currentStep, project?.heFocus.chipBounds]);
 
 	const applyLocalizationUpdate = useCallback(
 		(
@@ -708,6 +766,7 @@ export function PreprocessWorkspace({
 			updater: (current: HeFocusSlice) => HeFocusSlice,
 			options?: {
 				invalidateDownstream?: boolean;
+				invalidationScope?: "change" | "commit";
 				preserveFocusedImage?: boolean;
 			},
 		) => {
@@ -746,7 +805,9 @@ export function PreprocessWorkspace({
 
 				return options?.invalidateDownstream === false
 					? nextProject
-					: invalidateOnHeFocusChange(nextProject);
+					: options?.invalidationScope === "commit"
+						? invalidateOnHeFocusCommit(nextProject)
+						: invalidateOnHeFocusChange(nextProject);
 			});
 		},
 		[onProjectMutate],
@@ -934,13 +995,11 @@ export function PreprocessWorkspace({
 	);
 
 	useEffect(() => {
-		if (!project) return;
-		if (project.heFocus.status !== "complete") return;
-		if (project.heFocus.focusedImageDataUrl) return;
+		if (heFocusDraftChipBounds) return;
+		if (heFocusStatus !== "complete") return;
+		if (focusedHeImageDataUrl) return;
 
-		const sourceHeDataUrl = currentHeImageSource?.dataUrl;
-		const focusedChipBounds = project.heFocus.chipBounds;
-		if (!focusedChipBounds || !sourceHeDataUrl) {
+		if (!heFocusChipBounds || !currentHeImageDataUrl || !heFocusImageTransform) {
 			return;
 		}
 
@@ -949,9 +1008,9 @@ export function PreprocessWorkspace({
 		void (async () => {
 			try {
 				const focusedImageDataUrl = await generateFocusedHeDataUrl({
-					sourceDataUrl: sourceHeDataUrl,
-					chipBounds: focusedChipBounds,
-					imageTransform: project.heFocus.imageTransform,
+					sourceDataUrl: currentHeImageDataUrl,
+					chipBounds: heFocusChipBounds,
+					imageTransform: heFocusImageTransform,
 				});
 				if (cancelled) return;
 
@@ -985,15 +1044,51 @@ export function PreprocessWorkspace({
 			cancelled = true;
 		};
 	}, [
-		currentHeImageSource,
-		currentHeImageSource?.dataUrl,
-		project?.heFocus.chipBounds,
-		project?.heFocus.focusedImageDataUrl,
-		project?.heFocus.imageTransform,
-		project?.heFocus.status,
+		currentHeImageDataUrl,
+		heFocusChipBounds,
+		heFocusDraftChipBounds,
+		heFocusImageTransform,
+		heFocusStatus,
+		focusedHeImageDataUrl,
 		onProjectMutate,
-		project,
 	]);
+
+	useEffect(() => {
+		if (currentStepId !== "heFocus") {
+			setHeFocusComparisonImageDataUrl(null);
+			return;
+		}
+
+		if (!heFocusComparisonSource) {
+			setHeFocusComparisonImageDataUrl(null);
+			return;
+		}
+
+		let cancelled = false;
+
+		void (async () => {
+			try {
+				const comparisonImageDataUrl = await generateFocusedHeDataUrl(
+					heFocusComparisonSource,
+				);
+				if (!cancelled) {
+					setHeFocusComparisonImageDataUrl(comparisonImageDataUrl);
+				}
+			} catch (error) {
+				if (!cancelled) {
+					console.error(
+						"Failed to regenerate HE focus comparison preview",
+						error,
+					);
+					setHeFocusComparisonImageDataUrl(null);
+				}
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	}, [currentStepId, heFocusComparisonSource]);
 
 	useEffect(() => {
 		if (alignmentMovingImageKind !== "he") {
@@ -2148,7 +2243,7 @@ export function PreprocessWorkspace({
 									>
 										<CanvasStage
 											boxColor="green"
-											chipBounds={project.heFocus.chipBounds}
+											chipBounds={heFocusStageChipBounds}
 											containerTestId="preprocess-he-focus-canvas-column"
 											controlTestIdPrefix="he-focus"
 											image={currentHeImageSource}
@@ -2164,11 +2259,14 @@ export function PreprocessWorkspace({
 												heading: "H&E focus canvas",
 												overlayAriaLabel: "H&E focus overlay",
 												resetAriaLabel: "Reset H&E focus transform",
-												savedHint:
-													"Saved focus bounds stay square and normalized in original H&E image coordinates.",
-											}}
-											onScaleChange={(value) => {
-												applyHeFocusUpdate(
+														savedHint:
+															"Saved focus bounds stay square and normalized in original H&E image coordinates.",
+													}}
+													onChipBoundsCancel={() => {
+														setHeFocusDraftChipBounds(null);
+													}}
+													onScaleChange={(value) => {
+														applyHeFocusUpdate(
 													(current) => ({
 														...current,
 														imageTransform: {
@@ -2247,10 +2345,19 @@ export function PreprocessWorkspace({
 												}));
 											}}
 											onChipBoundsChange={(chipBounds) => {
-												applyHeFocusUpdate((current) => ({
-													...current,
-													chipBounds,
-												}));
+												setHeFocusDraftChipBounds(chipBounds);
+											}}
+											onChipBoundsCommit={(chipBounds) => {
+												setHeFocusDraftChipBounds(null);
+												applyHeFocusUpdate(
+													(current) => ({
+														...current,
+														chipBounds,
+													}),
+													{
+														invalidationScope: "commit",
+													},
+												);
 											}}
 										/>
 
@@ -2263,17 +2370,25 @@ export function PreprocessWorkspace({
 											bg="gray.50"
 											px={4}
 											py={4}
-											data-testid="he-focus-focused-image-card"
+											data-testid="he-focus-localize-reference-card"
 										>
 											<Stack spacing={3}>
-												<Heading size="sm">
-													Saved focused H&amp;E preview
-												</Heading>
-												{heFocusImageSource ? (
+												<Stack spacing={1}>
+													<HStack spacing={2} align="center">
+														<Heading size="sm">Localize inner-chip reference</Heading>
+														<Badge colorScheme="blue" variant="subtle">
+															Static reference
+														</Badge>
+													</HStack>
+													<Text fontSize="sm" color="gray.600">
+														Compare your live H&amp;E drag against the committed Localize inner-chip crop.
+													</Text>
+												</Stack>
+												{heFocusComparisonImageDataUrl ? (
 													<Image
-														src={heFocusImageSource}
-														alt="Saved focused H&E preview"
-														data-testid="he-focus-focused-image-preview"
+														src={heFocusComparisonImageDataUrl}
+														alt="Localize inner-chip reference preview"
+														data-testid="he-focus-localize-reference-preview"
 														borderRadius="lg"
 														border="1px solid"
 														borderColor="gray.200"
@@ -2282,10 +2397,36 @@ export function PreprocessWorkspace({
 														maxH="280px"
 														w="100%"
 													/>
-												) : (
-													<Text fontSize="sm" color="gray.600">
-														No saved focused H&amp;E preview yet.
-													</Text>
+												) : heFocusComparisonSource ? (
+													<Flex
+														minH="180px"
+														align="center"
+														justify="center"
+														borderRadius="lg"
+														border="1px solid"
+														borderColor="gray.200"
+														bg="white"
+														px={4}
+													>
+															<Text fontSize="sm" color="gray.600" textAlign="center">
+																Preparing the Localize inner-chip reference preview.
+															</Text>
+														</Flex>
+													) : (
+													<Flex
+														minH="180px"
+														align="center"
+														justify="center"
+														borderRadius="lg"
+														border="1px solid"
+														borderColor="gray.200"
+														bg="white"
+														px={4}
+													>
+															<Text fontSize="sm" color="gray.600" textAlign="center">
+																Complete Localize with a committed inner-chip box to enable this comparison reference.
+															</Text>
+														</Flex>
 												)}
 											</Stack>
 										</Box>
