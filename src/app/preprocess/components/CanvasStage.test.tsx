@@ -192,6 +192,45 @@ function StageHarness() {
 	);
 }
 
+function StageCommitHarness({
+	onChipBoundsChangeSpy,
+	onChipBoundsCancelSpy,
+	onChipBoundsCommitSpy,
+}: {
+	onChipBoundsChangeSpy: (bounds: PreprocessRect) => void;
+	onChipBoundsCancelSpy?: () => void;
+	onChipBoundsCommitSpy: (bounds: PreprocessRect) => void;
+}) {
+	const [chipBounds, setChipBounds] = useState<PreprocessRect>(createChipBounds());
+
+	return (
+		<ChakraProvider theme={theme}>
+			<CanvasStage
+				boxColor="green"
+				chipBounds={chipBounds}
+				controlTestIdPrefix="localize"
+				image={createImage()}
+				imageTransform={createTransform()}
+				onChipBoundsCancel={onChipBoundsCancelSpy}
+				onChipBoundsChange={(nextBounds) => {
+					onChipBoundsChangeSpy(nextBounds);
+					setChipBounds(nextBounds);
+				}}
+				onChipBoundsCommit={(nextBounds) => {
+					onChipBoundsCommitSpy(nextBounds);
+				}}
+				onFlipHorizontal={vi.fn()}
+				onFlipVertical={vi.fn()}
+				onResetTransform={vi.fn()}
+				onRotationChange={vi.fn()}
+				onRotationDelta={vi.fn()}
+				onScaleChange={vi.fn()}
+				onScaleDelta={vi.fn()}
+			/>
+		</ChakraProvider>
+	);
+}
+
 describe('CanvasStage', () => {
 	it('keeps overlay coordinates fixed across rotation and a flip state', async () => {
 		render(<StageHarness />);
@@ -336,5 +375,121 @@ describe('CanvasStage', () => {
 		});
 		expect(readOutlinePoints()).toEqual(initialOutline);
 		expect(readChipBounds()).toEqual(initialBounds);
+	});
+
+	it('emits live drag updates on pointermove and a single final bounds commit on pointerup', async () => {
+		const onChipBoundsChangeSpy = vi.fn();
+		const onChipBoundsCommitSpy = vi.fn();
+
+		render(
+			<StageCommitHarness
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const expectedFirstMove = translateChipBounds(initialRect, { x: 0.1, y: 0.1 }, IMAGE_ASPECT_RATIO);
+		const expectedFinalMove = translateChipBounds(initialRect, { x: 0.35, y: 1 / 6 }, IMAGE_ASPECT_RATIO);
+		const body = screen.getByTestId('localize-box-body');
+
+		await act(async () => {
+			dispatchPointerEvent(body, 'pointerdown', {
+				buttons: 1,
+				clientX: 240,
+				clientY: 200,
+				pointerId: 1,
+			});
+		});
+
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: 320,
+				clientY: 260,
+				pointerId: 1,
+			});
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: 520,
+				clientY: 300,
+				pointerId: 1,
+			});
+		});
+
+		expect(onChipBoundsChangeSpy).toHaveBeenCalledTimes(2);
+		expect(onChipBoundsChangeSpy).toHaveBeenNthCalledWith(1, expectedFirstMove);
+		expect(onChipBoundsChangeSpy).toHaveBeenNthCalledWith(2, expectedFinalMove);
+		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
+
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointerup', {
+				clientX: 520,
+				clientY: 300,
+				pointerId: 1,
+			});
+		});
+
+		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
+		expect(onChipBoundsCommitSpy).toHaveBeenCalledWith(expectedFinalMove);
+	});
+
+	it('clears drag state through the cancel callback without committing bounds', async () => {
+		const onChipBoundsChangeSpy = vi.fn();
+		const onChipBoundsCancelSpy = vi.fn();
+		const onChipBoundsCommitSpy = vi.fn();
+
+		render(
+			<StageCommitHarness
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCancelSpy={onChipBoundsCancelSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const expectedMove = translateChipBounds(initialRect, { x: 0.1, y: 0.1 }, IMAGE_ASPECT_RATIO);
+		const body = screen.getByTestId('localize-box-body');
+
+		await act(async () => {
+			dispatchPointerEvent(body, 'pointerdown', {
+				buttons: 1,
+				clientX: 240,
+				clientY: 200,
+				pointerId: 1,
+			});
+		});
+
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: 320,
+				clientY: 260,
+				pointerId: 1,
+			});
+		});
+
+		expect(onChipBoundsChangeSpy).toHaveBeenCalledWith(expectedMove);
+		expect(onChipBoundsCancelSpy).not.toHaveBeenCalled();
+		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
+
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointercancel', {
+				clientX: 320,
+				clientY: 260,
+				pointerId: 1,
+			});
+		});
+
+		expect(onChipBoundsCancelSpy).toHaveBeenCalledTimes(1);
+		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
 	});
 });

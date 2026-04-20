@@ -21,6 +21,8 @@ import type {
 type CanvasStageProps = {
   boxColor: LocalizationBoxColor;
   chipBounds: PreprocessRect | null;
+  onChipBoundsCancel?: () => void;
+  onChipBoundsCommit?: (chipBounds: PreprocessRect) => void;
   containerTestId?: string;
   controlTestIdPrefix?: string;
   image: PreprocessSourceImage | null;
@@ -136,6 +138,8 @@ const projectScreenPointToNormalizedImage = (
 export function CanvasStage({
   boxColor,
   chipBounds,
+  onChipBoundsCancel,
+  onChipBoundsCommit,
   containerTestId = 'preprocess-localization-canvas-column',
   controlTestIdPrefix = 'localize',
   image,
@@ -156,6 +160,8 @@ export function CanvasStage({
   };
   const hostRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dragDidMoveRef = useRef(false);
+  const dragLatestBoundsRef = useRef<PreprocessRect | null>(null);
 
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
@@ -336,21 +342,38 @@ export function CanvasStage({
           }, imageAspectRatio)
         : resizeChipBounds(dragState.startRect, dragState.handle, imagePoint, imageAspectRatio);
 
+      dragDidMoveRef.current = true;
+      dragLatestBoundsRef.current = nextBounds;
       onChipBoundsChange(nextBounds);
     };
 
     const handlePointerUp = () => {
+      if (dragState.kind !== 'rotate' && dragDidMoveRef.current && dragLatestBoundsRef.current) {
+        onChipBoundsCommit?.(dragLatestBoundsRef.current);
+      }
+
+      dragDidMoveRef.current = false;
+      dragLatestBoundsRef.current = null;
+      setDragState(null);
+    };
+
+    const handlePointerCancel = () => {
+      dragDidMoveRef.current = false;
+      dragLatestBoundsRef.current = null;
+      onChipBoundsCancel?.();
       setDragState(null);
     };
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
 
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
     };
-  }, [dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsChange, onRotationChange, rotationOverlay]);
+  }, [dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsCancel, onChipBoundsChange, onChipBoundsCommit, onRotationChange, rotationOverlay]);
 
   useEffect(() => {
     const host = hostElement;
@@ -495,6 +518,8 @@ export function CanvasStage({
                       const point = getOverlayImagePoint(event.clientX, event.clientY);
                       if (!point) return;
                       event.preventDefault();
+                      dragDidMoveRef.current = false;
+                      dragLatestBoundsRef.current = null;
                       setDragState({ kind: 'move', startPoint: point, startRect: normalizedChipBounds });
                     }}
                   />
@@ -536,6 +561,8 @@ export function CanvasStage({
                         if (!normalizedChipBounds) return;
                         event.preventDefault();
                         event.stopPropagation();
+                        dragDidMoveRef.current = false;
+                        dragLatestBoundsRef.current = null;
                         setDragState({ kind: 'resize', handle, startRect: normalizedChipBounds });
                       }}
                     />

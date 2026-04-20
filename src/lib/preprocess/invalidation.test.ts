@@ -5,7 +5,9 @@ import { buildEmptyPreprocessProject } from '@/app/preprocess/projectState';
 import {
   invalidateOnAcceptedAlignmentProvenanceChange,
   invalidateOnHeFocusAutoProposalChange,
+  invalidateOnHeFocusChange,
   invalidateOnHeFocusChipBoundsChange,
+  invalidateOnHeFocusCommit,
   invalidateOnLocalizationChange,
 } from './invalidation';
 
@@ -209,6 +211,25 @@ describe('preprocess invalidation auto-localization contract', () => {
     expect(invalidated.tissueSelection.status).toBe('stale');
     expect(invalidated.exportState.status).toBe('stale');
     expect(invalidated.localization).toEqual(project.localization);
+  });
+
+  it('changing he focus through the commit invalidator matches chip-bounds downstream invalidation', () => {
+    const project = createDownstreamProject();
+
+    const invalidatedOnCommit = invalidateOnHeFocusCommit(project);
+    const invalidatedOnChipBounds = invalidateOnHeFocusChipBoundsChange(project);
+
+    expect(invalidatedOnCommit.heFocus).toEqual(project.heFocus);
+    expect(invalidatedOnCommit).toEqual(invalidatedOnChipBounds);
+  });
+
+  it('changing he focus through the generic invalidator keeps the commit-time breadth intact', () => {
+    const project = createDownstreamProject();
+
+    const invalidatedOnChange = invalidateOnHeFocusChange(project);
+    const invalidatedOnCommit = invalidateOnHeFocusCommit(project);
+
+    expect(invalidatedOnChange).toEqual(invalidatedOnCommit);
   });
 
   it('changing he focus auto proposal clears alignment and crop qc only', () => {

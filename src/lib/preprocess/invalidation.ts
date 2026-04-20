@@ -168,6 +168,10 @@ export function invalidateOnLocalizationChange(project: PreprocessProject): Prep
 }
 
 export function invalidateOnHeFocusChange(project: PreprocessProject): PreprocessProject {
+  return invalidateOnHeFocusCommit(project);
+}
+
+export function invalidateOnHeFocusCommit(project: PreprocessProject): PreprocessProject {
   return invalidateOnHeFocusChipBoundsChange(project);
 }
 
