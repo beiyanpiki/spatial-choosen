@@ -58,6 +58,11 @@ const invalidateHeFocusSlice = (slice: HeFocusSlice): HeFocusSlice => ({
 
 const invalidateCropQcSlice = (slice: CropQcSlice): CropQcSlice => ({
   ...markStale(slice),
+  eosinReferenceGeometry: null,
+  heQcGeometry: null,
+  cropRect: null,
+  cropWidth: null,
+  cropHeight: null,
   cropAssets: {
     eosin: null,
     he: null,

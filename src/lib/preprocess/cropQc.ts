@@ -1,12 +1,15 @@
 import type {
   AlignmentAffineMatrix,
   AlignmentControlPoint,
+  CanonicalCropQcGeometry,
   CropQcCanonicalAsset,
   CropQcCanonicalAssetSet,
+  HeFocusAutoProposalQuad,
   LocalizationImageTransform,
   PreprocessRect,
 } from '@/types/preprocess';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
+import { clampNormalizedSquareRect } from './localization';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -34,6 +37,8 @@ const disposeCanvas = (canvas: HTMLCanvasElement) => {
 };
 
 export type CropQcResult = {
+  eosinReferenceGeometry: CanonicalCropQcGeometry;
+  heQcGeometry: CanonicalCropQcGeometry | null;
   cropRect: PreprocessRect;
   cropWidth: number;
   cropHeight: number;
@@ -235,41 +240,6 @@ const normalizeRect = (
   };
 };
 
-const getRectCornerPoints = (chipBounds: PreprocessRect, imageSize: Size): PixelPoint[] => {
-  const normalized = normalizeRect(chipBounds, imageSize);
-  const minX = normalized.rect.x * imageSize.width;
-  const minY = normalized.rect.y * imageSize.height;
-  const maxX = (normalized.rect.x + normalized.rect.width) * imageSize.width;
-  const maxY = (normalized.rect.y + normalized.rect.height) * imageSize.height;
-
-  return [
-    { x: minX, y: minY },
-    { x: maxX, y: minY },
-    { x: maxX, y: maxY },
-    { x: minX, y: maxY },
-  ];
-};
-
-const normalizeProjectedRect = (args: {
-  corners: PixelPoint[];
-  imageSize: Size;
-}) => {
-  const { corners, imageSize } = args;
-  const xs = corners.map((corner) => corner.x);
-  const ys = corners.map((corner) => corner.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-
-  return normalizeRect({
-    x: minX / imageSize.width,
-    y: minY / imageSize.height,
-    width: (maxX - minX) / imageSize.width,
-    height: (maxY - minY) / imageSize.height,
-  }, imageSize);
-};
-
 const makeCheckerboard = (
   eosinCrop: HTMLCanvasElement,
   heCrop: HTMLCanvasElement,
@@ -306,6 +276,30 @@ const toPixelPoint = (point: { x: number; y: number }, size: Size): PixelPoint =
   y: point.y * size.height,
 });
 
+const toRectCornerPoints = (
+  rect: PreprocessRect,
+  size: Size,
+): [PixelPoint, PixelPoint, PixelPoint, PixelPoint] => ([
+  toPixelPoint({ x: rect.x, y: rect.y }, size),
+  toPixelPoint({ x: rect.x + rect.width, y: rect.y }, size),
+  toPixelPoint({ x: rect.x + rect.width, y: rect.y + rect.height }, size),
+  toPixelPoint({ x: rect.x, y: rect.y + rect.height }, size),
+]);
+
+const toPixelBounds = (points: readonly PixelPoint[]): PixelRect => {
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
 const applyAffineToPoint = (
   point: PixelPoint,
   affineMatrix: AlignmentAffineMatrix,
@@ -315,47 +309,92 @@ const applyAffineToPoint = (
 });
 
 const usesCanonicalAcceptedGeometryContract = (args: {
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
   acceptedChipBounds?: PreprocessRect | null;
   coarseChipBounds?: PreprocessRect | null;
-}) => args.acceptedChipBounds !== undefined || args.coarseChipBounds !== undefined;
+}) => args.acceptedChipQuad !== undefined
+  || args.acceptedChipBounds !== undefined
+  || args.coarseChipBounds !== undefined;
+
+const toCanonicalCropQcGeometry = (normalized: {
+  rect: PreprocessRect;
+  pixelRect: PixelRect;
+}): CanonicalCropQcGeometry => ({
+  rect: normalized.rect,
+  width: normalized.pixelRect.width,
+  height: normalized.pixelRect.height,
+});
 
 const resolveCropBounds = (args: {
   chipBounds: PreprocessRect;
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
   acceptedChipBounds?: PreprocessRect | null;
   coarseChipBounds?: PreprocessRect | null;
   referenceSize: Size;
-  movingSize: Size;
-  affineMatrix: AlignmentAffineMatrix;
   alignmentAccepted?: boolean;
   solveAccepted?: boolean;
 }) => {
   const usesAcceptedGeometryContract = usesCanonicalAcceptedGeometryContract(args);
-  if (!usesAcceptedGeometryContract) {
-    return normalizeRect(args.chipBounds, args.referenceSize);
+  if (usesAcceptedGeometryContract) {
+    const hasAcceptedTransform = args.solveAccepted ?? args.alignmentAccepted ?? false;
+    if (!hasAcceptedTransform) {
+      throw new CropQcBlockedError('missing-accepted-transform');
+    }
   }
 
-  const hasAcceptedTransform = args.solveAccepted ?? args.alignmentAccepted ?? false;
-  if (!hasAcceptedTransform) {
-    throw new CropQcBlockedError('missing-accepted-transform');
-  }
+  const squareChipBounds = clampNormalizedSquareRect(
+    args.chipBounds,
+    args.referenceSize.width / Math.max(args.referenceSize.height, Number.EPSILON),
+  );
 
-  if (!args.acceptedChipBounds) {
-    throw new CropQcBlockedError('missing-accepted-chip-bounds');
-  }
-
-  const projectedCorners = getRectCornerPoints(args.acceptedChipBounds, args.movingSize)
-    .map((corner) => applyAffineToPoint(corner, args.affineMatrix));
-
-  return normalizeProjectedRect({
-    corners: projectedCorners,
-    imageSize: args.referenceSize,
-  });
+  return normalizeRect(squareChipBounds, args.referenceSize);
 };
 
 const toCropLocalPoint = (point: PixelPoint, pixelRect: PixelRect): PixelPoint => ({
   x: point.x - pixelRect.x,
   y: point.y - pixelRect.y,
 });
+
+const toCropLocalGeometry = (
+  points: readonly PixelPoint[],
+  cropSize: Size,
+): CanonicalCropQcGeometry => {
+  const bounds = toPixelBounds(points);
+
+  return {
+    rect: {
+      x: bounds.x / cropSize.width,
+      y: bounds.y / cropSize.height,
+      width: bounds.width / cropSize.width,
+      height: bounds.height / cropSize.height,
+    },
+    width: bounds.width,
+    height: bounds.height,
+  };
+};
+
+const resolveHeQcGeometry = (args: {
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
+  acceptedChipBounds?: PreprocessRect | null;
+  movingSize: Size;
+  affineMatrix: AlignmentAffineMatrix;
+  cropPixelRect: PixelRect;
+}): CanonicalCropQcGeometry | null => {
+  const sourcePoints = args.acceptedChipQuad?.map((point) => toPixelPoint(point, args.movingSize))
+    ?? (args.acceptedChipBounds ? toRectCornerPoints(args.acceptedChipBounds, args.movingSize) : null);
+  if (!sourcePoints) {
+    return null;
+  }
+
+  const cropLocalPoints = sourcePoints
+    .map((point) => applyAffineToPoint(point, args.affineMatrix))
+    .map((point) => toCropLocalPoint(point, args.cropPixelRect));
+
+  return toCropLocalGeometry(cropLocalPoints, {
+    width: args.cropPixelRect.width,
+    height: args.cropPixelRect.height,
+  });
+};
 
 const getFeatureMatchCandidates = (
   controlPoints: AlignmentControlPoint[],
@@ -518,6 +557,7 @@ export async function runCropQc(args: {
   eosinDataUrl: string;
   heDataUrl: string;
   chipBounds: PreprocessRect;
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
   acceptedChipBounds?: PreprocessRect | null;
   coarseChipBounds?: PreprocessRect | null;
   imageTransform: LocalizationImageTransform;
@@ -532,11 +572,10 @@ export async function runCropQc(args: {
 
   const normalized = resolveCropBounds({
     chipBounds: args.chipBounds,
+    acceptedChipQuad: args.acceptedChipQuad,
     acceptedChipBounds: args.acceptedChipBounds,
     coarseChipBounds: args.coarseChipBounds,
     referenceSize: { width: eosin.width, height: eosin.height },
-    movingSize: { width: he.width, height: he.height },
-    affineMatrix: args.affineMatrix,
     alignmentAccepted: args.alignmentAccepted,
     solveAccepted: args.solveAccepted,
   });
@@ -546,6 +585,14 @@ export async function runCropQc(args: {
   const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
 
   try {
+    const eosinReferenceGeometry = toCanonicalCropQcGeometry(normalized);
+    const heQcGeometry = resolveHeQcGeometry({
+      acceptedChipQuad: args.acceptedChipQuad,
+      acceptedChipBounds: args.acceptedChipBounds,
+      movingSize: { width: he.width, height: he.height },
+      affineMatrix: args.affineMatrix,
+      cropPixelRect: normalized.pixelRect,
+    });
     const eosinAssetSet = buildCanonicalAssetSet(eosinCrop);
     const heAssetSet = buildCanonicalAssetSet(heCrop);
     const cropAssets = {
@@ -581,9 +628,11 @@ export async function runCropQc(args: {
     const spot_diameter_fullres = null;
 
     return {
-      cropRect: normalized.rect,
-      cropWidth: normalized.pixelRect.width,
-      cropHeight: normalized.pixelRect.height,
+      eosinReferenceGeometry,
+      heQcGeometry,
+      cropRect: eosinReferenceGeometry.rect,
+      cropWidth: eosinReferenceGeometry.width,
+      cropHeight: eosinReferenceGeometry.height,
       cropAssets,
       tissue_hires_scalef,
       tissue_lowres_scalef,

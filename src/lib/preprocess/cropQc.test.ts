@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AlignmentAffineMatrix,
   AlignmentControlPoint,
+  HeFocusAutoProposalQuad,
   LocalizationImageTransform,
   PreprocessRect,
 } from '@/types/preprocess';
@@ -269,9 +270,31 @@ const parsePreviewSummary = (dataUrl: string): PreviewSummary => {
   return JSON.parse(encoded) as PreviewSummary;
 };
 
+const expectGeometryToBeCloseTo = (
+  actual: {
+    rect: { x: number; y: number; width: number; height: number };
+    width: number;
+    height: number;
+  } | null,
+  expected: {
+    rect: { x: number; y: number; width: number; height: number };
+    width: number;
+    height: number;
+  },
+) => {
+  expect(actual).not.toBeNull();
+  expect(actual?.rect.x).toBeCloseTo(expected.rect.x);
+  expect(actual?.rect.y).toBeCloseTo(expected.rect.y);
+  expect(actual?.rect.width).toBeCloseTo(expected.rect.width);
+  expect(actual?.rect.height).toBeCloseTo(expected.rect.height);
+  expect(actual?.width).toBeCloseTo(expected.width);
+  expect(actual?.height).toBeCloseTo(expected.height);
+};
+
 const runCropQcWithArgs = async (args: {
   affineMatrix: AlignmentAffineMatrix;
   alignmentAccepted?: boolean;
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
   acceptedChipBounds?: PreprocessRect | null;
   solveAccepted?: boolean;
   coarseChipBounds?: PreprocessRect | null;
@@ -285,6 +308,7 @@ const runCropQcWithArgs = async (args: {
     eosinDataUrl: 'data:image/png;base64,eosin',
     heDataUrl: 'data:image/png;base64,he',
     chipBounds: args.chipBounds ?? CHIP_BOUNDS,
+    acceptedChipQuad: args.acceptedChipQuad,
     acceptedChipBounds: args.acceptedChipBounds,
     coarseChipBounds: args.coarseChipBounds,
     imageTransform: args.imageTransform ?? IDENTITY_TRANSFORM,
@@ -322,14 +346,14 @@ describe('runCropQc feature match preview', () => {
     expect(Math.max(...summary.strokeLineWidths)).toBe(2);
   });
 
-  it('uses chip bounds directly in image space when generating the crop rect', async () => {
+  it('square-normalizes non-square localization chip bounds before generating the crop rect', async () => {
     installBrowserStubs();
 
     const chipBounds: PreprocessRect = {
-      x: 0.1,
-      y: 0.2,
-      width: 0.3,
-      height: 0.4,
+      x: 0.14297589359933494,
+      y: 0.0780158730158731,
+      width: 0.7431733167082293,
+      height: 0.7095535714285713,
     };
 
     const result = await runCropQcWithArgs({
@@ -350,12 +374,20 @@ describe('runCropQc feature match preview', () => {
     expect(result.cropRect.x).toBeCloseTo(chipBounds.x);
     expect(result.cropRect.y).toBeCloseTo(chipBounds.y);
     expect(result.cropRect.width).toBeCloseTo(chipBounds.width);
-    expect(result.cropRect.height).toBeCloseTo(chipBounds.height);
+    expect(result.cropRect.height).toBeCloseTo(chipBounds.width);
+    expect(result.cropWidth).toBe(result.cropHeight);
+    expect(result.cropWidth).toBe(74);
   });
 
-  it('prefers accepted chip geometry over coarse envelope', async () => {
+  it('keeps localization chip geometry as the authoritative eosin crop domain', async () => {
     installBrowserStubs();
 
+    const chipBounds: PreprocessRect = {
+      x: 0.12,
+      y: 0.18,
+      width: 0.6,
+      height: 0.6,
+    };
     const coarseChipBounds: PreprocessRect = {
       x: 0.05,
       y: 0.1,
@@ -371,7 +403,7 @@ describe('runCropQc feature match preview', () => {
 
     const result = await runCropQcWithArgs({
       affineMatrix: [1, 0, 0, 0, 1, 0],
-      chipBounds: coarseChipBounds,
+      chipBounds,
       acceptedChipBounds,
       coarseChipBounds,
       solveAccepted: true,
@@ -381,17 +413,39 @@ describe('runCropQc feature match preview', () => {
       inlierMask: [true],
     });
 
-    expect(result.cropRect.x).toBeCloseTo(acceptedChipBounds.x);
-    expect(result.cropRect.y).toBeCloseTo(acceptedChipBounds.y);
-    expect(result.cropRect.width).toBeCloseTo(acceptedChipBounds.width);
-    expect(result.cropRect.height).toBeCloseTo(acceptedChipBounds.height);
-    expect(result.cropWidth).toBe(20);
-    expect(result.cropHeight).toBe(15);
+    expect(result.eosinReferenceGeometry.rect.x).toBeCloseTo(chipBounds.x);
+    expect(result.eosinReferenceGeometry.rect.y).toBeCloseTo(chipBounds.y);
+    expect(result.eosinReferenceGeometry.rect.width).toBeCloseTo(chipBounds.width);
+    expect(result.eosinReferenceGeometry.rect.height).toBeCloseTo(chipBounds.height);
+    expect(result.eosinReferenceGeometry.width).toBe(60);
+    expect(result.eosinReferenceGeometry.height).toBe(60);
+    expectGeometryToBeCloseTo(result.heQcGeometry, {
+      rect: {
+        x: 0.3,
+        y: 17 / 60,
+        width: 1 / 3,
+        height: 0.25,
+      },
+      width: 20,
+      height: 15,
+    });
+    expect(result.cropRect.x).toBeCloseTo(chipBounds.x);
+    expect(result.cropRect.y).toBeCloseTo(chipBounds.y);
+    expect(result.cropRect.width).toBeCloseTo(chipBounds.width);
+    expect(result.cropRect.height).toBeCloseTo(chipBounds.height);
+    expect(result.cropWidth).toBe(60);
+    expect(result.cropHeight).toBe(60);
   });
 
   it('produces the same downstream crop contract for automatic and manual accepted alignment inputs', async () => {
     installBrowserStubs();
 
+    const chipBounds: PreprocessRect = {
+      x: 0.18,
+      y: 0.22,
+      width: 0.36,
+      height: 0.36,
+    };
     const acceptedChipBounds: PreprocessRect = {
       x: 0.22,
       y: 0.28,
@@ -407,7 +461,7 @@ describe('runCropQc feature match preview', () => {
 
     const automaticAccepted = await runCropQcWithArgs({
       affineMatrix: [1, 0, 0, 0, 1, 0],
-      chipBounds: coarseChipBounds,
+      chipBounds,
       acceptedChipBounds,
       coarseChipBounds,
       solveAccepted: true,
@@ -417,20 +471,96 @@ describe('runCropQc feature match preview', () => {
 
     const manualAccepted = await runCropQcWithArgs({
       affineMatrix: [1, 0, 0, 0, 1, 0],
-      chipBounds: CHIP_BOUNDS,
+      chipBounds,
+      acceptedChipBounds,
+      alignmentAccepted: true,
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    expect(automaticAccepted.eosinReferenceGeometry).toEqual(manualAccepted.eosinReferenceGeometry);
+    expectGeometryToBeCloseTo(automaticAccepted.heQcGeometry, {
+      rect: {
+        x: 1 / 9,
+        y: 1 / 6,
+        width: 2 / 3,
+        height: 0.5,
+      },
+      width: 24,
+      height: 18,
+    });
+    expectGeometryToBeCloseTo(manualAccepted.heQcGeometry, {
+      rect: {
+        x: 1 / 9,
+        y: 1 / 6,
+        width: 2 / 3,
+        height: 0.5,
+      },
+      width: 24,
+      height: 18,
+    });
+    expect(automaticAccepted.cropRect).toEqual(manualAccepted.cropRect);
+    expect(automaticAccepted.cropWidth).toBe(manualAccepted.cropWidth);
+    expect(automaticAccepted.cropHeight).toBe(manualAccepted.cropHeight);
+    expect(automaticAccepted.cropRect.x).toBeCloseTo(chipBounds.x);
+    expect(automaticAccepted.cropRect.y).toBeCloseTo(chipBounds.y);
+    expect(automaticAccepted.cropRect.width).toBeCloseTo(chipBounds.width);
+    expect(automaticAccepted.cropRect.height).toBeCloseTo(chipBounds.height);
+    expect(automaticAccepted.cropWidth).toBe(36);
+    expect(automaticAccepted.cropHeight).toBe(36);
+  });
+
+  it('prefers refined H&E quad geometry over fallback bounds for derived QC metadata', async () => {
+    installBrowserStubs();
+
+    const chipBounds: PreprocessRect = {
+      x: 0.25,
+      y: 0.25,
+      width: 0.5,
+      height: 0.5,
+    };
+    const acceptedChipBounds: PreprocessRect = {
+      x: 0.3,
+      y: 0.3,
+      width: 0.3,
+      height: 0.3,
+    };
+    const acceptedChipQuad: HeFocusAutoProposalQuad = [
+      { x: 0.32, y: 0.31 },
+      { x: 0.58, y: 0.28 },
+      { x: 0.54, y: 0.57 },
+      { x: 0.29, y: 0.52 },
+    ];
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      chipBounds,
+      acceptedChipQuad,
       acceptedChipBounds,
       solveAccepted: true,
       controlPoints: [],
       inlierMask: null,
     });
 
-    expect(automaticAccepted.cropRect).toEqual(manualAccepted.cropRect);
-    expect(automaticAccepted.cropWidth).toBe(manualAccepted.cropWidth);
-    expect(automaticAccepted.cropHeight).toBe(manualAccepted.cropHeight);
-    expect(automaticAccepted.cropRect.x).toBeCloseTo(acceptedChipBounds.x);
-    expect(automaticAccepted.cropRect.y).toBeCloseTo(acceptedChipBounds.y);
-    expect(automaticAccepted.cropRect.width).toBeCloseTo(acceptedChipBounds.width);
-    expect(automaticAccepted.cropRect.height).toBeCloseTo(acceptedChipBounds.height);
+    expectGeometryToBeCloseTo(result.heQcGeometry, {
+      rect: {
+        x: 0.08,
+        y: 0.06,
+        width: 0.58,
+        height: 0.58,
+      },
+      width: 29,
+      height: 29,
+    });
+    expect(result.heQcGeometry?.rect).not.toEqual({
+      x: 0.1,
+      y: 0.1,
+      width: 0.6,
+      height: 0.6,
+    });
+    expect(result.cropRect).toEqual(chipBounds);
+    expect(result.cropWidth).toBe(50);
+    expect(result.cropHeight).toBe(50);
   });
 
   it('fails cleanly when no accepted transform exists', async () => {
