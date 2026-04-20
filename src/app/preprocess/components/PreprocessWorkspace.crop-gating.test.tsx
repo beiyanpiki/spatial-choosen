@@ -121,6 +121,16 @@ const { theme } = await import('../../../theme');
 const { PreprocessWorkspace } = await import('./PreprocessWorkspace');
 
 const baseRunResult = {
+  eosinReferenceGeometry: {
+    rect: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+    width: 30,
+    height: 40,
+  },
+  heQcGeometry: {
+    rect: { x: 0.15, y: 0.25, width: 0.2, height: 0.3 },
+    width: 20,
+    height: 30,
+  },
   cropRect: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
   cropWidth: 30,
   cropHeight: 40,
@@ -152,6 +162,8 @@ const baseRunResult = {
   featureMatchesDataUrl: 'data:image/png;base64,feature-matches',
 };
 
+const defaultLocalizationChipBounds = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+
 const createProject = (overrides?: {
   alignmentStatus?: PreprocessProject['alignment']['status'];
   alignmentAccepted?: boolean;
@@ -159,6 +171,7 @@ const createProject = (overrides?: {
   alignmentSource?: PreprocessProject['alignment']['source'];
   heFocusChipBounds?: PreprocessProject['heFocus']['chipBounds'];
   autoProposalCoarseBounds?: PreprocessProject['heFocus']['autoProposal']['coarseBounds'];
+  autoProposalRefinedQuad?: PreprocessProject['heFocus']['autoProposal']['refinedQuad'];
 }): PreprocessProject => ({
   id: 'workspace-crop-gating-project',
   name: 'Workspace crop gating project',
@@ -217,7 +230,7 @@ const createProject = (overrides?: {
     targetImage: 'eosin',
     chipType: '50um',
     method: 'manual',
-    chipBounds: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
+    chipBounds: defaultLocalizationChipBounds,
     handles: [],
     boxColor: 'green',
     imageTransform: {
@@ -242,11 +255,15 @@ const createProject = (overrides?: {
       scale: 1,
     },
     autoProposal: {
-      status: overrides?.autoProposalCoarseBounds ? 'fallback' : 'idle',
-      method: overrides?.autoProposalCoarseBounds ? 'mask-ecc-v1' : null,
+      status: overrides?.autoProposalRefinedQuad
+        ? 'accepted'
+        : overrides?.autoProposalCoarseBounds
+          ? 'fallback'
+          : 'idle',
+      method: overrides?.autoProposalRefinedQuad || overrides?.autoProposalCoarseBounds ? 'mask-ecc-v1' : null,
       coarseBounds: overrides?.autoProposalCoarseBounds ?? null,
       refinedBounds: null,
-      refinedQuad: null,
+      refinedQuad: overrides?.autoProposalRefinedQuad ?? null,
       rotationDegrees: null,
       eccCorrelation: null,
       failureReason: null,
@@ -298,6 +315,8 @@ const createProject = (overrides?: {
     isStale: false,
     updatedAt: null,
     error: null,
+    eosinReferenceGeometry: null,
+    heQcGeometry: null,
     cropRect: null,
     cropWidth: null,
     cropHeight: null,
@@ -444,16 +463,21 @@ describe('PreprocessWorkspace crop gating contract', () => {
     });
   });
 
-  it('forwards the same canonical accepted chip geometry contract for automatic and manual accepted alignment', async () => {
+  it('uses localization geometry for crop authority while forwarding accepted H&E geometry as QC evidence', async () => {
     const acceptedChipBounds = { x: 0.31, y: 0.34, width: 0.22, height: 0.16 };
-    const coarseChipBounds = { x: 0.08, y: 0.12, width: 0.74, height: 0.68 };
+    const acceptedChipQuad = [
+      { x: 0.31, y: 0.34 },
+      { x: 0.53, y: 0.34 },
+      { x: 0.53, y: 0.5 },
+      { x: 0.31, y: 0.5 },
+    ] as PreprocessProject['heFocus']['autoProposal']['refinedQuad'];
 
     render(
       <WorkspaceHarness
         initialProject={createProject({
           alignmentSource: 'auto',
           heFocusChipBounds: acceptedChipBounds,
-          autoProposalCoarseBounds: coarseChipBounds,
+          autoProposalRefinedQuad: acceptedChipQuad,
         })}
       />,
     );
@@ -482,9 +506,14 @@ describe('PreprocessWorkspace crop gating contract', () => {
     const [automaticRequest] = mockRunCropQc.mock.calls[0] as Array<Record<string, unknown>>;
     const [manualRequest] = mockRunCropQc.mock.calls[1] as Array<Record<string, unknown>>;
 
+    expect(automaticRequest.chipBounds).toEqual(defaultLocalizationChipBounds);
     expect(automaticRequest.acceptedChipBounds).toEqual(acceptedChipBounds);
-    expect(automaticRequest.coarseChipBounds).toEqual(coarseChipBounds);
+    expect(automaticRequest.acceptedChipQuad).toEqual(acceptedChipQuad);
+
+    expect(manualRequest.chipBounds).toEqual(defaultLocalizationChipBounds);
     expect(manualRequest.acceptedChipBounds).toEqual(acceptedChipBounds);
+    expect(manualRequest.acceptedChipQuad).toBeUndefined();
+    expect(automaticRequest.coarseChipBounds).toBeUndefined();
     expect(manualRequest.coarseChipBounds).toBeUndefined();
     expect(automaticRequest.solveAccepted).toBe(true);
     expect(manualRequest.solveAccepted).toBe(true);

@@ -1,8 +1,8 @@
 import { ChakraProvider } from '@chakra-ui/react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect, useState } from 'react';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LegacyPreprocessProject, PreprocessProject } from '@/types/preprocess';
 
@@ -595,6 +595,26 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
       );
     });
   });
+
+	it('blocks tissue auto-detection while repaired crop or chip projection state is still stale', async () => {
+		const initialProject = createProject();
+		initialProject.cropQc.status = 'stale';
+		initialProject.cropQc.isStale = true;
+		initialProject.chipConfig.status = 'stale';
+		initialProject.chipConfig.isStale = true;
+		initialProject.chipConfig.projectedSpots = null;
+
+		const user = userEvent.setup();
+		render(<WorkspaceHarness initialProject={initialProject} />);
+
+		expect(screen.getByTestId('tissue-detection-status')).toHaveTextContent(
+			'Crop/QC output is stale or incomplete. Re-run Crop/QC and accept it before tissue auto detection.',
+		);
+
+		await user.click(screen.getByTestId('tissue-run-auto'));
+
+		expect(mockRunTissueAutoSelection).not.toHaveBeenCalled();
+	});
 
   it('keeps chip switching available for unsupported tissue support and clears matrix-backed selection state on chip change', async () => {
     mockLoadChipConfigData.mockResolvedValue({
