@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { normalizeProjectForWorkspace } from '@/app/preprocess/projectState';
+import {
+	normalizeProjectForPersistence,
+	normalizeProjectForWorkspace,
+} from '@/app/preprocess/projectState';
 import type { PreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
 import { deserializePreprocessProject, PACKAGE_VERSION } from './package';
@@ -494,4 +497,30 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.heFocus.chipBounds).toEqual(project.heFocus.chipBounds);
     expect(result.heFocus.imageTransform).toEqual(project.heFocus.imageTransform);
   });
+
+	it('preserves fully outside HEFocus bounds through canonical package import and workspace normalization', async () => {
+		const project = createProject();
+		const heFocusBounds = {
+			x: 1.18,
+			y: 1.12,
+			width: 0.24,
+			height: 0.24,
+		};
+
+		project.heFocus.chipBounds = heFocusBounds;
+		project.heFocus.handles = [];
+
+		const result = normalizeProjectForWorkspace(
+			await deserializePreprocessProject(
+				createPackageBlob({
+					version: PACKAGE_VERSION,
+					project: toCanonicalProjectPayload(
+						normalizeProjectForPersistence(project),
+					),
+				}),
+			),
+		);
+
+		expect(result.heFocus.chipBounds).toEqual(heFocusBounds);
+	});
 });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { normalizeProjectForPersistence, normalizeProjectForWorkspace } from '@/app/preprocess/projectState';
 import type { PreprocessProject, ProjectedSpot } from '@/types/preprocess';
 
 import { serializePreprocessProject } from './package';
@@ -576,4 +577,32 @@ describe('preprocess storage tissue metadata', () => {
     expect(Object.hasOwn(storedTissue, 'previewDataUrl')).toBe(true);
     expect(storedTissue.previewDataUrl).toBeNull();
   });
+
+	it('preserves out-of-bounds HEFocus bounds across normalized storage save and workspace load', async () => {
+		const project = createProject();
+		const heFocusBounds = {
+			x: -0.18,
+			y: -0.12,
+			width: 1.24,
+			height: 1.18,
+		};
+
+		project.heFocus.chipBounds = heFocusBounds;
+		project.heFocus.handles = [];
+
+		upsertPreprocessProjectMetadata(normalizeProjectForPersistence(project));
+
+		const stored = JSON.parse(
+			localStorage.getItem('spatial-preprocess-projects') ?? '[]',
+		) as Array<Record<string, unknown>>;
+		expect(
+			(stored[0]?.heFocus as Record<string, unknown>).chipBounds,
+		).toEqual(heFocusBounds);
+
+		const hydrated = await getPreprocessProject(project.id);
+		expect(hydrated).toBeDefined();
+
+		const workspace = normalizeProjectForWorkspace(hydrated as PreprocessProject);
+		expect(workspace.heFocus.chipBounds).toEqual(heFocusBounds);
+	});
 });

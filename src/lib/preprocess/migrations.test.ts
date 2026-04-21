@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { normalizeProjectForWorkspace } from '@/app/preprocess/projectState';
 import type { LegacyPreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
 import { PREPROCESS_STORAGE_SCHEMA_VERSION } from './constants';
@@ -486,4 +487,22 @@ describe('migratePreprocessProject tissue matrix migration', () => {
     expect(migrated.heFocus.chipBounds).toEqual(heFocus.chipBounds);
     expect(migrated.heFocus.imageTransform).toEqual(heFocus.imageTransform);
   });
+
+	it('preserves fully outside HEFocus bounds when legacy projects normalize into workspace state', () => {
+		const project = createLegacyProject();
+		const heFocus = project.heFocus as NonNullable<typeof project.heFocus>;
+		const heFocusBounds = {
+			x: 1.18,
+			y: 1.12,
+			width: 0.24,
+			height: 0.24,
+		};
+
+		heFocus.chipBounds = heFocusBounds;
+		heFocus.handles = [];
+
+		expect(normalizeProjectForWorkspace(project).heFocus.chipBounds).toEqual(
+			heFocusBounds,
+		);
+	});
 });
