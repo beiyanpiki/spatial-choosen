@@ -9,9 +9,7 @@ import type {
   PreprocessRect,
 } from '@/types/preprocess';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
-import { clampNormalizedSquareRect } from './localization';
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+import { LOCALIZATION_MIN_BOX_SIZE } from './localization';
 
 type Size = { width: number; height: number };
 type PixelRect = { x: number; y: number; width: number; height: number };
@@ -90,8 +88,62 @@ const drawCanvas = (source: CanvasImageSource, size: Size) => {
   return canvas;
 };
 
+const fillCanvasWhite = (context: CanvasRenderingContext2D, size: Size) => {
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, size.width, size.height);
+};
+
+const preserveRequestedSquareRect = (
+  rect: PreprocessRect,
+  imageAspectRatio = 1,
+  minSize = LOCALIZATION_MIN_BOX_SIZE,
+): PreprocessRect => {
+  const aspectRatio = Math.max(imageAspectRatio, Number.EPSILON);
+  const size = Math.max(rect.width, rect.height / aspectRatio, minSize);
+
+  return {
+    x: rect.x,
+    y: rect.y,
+    width: size,
+    height: size * aspectRatio,
+  };
+};
+
+const resolvePixelIntersection = (
+  pixelRect: PixelRect,
+  imageSize: Size,
+): {
+  sourceRect: PixelRect;
+  destinationOrigin: PixelPoint;
+} | null => {
+  const sourceX = Math.max(0, pixelRect.x);
+  const sourceY = Math.max(0, pixelRect.y);
+  const sourceEndX = Math.min(imageSize.width, pixelRect.x + pixelRect.width);
+  const sourceEndY = Math.min(imageSize.height, pixelRect.y + pixelRect.height);
+  const sourceWidth = Math.max(0, sourceEndX - sourceX);
+  const sourceHeight = Math.max(0, sourceEndY - sourceY);
+
+  if (sourceWidth === 0 || sourceHeight === 0) {
+    return null;
+  }
+
+  return {
+    sourceRect: {
+      x: sourceX,
+      y: sourceY,
+      width: sourceWidth,
+      height: sourceHeight,
+    },
+    destinationOrigin: {
+      x: sourceX - pixelRect.x,
+      y: sourceY - pixelRect.y,
+    },
+  };
+};
+
 const cropCanvas = (
   source: CanvasImageSource,
+  sourceSize: Size,
   pixelRect: PixelRect,
 ) => {
   const canvas = document.createElement('canvas');
@@ -101,17 +153,23 @@ const cropCanvas = (
   if (!context) throw new Error('Crop canvas context unavailable');
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  context.drawImage(
-    source,
-    pixelRect.x,
-    pixelRect.y,
-    pixelRect.width,
-    pixelRect.height,
-    0,
-    0,
-    pixelRect.width,
-    pixelRect.height,
-  );
+  fillCanvasWhite(context, { width: pixelRect.width, height: pixelRect.height });
+
+  const intersection = resolvePixelIntersection(pixelRect, sourceSize);
+  if (intersection) {
+    context.drawImage(
+      source,
+      intersection.sourceRect.x,
+      intersection.sourceRect.y,
+      intersection.sourceRect.width,
+      intersection.sourceRect.height,
+      intersection.destinationOrigin.x,
+      intersection.destinationOrigin.y,
+      intersection.sourceRect.width,
+      intersection.sourceRect.height,
+    );
+  }
+
   return canvas;
 };
 
@@ -211,31 +269,23 @@ const normalizeRect = (
   chipBounds: PreprocessRect,
   imageSize: Size,
 ): { rect: PreprocessRect; pixelRect: PixelRect } => {
-  const minX = clamp(chipBounds.x, 0, 1);
-  const maxX = clamp(chipBounds.x + chipBounds.width, 0, 1);
-  const minY = clamp(chipBounds.y, 0, 1);
-  const maxY = clamp(chipBounds.y + chipBounds.height, 0, 1);
-
-  const widthNorm = Math.max(1 / Math.max(1, imageSize.width), maxX - minX);
-  const heightNorm = Math.max(1 / Math.max(1, imageSize.height), maxY - minY);
-
-  const pxX = clamp(Math.round(minX * imageSize.width), 0, Math.max(0, imageSize.width - 1));
-  const pxY = clamp(Math.round(minY * imageSize.height), 0, Math.max(0, imageSize.height - 1));
-  const pxWidth = Math.max(1, Math.round(widthNorm * imageSize.width));
-  const pxHeight = Math.max(1, Math.round(heightNorm * imageSize.height));
+  const pxX = Math.round(chipBounds.x * imageSize.width);
+  const pxY = Math.round(chipBounds.y * imageSize.height);
+  const pxWidth = Math.max(1, Math.round(chipBounds.width * imageSize.width));
+  const pxHeight = Math.max(1, Math.round(chipBounds.height * imageSize.height));
 
   return {
     rect: {
-      x: minX,
-      y: minY,
-      width: widthNorm,
-      height: heightNorm,
+      x: chipBounds.x,
+      y: chipBounds.y,
+      width: chipBounds.width,
+      height: chipBounds.height,
     },
     pixelRect: {
       x: pxX,
       y: pxY,
-      width: Math.min(pxWidth, imageSize.width - pxX),
-      height: Math.min(pxHeight, imageSize.height - pxY),
+      width: pxWidth,
+      height: pxHeight,
     },
   };
 };
@@ -342,7 +392,7 @@ const resolveCropBounds = (args: {
     }
   }
 
-  const squareChipBounds = clampNormalizedSquareRect(
+  const squareChipBounds = preserveRequestedSquareRect(
     args.chipBounds,
     args.referenceSize.width / Math.max(args.referenceSize.height, Number.EPSILON),
   );
@@ -522,7 +572,7 @@ const makeWarpedHeCrop = (
     ]);
     dst = new cv.Mat();
     const size = new cv.Size(pixelRect.width, pixelRect.height);
-    const fill = new cv.Scalar(0, 0, 0, 255);
+    const fill = new cv.Scalar(255, 255, 255, 255);
 
     cv.warpAffine(
       src,
@@ -580,7 +630,11 @@ export async function runCropQc(args: {
     solveAccepted: args.solveAccepted,
   });
 
-  const eosinCrop = cropCanvas(eosin.canvas, normalized.pixelRect);
+  const eosinCrop = cropCanvas(
+    eosin.canvas,
+    { width: eosin.width, height: eosin.height },
+    normalized.pixelRect,
+  );
   const heCrop = makeWarpedHeCrop(args.cv, he.canvas, args.affineMatrix, normalized.pixelRect);
   const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
 
