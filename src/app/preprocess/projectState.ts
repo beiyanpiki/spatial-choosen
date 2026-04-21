@@ -2,6 +2,7 @@ import { normalizeAlignmentSlice } from "@/lib/preprocess/alignment";
 import { PREPROCESS_STORAGE_SCHEMA_VERSION } from "@/lib/preprocess/constants";
 import {
 	DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
 } from "@/lib/preprocess/localization";
 import { migratePreprocessProject } from "@/lib/preprocess/migrations";
@@ -74,6 +75,25 @@ const normalizePoint = (value: unknown): PreprocessPoint | null => {
 		? { x: point.x, y: point.y }
 		: null;
 };
+
+const buildHeFocusHandles = (rect: PreprocessRect): HeFocusSlice["handles"] => [
+	{ id: "nw", label: "NW", point: { x: rect.x, y: rect.y } },
+	{
+		id: "ne",
+		label: "NE",
+		point: { x: rect.x + rect.width, y: rect.y },
+	},
+	{
+		id: "se",
+		label: "SE",
+		point: { x: rect.x + rect.width, y: rect.y + rect.height },
+	},
+	{
+		id: "sw",
+		label: "SW",
+		point: { x: rect.x, y: rect.y + rect.height },
+	},
+];
 
 const normalizeQuad = (value: unknown): HeFocusAutoProposal["refinedQuad"] => {
 	if (!Array.isArray(value) || value.length !== 4) return null;
@@ -208,20 +228,15 @@ export const createHeFocusSlice = (
 export const normalizeHeFocusSlice = (
 	slice: HeFocusSlice | LegacyHeFocusSlice,
 ): HeFocusSlice => {
-	const normalized = normalizeLocalizationSlice({
-		...slice,
-		chipType: null,
-		method: null,
-		boxColor: "green",
-	});
+	const chipBounds = normalizeRect(slice.chipBounds);
 
 	return {
 		...createHeFocusSlice(slice.status),
 		...slice,
 		targetImage: "he",
-		chipBounds: normalized.chipBounds,
-		handles: normalized.handles,
-		imageTransform: normalized.imageTransform,
+		chipBounds,
+		handles: chipBounds ? buildHeFocusHandles(chipBounds) : [],
+		imageTransform: normalizeLocalizationImageTransform(slice.imageTransform),
 		autoProposal: normalizeHeFocusAutoProposal(slice.autoProposal),
 		focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
 	};
