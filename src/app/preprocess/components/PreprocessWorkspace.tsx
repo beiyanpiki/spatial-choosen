@@ -63,6 +63,7 @@ import {
 import { loadOpenCv } from "../../../lib/preprocess/loadOpenCv";
 import {
 	buildLocalizationHandles,
+	buildPermissiveHeFocusHandles,
 	clampNormalizedSquareRect,
 	computeLocalizationStatus,
 	createDefaultChipBounds,
@@ -151,15 +152,22 @@ const normalizeLocalizationRotationDegrees = (value: number) => {
 const normalizeHeFocusSlice = (
 	slice: HeFocusSlice,
 	imageAspectRatio = 1,
+	options?: { clampChipBounds?: boolean },
 ): HeFocusSlice => {
 	const nextRect = slice.chipBounds
-		? clampNormalizedSquareRect(slice.chipBounds, imageAspectRatio)
+		? options?.clampChipBounds === false
+			? slice.chipBounds
+			: clampNormalizedSquareRect(slice.chipBounds, imageAspectRatio)
 		: null;
 
 	return {
 		...slice,
 		chipBounds: nextRect,
-		handles: nextRect ? buildLocalizationHandles(nextRect) : [],
+		handles: nextRect
+			? options?.clampChipBounds === false
+				? buildPermissiveHeFocusHandles(nextRect)
+				: buildLocalizationHandles(nextRect)
+			: [],
 		imageTransform: normalizeLocalizationImageTransform(slice.imageTransform),
 		focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
 	};
@@ -225,7 +233,7 @@ const createFocusedHeImageRecord = async (
 	};
 };
 
-const generateFocusedHeDataUrl = async (args: {
+export const generateFocusedHeDataUrl = async (args: {
 	sourceDataUrl: string;
 	chipBounds: PreprocessRect;
 	imageTransform: LocalizationImageTransform;
@@ -233,60 +241,59 @@ const generateFocusedHeDataUrl = async (args: {
 	const sourceImage = await loadDataUrlImage(args.sourceDataUrl);
 	const sourceWidth = sourceImage.naturalWidth;
 	const sourceHeight = sourceImage.naturalHeight;
-	const cropX = Math.max(
-		0,
-		Math.min(sourceWidth - 1, Math.round(args.chipBounds.x * sourceWidth)),
-	);
-	const cropY = Math.max(
-		0,
-		Math.min(sourceHeight - 1, Math.round(args.chipBounds.y * sourceHeight)),
-	);
-	const cropWidth = Math.max(
+	const requestedX = Math.round(args.chipBounds.x * sourceWidth);
+	const requestedY = Math.round(args.chipBounds.y * sourceHeight);
+	const requestedWidth = Math.max(
 		1,
-		Math.min(
-			sourceWidth - cropX,
-			Math.round(args.chipBounds.width * sourceWidth),
-		),
+		Math.round(args.chipBounds.width * sourceWidth),
 	);
-	const cropHeight = Math.max(
+	const requestedHeight = Math.max(
 		1,
-		Math.min(
-			sourceHeight - cropY,
-			Math.round(args.chipBounds.height * sourceHeight),
-		),
+		Math.round(args.chipBounds.height * sourceHeight),
 	);
-	const outputSize = Math.max(1, Math.min(cropWidth, cropHeight));
+	const intersectionX = Math.max(0, requestedX);
+	const intersectionY = Math.max(0, requestedY);
+	const intersectionEndX = Math.min(sourceWidth, requestedX + requestedWidth);
+	const intersectionEndY = Math.min(sourceHeight, requestedY + requestedHeight);
+	const intersectionWidth = Math.max(0, intersectionEndX - intersectionX);
+	const intersectionHeight = Math.max(0, intersectionEndY - intersectionY);
 	const cropCanvas = document.createElement("canvas");
-	cropCanvas.width = outputSize;
-	cropCanvas.height = outputSize;
+	cropCanvas.width = requestedWidth;
+	cropCanvas.height = requestedHeight;
 	const cropContext = cropCanvas.getContext("2d");
 	if (!cropContext) {
 		throw new Error("Focused HE crop context unavailable");
 	}
 	cropContext.imageSmoothingEnabled = true;
 	cropContext.imageSmoothingQuality = "high";
-	cropContext.drawImage(
-		sourceImage,
-		cropX,
-		cropY,
-		cropWidth,
-		cropHeight,
-		0,
-		0,
-		outputSize,
-		outputSize,
-	);
+	cropContext.fillStyle = "#ffffff";
+	cropContext.fillRect(0, 0, requestedWidth, requestedHeight);
+	if (intersectionWidth > 0 && intersectionHeight > 0) {
+		cropContext.drawImage(
+			sourceImage,
+			intersectionX,
+			intersectionY,
+			intersectionWidth,
+			intersectionHeight,
+			intersectionX - requestedX,
+			intersectionY - requestedY,
+			intersectionWidth,
+			intersectionHeight,
+		);
+	}
 
 	const focusedCanvas = document.createElement("canvas");
-	focusedCanvas.width = outputSize;
-	focusedCanvas.height = outputSize;
+	focusedCanvas.width = requestedWidth;
+	focusedCanvas.height = requestedHeight;
 	const focusedContext = focusedCanvas.getContext("2d");
 	if (!focusedContext) {
 		throw new Error("Focused HE render context unavailable");
 	}
 	focusedContext.imageSmoothingEnabled = true;
 	focusedContext.imageSmoothingQuality = "high";
-	focusedContext.translate(outputSize / 2, outputSize / 2);
+	focusedContext.fillStyle = "#ffffff";
+	focusedContext.fillRect(0, 0, requestedWidth, requestedHeight);
+	focusedContext.translate(requestedWidth / 2, requestedHeight / 2);
 	focusedContext.scale(
 		args.imageTransform.flipHorizontal ? -1 : 1,
 		args.imageTransform.flipVertical ? -1 : 1,
@@ -294,10 +301,10 @@ const generateFocusedHeDataUrl = async (args: {
 	focusedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
 	focusedContext.drawImage(
 		cropCanvas,
-		-outputSize / 2,
-		-outputSize / 2,
-		outputSize,
-		outputSize,
+		-requestedWidth / 2,
+		-requestedHeight / 2,
+		requestedWidth,
+		requestedHeight,
 	);
 
 	return focusedCanvas.toDataURL("image/png");
@@ -780,6 +787,7 @@ export function PreprocessWorkspace({
 				const nextHeFocusBase = normalizeHeFocusSlice(
 					updater(current.heFocus),
 					imageAspectRatio,
+					{ clampChipBounds: false },
 				);
 				const nextHasImage = Boolean(currentImage?.dataUrl);
 				const nextHeFocus: HeFocusSlice = {
@@ -2241,8 +2249,10 @@ export function PreprocessWorkspace({
 										gap={5}
 										align="stretch"
 									>
-										<CanvasStage
-											boxColor="green"
+						<CanvasStage
+							allowOutOfBoundsChipBounds
+							boxColor="green"
+
 											chipBounds={heFocusStageChipBounds}
 											containerTestId="preprocess-he-focus-canvas-column"
 											controlTestIdPrefix="he-focus"

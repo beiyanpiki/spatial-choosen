@@ -463,6 +463,32 @@ describe('PreprocessWorkspace crop gating contract', () => {
     });
   });
 
+  it('keeps localization crop authority even when accepted HEFocus bounds extend beyond the image', async () => {
+    const outOfBoundsHeFocus = { x: -0.12, y: 0.91, width: 0.36, height: 0.36 };
+
+    render(
+      <WorkspaceHarness
+        initialProject={createProject({
+          alignmentSource: 'manual',
+          heFocusChipBounds: outOfBoundsHeFocus,
+        })}
+      />,
+    );
+
+    await act(async () => {
+      capturedCropQcPanelProps?.onRunCrop();
+    });
+
+    await waitFor(() => {
+      expect(mockRunCropQc).toHaveBeenCalledTimes(1);
+    });
+
+    const [request] = mockRunCropQc.mock.calls[0] as Array<Record<string, unknown>>;
+    expect(request.chipBounds).toEqual(defaultLocalizationChipBounds);
+    expect(request.acceptedChipBounds).toEqual(outOfBoundsHeFocus);
+    expect(request.acceptedChipQuad).toBeUndefined();
+  });
+
   it('uses localization geometry for crop authority while forwarding accepted H&E geometry as QC evidence', async () => {
     const acceptedChipBounds = { x: 0.31, y: 0.34, width: 0.22, height: 0.16 };
     const acceptedChipQuad = [

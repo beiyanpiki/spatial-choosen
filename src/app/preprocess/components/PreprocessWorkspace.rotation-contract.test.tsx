@@ -20,6 +20,91 @@ const alignmentPanelSpy = vi.fn();
 const invalidateOnHeFocusChangeSpy = vi.fn((project: unknown) => project);
 const invalidateOnHeFocusChipBoundsChangeSpy = vi.fn((project: unknown) => project);
 const HEFOCUS_IMAGE_ASPECT_RATIO = 240 / 180;
+const canvasContextRecords = new Map<HTMLCanvasElement, MockCanvasContextRecord>();
+const toDataUrlSpy = vi.fn(function (this: HTMLCanvasElement) {
+  return 'data:image/png;base64,regenerated-he-focus-preview';
+});
+
+type MockCanvasContextRecord = {
+  fillStyle: string;
+  imageSmoothingEnabled: boolean;
+  imageSmoothingQuality: ImageSmoothingQuality;
+  clearRect: ReturnType<typeof vi.fn>;
+  drawImage: ReturnType<typeof vi.fn>;
+  fillRect: ReturnType<typeof vi.fn>;
+  strokeRect: ReturnType<typeof vi.fn>;
+  beginPath: ReturnType<typeof vi.fn>;
+  moveTo: ReturnType<typeof vi.fn>;
+  lineTo: ReturnType<typeof vi.fn>;
+  stroke: ReturnType<typeof vi.fn>;
+  closePath: ReturnType<typeof vi.fn>;
+  save: ReturnType<typeof vi.fn>;
+  restore: ReturnType<typeof vi.fn>;
+  translate: ReturnType<typeof vi.fn>;
+  rotate: ReturnType<typeof vi.fn>;
+  scale: ReturnType<typeof vi.fn>;
+  setTransform: ReturnType<typeof vi.fn>;
+};
+
+const getOrCreateCanvasContextRecord = (canvas: HTMLCanvasElement) => {
+  const existing = canvasContextRecords.get(canvas);
+  if (existing) {
+    return existing;
+  }
+
+  const record: MockCanvasContextRecord = {
+    fillStyle: '',
+    imageSmoothingEnabled: false,
+    imageSmoothingQuality: 'low',
+    clearRect: vi.fn(),
+    drawImage: vi.fn(),
+    fillRect: vi.fn(),
+    strokeRect: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(),
+    closePath: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    scale: vi.fn(),
+    setTransform: vi.fn(),
+  };
+
+  canvasContextRecords.set(canvas, record);
+  return record;
+};
+
+const getCanvasContextRecord = (canvas: HTMLCanvasElement) => {
+  const record = canvasContextRecords.get(canvas);
+  if (!record) {
+    throw new Error('Expected mock canvas context to exist');
+  }
+
+  return record;
+};
+
+const getLastFocusedPreviewRender = () => {
+  const focusedCanvas = toDataUrlSpy.mock.contexts.at(-1);
+  if (!(focusedCanvas instanceof HTMLCanvasElement)) {
+    throw new Error('Expected focused preview canvas to be rendered');
+  }
+
+  const focusedContext = getCanvasContextRecord(focusedCanvas);
+  const cropCanvas = focusedContext.drawImage.mock.calls.at(-1)?.[0];
+  if (!(cropCanvas instanceof HTMLCanvasElement)) {
+    throw new Error('Expected focused preview crop canvas to be drawn');
+  }
+
+  return {
+    focusedCanvas,
+    focusedContext,
+    cropCanvas,
+    cropContext: getCanvasContextRecord(cropCanvas),
+  };
+};
 
 vi.mock('../../../lib/preprocess/alignment', () => ({
   applyAcceptedAutoAlignment: vi.fn(),
@@ -142,23 +227,9 @@ beforeAll(() => {
     }),
   });
 
-  HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
-    clearRect: vi.fn(),
-    drawImage: vi.fn(),
-    fillRect: vi.fn(),
-    strokeRect: vi.fn(),
-    beginPath: vi.fn(),
-    moveTo: vi.fn(),
-    lineTo: vi.fn(),
-    stroke: vi.fn(),
-    closePath: vi.fn(),
-    save: vi.fn(),
-    restore: vi.fn(),
-    translate: vi.fn(),
-    rotate: vi.fn(),
-    scale: vi.fn(),
-    setTransform: vi.fn(),
-  })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement) {
+    return getOrCreateCanvasContextRecord(this);
+  }) as unknown as typeof HTMLCanvasElement.prototype.getContext;
 
 	class MockImage {
 		onload: (() => void) | null = null;
@@ -176,14 +247,16 @@ beforeAll(() => {
 	}
 
 	vi.stubGlobal('Image', MockImage);
-	HTMLCanvasElement.prototype.toDataURL = vi.fn(
-		() => 'data:image/png;base64,regenerated-he-focus-preview',
-	) as unknown as typeof HTMLCanvasElement.prototype.toDataURL;
+	HTMLCanvasElement.prototype.toDataURL = toDataUrlSpy as unknown as typeof HTMLCanvasElement.prototype.toDataURL;
 });
 
 const { theme } = await import('../../../theme');
 const { buildEmptyPreprocessProject, normalizeProjectForWorkspace } = await import('../projectState');
-const { PreprocessWorkspace, getHeFocusComparisonSource } = await import('./PreprocessWorkspace');
+const {
+  PreprocessWorkspace,
+  generateFocusedHeDataUrl,
+  getHeFocusComparisonSource,
+} = await import('./PreprocessWorkspace');
 
 const createBaseProject = (): PreprocessProject => {
   const project = normalizeProjectForWorkspace(
@@ -340,7 +413,97 @@ describe('PreprocessWorkspace rotation contract', () => {
     alignmentPanelSpy.mockReset();
 		invalidateOnHeFocusChangeSpy.mockClear();
 		invalidateOnHeFocusChipBoundsChangeSpy.mockClear();
+    canvasContextRecords.clear();
+    toDataUrlSpy.mockClear();
   });
+
+	it('pads partial left/top HEFocus overruns with exact white fill before deterministic transforms', async () => {
+		await generateFocusedHeDataUrl({
+			sourceDataUrl: 'data:image/png;base64,he',
+			chipBounds: { x: -0.1, y: -0.05, width: 0.3, height: 0.4 },
+			imageTransform: {
+				rotationDegrees: 90,
+				flipHorizontal: true,
+				flipVertical: false,
+				scale: 1,
+			},
+		});
+
+		const { focusedCanvas, focusedContext, cropCanvas, cropContext } =
+			getLastFocusedPreviewRender();
+
+		expect(cropCanvas.width).toBe(72);
+		expect(cropCanvas.height).toBe(72);
+		expect(cropContext.fillStyle).toBe('#ffffff');
+		expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+		expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
+		const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
+		expect(drawSource).toMatchObject({ naturalWidth: 240, naturalHeight: 180 });
+		expect(drawArgs).toEqual([0, 0, 48, 63, 24, 9, 48, 63]);
+
+		expect(focusedCanvas.width).toBe(72);
+		expect(focusedCanvas.height).toBe(72);
+		expect(focusedContext.fillStyle).toBe('#ffffff');
+		expect(focusedContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+		expect(focusedContext.translate).toHaveBeenCalledWith(36, 36);
+		expect(focusedContext.scale).toHaveBeenCalledWith(-1, 1);
+		expect(focusedContext.rotate).toHaveBeenCalledWith(Math.PI / 2);
+		expect(focusedContext.drawImage).toHaveBeenCalledWith(cropCanvas, -36, -36, 72, 72);
+	});
+
+	it('renders fully out-of-bounds HEFocus crops as all-white outputs at the requested size', async () => {
+		await generateFocusedHeDataUrl({
+			sourceDataUrl: 'data:image/png;base64,he',
+			chipBounds: { x: 1.2, y: 1.1, width: 0.3, height: 0.4 },
+			imageTransform: {
+				rotationDegrees: -90,
+				flipHorizontal: false,
+				flipVertical: true,
+				scale: 1,
+			},
+		});
+
+		const { focusedCanvas, focusedContext, cropCanvas, cropContext } =
+			getLastFocusedPreviewRender();
+
+		expect(cropCanvas.width).toBe(72);
+		expect(cropCanvas.height).toBe(72);
+		expect(cropContext.fillStyle).toBe('#ffffff');
+		expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+		expect(cropContext.drawImage).not.toHaveBeenCalled();
+
+		expect(focusedCanvas.width).toBe(72);
+		expect(focusedCanvas.height).toBe(72);
+		expect(focusedContext.fillStyle).toBe('#ffffff');
+		expect(focusedContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+		expect(focusedContext.scale).toHaveBeenCalledWith(1, -1);
+		expect(focusedContext.rotate).toHaveBeenCalledWith(-Math.PI / 2);
+		expect(focusedContext.drawImage).toHaveBeenCalledWith(cropCanvas, -36, -36, 72, 72);
+	});
+
+	it('preserves in-bounds placement for bottom-right corner overruns', async () => {
+		await generateFocusedHeDataUrl({
+			sourceDataUrl: 'data:image/png;base64,he',
+			chipBounds: { x: 0.8, y: 0.75, width: 0.3, height: 0.4 },
+			imageTransform: {
+				rotationDegrees: 0,
+				flipHorizontal: false,
+				flipVertical: false,
+				scale: 1,
+			},
+		});
+
+		const { cropCanvas, cropContext } = getLastFocusedPreviewRender();
+
+		expect(cropCanvas.width).toBe(72);
+		expect(cropCanvas.height).toBe(72);
+		expect(cropContext.fillStyle).toBe('#ffffff');
+		expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+		expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
+		const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
+		expect(drawSource).toMatchObject({ naturalWidth: 240, naturalHeight: 180 });
+		expect(drawArgs).toEqual([192, 135, 48, 45, 0, 0, 48, 45]);
+	});
 
 	it('passes localization orientation into the alignment reference canvas boundary with normalized scale', async () => {
 		const alignmentProject = createBaseProject();
@@ -632,6 +795,106 @@ describe('PreprocessWorkspace rotation contract', () => {
 				'data:image/png;base64,regenerated-he-focus-preview',
 			);
 			expect(screen.getByTestId('he-focus-localize-reference-preview').getAttribute('src')).toContain(
+				'data:image/png;base64,regenerated-he-focus-preview',
+			);
+		});
+	});
+
+	it('commits true out-of-bounds HEFocus bounds when the stage emits permissive geometry', async () => {
+		let latestProject = createBaseProject();
+		latestProject.currentStep = 'heFocus';
+		latestProject.heFocus.focusedImageDataUrl = 'blob:focused-preview';
+
+		render(
+			<WorkspaceHarness
+				initialProject={latestProject}
+				onProjectChange={(project) => {
+					latestProject = project;
+				}}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('he-focus-box-outline')).toBeInTheDocument();
+		});
+
+		const initialOutline = getPolygonPoints('he-focus-box-outline');
+		const initialBounds = createBaseProject().heFocus.chipBounds;
+		if (!initialBounds) {
+			throw new Error('Missing HEFocus chip bounds for out-of-bounds commit test');
+		}
+		const normalizedInitialBounds = clampNormalizedSquareRect(
+			initialBounds,
+			HEFOCUS_IMAGE_ASPECT_RATIO,
+		);
+		const expectedCommittedBounds = translateChipBounds(
+			normalizedInitialBounds,
+			{ x: -400 / 1024, y: -320 / 768 },
+			HEFOCUS_IMAGE_ASPECT_RATIO,
+			{ clampToImage: false },
+		);
+		const body = screen.getByTestId('he-focus-box-body');
+
+		await act(async () => {
+			dispatchPointerEvent(body, 'pointerdown', {
+				buttons: 1,
+				clientX: 400,
+				clientY: 340,
+				pointerId: 1,
+			});
+		});
+
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: 0,
+				clientY: 20,
+				pointerId: 1,
+			});
+		});
+
+		const draftOutline = getPolygonPoints('he-focus-box-outline');
+		expect(draftOutline).not.toBe(initialOutline);
+		expect(latestProject.heFocus.chipBounds).toEqual(initialBounds);
+		expect(invalidateOnHeFocusChangeSpy).not.toHaveBeenCalled();
+		expect(screen.getByTestId('he-focus-localize-reference-preview').getAttribute('src')).toContain(
+			'data:image/png;base64,regenerated-he-focus-preview',
+		);
+
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointerup', {
+				clientX: 0,
+				clientY: 20,
+				pointerId: 1,
+			});
+		});
+
+		await waitFor(() => {
+			expect(invalidateOnHeFocusChangeSpy).toHaveBeenCalledTimes(1);
+		});
+		await waitFor(() => {
+			expect(latestProject.heFocus.chipBounds).not.toBeNull();
+		});
+		const committedBounds = latestProject.heFocus.chipBounds;
+		if (!committedBounds) {
+			throw new Error('Expected HEFocus chip bounds to commit on pointerup');
+		}
+		expect(committedBounds.x).toBeCloseTo(expectedCommittedBounds.x);
+		expect(committedBounds.y).toBeCloseTo(expectedCommittedBounds.y);
+		expect(committedBounds.width).toBeCloseTo(expectedCommittedBounds.width);
+		expect(committedBounds.height).toBeCloseTo(expectedCommittedBounds.height);
+		expect(latestProject.heFocus.handles).toEqual([
+			{ id: 'nw', label: 'NW', point: { x: committedBounds.x, y: committedBounds.y } },
+			{ id: 'ne', label: 'NE', point: { x: committedBounds.x + committedBounds.width, y: committedBounds.y } },
+			{ id: 'se', label: 'SE', point: { x: committedBounds.x + committedBounds.width, y: committedBounds.y + committedBounds.height } },
+			{ id: 'sw', label: 'SW', point: { x: committedBounds.x, y: committedBounds.y + committedBounds.height } },
+		]);
+		expect(latestProject.heFocus.handles[0]?.point.x).toBeLessThan(0);
+		expect(latestProject.heFocus.handles[0]?.point.y).toBeLessThan(0);
+		expect(committedBounds.x).toBeLessThan(0);
+		expect(committedBounds.y).toBeLessThan(0);
+		await waitFor(() => {
+			expect(latestProject.heFocus.focusedImageDataUrl).toBe(
 				'data:image/png;base64,regenerated-he-focus-preview',
 			);
 		});
