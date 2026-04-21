@@ -19,6 +19,7 @@ import type {
 } from '@/types/preprocess';
 
 type CanvasStageProps = {
+  allowOutOfBoundsChipBounds?: boolean;
   boxColor: LocalizationBoxColor;
   chipBounds: PreprocessRect | null;
   onChipBoundsCancel?: () => void;
@@ -136,6 +137,7 @@ const projectScreenPointToNormalizedImage = (
 };
 
 export function CanvasStage({
+  allowOutOfBoundsChipBounds = false,
   boxColor,
   chipBounds,
   onChipBoundsCancel,
@@ -234,8 +236,13 @@ export function CanvasStage({
   );
 
   const normalizedChipBounds = useMemo(
-    () => (chipBounds ? clampNormalizedSquareRect(chipBounds, imageAspectRatio) : null),
-    [chipBounds, imageAspectRatio],
+    () => {
+      if (!chipBounds) return null;
+      return allowOutOfBoundsChipBounds
+        ? chipBounds
+        : clampNormalizedSquareRect(chipBounds, imageAspectRatio);
+    },
+    [allowOutOfBoundsChipBounds, chipBounds, imageAspectRatio],
   );
 
   const rotationOverlay = useMemo<RotationOverlay | null>(() => {
@@ -336,11 +343,23 @@ export function CanvasStage({
       if (!imagePoint) return;
 
       const nextBounds = dragState.kind === 'move'
-        ? translateChipBounds(dragState.startRect, {
-            x: imagePoint.x - dragState.startPoint.x,
-            y: imagePoint.y - dragState.startPoint.y,
-          }, imageAspectRatio)
-        : resizeChipBounds(dragState.startRect, dragState.handle, imagePoint, imageAspectRatio);
+        ? translateChipBounds(
+            dragState.startRect,
+            {
+              x: imagePoint.x - dragState.startPoint.x,
+              y: imagePoint.y - dragState.startPoint.y,
+            },
+            imageAspectRatio,
+            { clampToImage: !allowOutOfBoundsChipBounds },
+          )
+        : resizeChipBounds(
+            dragState.startRect,
+            dragState.handle,
+            imagePoint,
+            imageAspectRatio,
+            undefined,
+            { clampToImage: !allowOutOfBoundsChipBounds },
+          );
 
       dragDidMoveRef.current = true;
       dragLatestBoundsRef.current = nextBounds;
@@ -373,7 +392,7 @@ export function CanvasStage({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
     };
-  }, [dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsCancel, onChipBoundsChange, onChipBoundsCommit, onRotationChange, rotationOverlay]);
+  }, [allowOutOfBoundsChipBounds, dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsCancel, onChipBoundsChange, onChipBoundsCommit, onRotationChange, rotationOverlay]);
 
   useEffect(() => {
     const host = hostElement;

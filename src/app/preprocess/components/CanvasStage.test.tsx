@@ -193,10 +193,12 @@ function StageHarness() {
 }
 
 function StageCommitHarness({
+	allowOutOfBoundsChipBounds = false,
 	onChipBoundsChangeSpy,
 	onChipBoundsCancelSpy,
 	onChipBoundsCommitSpy,
 }: {
+	allowOutOfBoundsChipBounds?: boolean;
 	onChipBoundsChangeSpy: (bounds: PreprocessRect) => void;
 	onChipBoundsCancelSpy?: () => void;
 	onChipBoundsCommitSpy: (bounds: PreprocessRect) => void;
@@ -205,7 +207,9 @@ function StageCommitHarness({
 
 	return (
 		<ChakraProvider theme={theme}>
+			<div data-testid="stage-chip-bounds">{JSON.stringify(chipBounds)}</div>
 			<CanvasStage
+				allowOutOfBoundsChipBounds={allowOutOfBoundsChipBounds}
 				boxColor="green"
 				chipBounds={chipBounds}
 				controlTestIdPrefix="localize"
@@ -436,6 +440,27 @@ describe('CanvasStage', () => {
 
 		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
 		expect(onChipBoundsCommitSpy).toHaveBeenCalledWith(expectedFinalMove);
+	});
+
+	it('supports outward resize past the image edge when the caller opts out of image clamping', () => {
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const resizedPastRightEdge = resizeChipBounds(
+			initialRect,
+			'e',
+			{ x: 1.4, y: 1 / 3 },
+			IMAGE_ASPECT_RATIO,
+			undefined,
+			{ clampToImage: false },
+		);
+		expect(resizedPastRightEdge).toEqual({
+			x: 0.2,
+			y: -0.46666666666666656,
+			width: 1.2,
+			height: 1.5999999999999999,
+		});
+		expect(resizedPastRightEdge.x + resizedPastRightEdge.width).toBeGreaterThan(1);
+		expect(resizedPastRightEdge.y).toBeLessThan(0);
+		expect(resizedPastRightEdge.y + resizedPastRightEdge.height).toBeGreaterThan(1);
 	});
 
 	it('clears drag state through the cancel callback without committing bounds', async () => {
