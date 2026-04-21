@@ -80,6 +80,18 @@ const createRegionAroundSpot = (spot: ProjectedSpot): TissueRegion => ({
   paths: [],
 });
 
+const defaultEosinReferenceGeometry = {
+  rect: { x: 0.2, y: 0.18, width: 0.62, height: 0.62 },
+  width: 640,
+  height: 640,
+} as const;
+
+const defaultHeQcGeometry = {
+  rect: { x: -0.08, y: 0.1, width: 0.62, height: 0.62 },
+  width: 640,
+  height: 640,
+} as const;
+
 const createBaseProject = (): PreprocessProject => {
   const projectedSpots = [
     createProjectedSpot('spot-a', 1, 1),
@@ -137,13 +149,23 @@ const createBaseProject = (): PreprocessProject => {
       updatedAt: null,
       error: null,
       targetImage: 'he',
-      chipBounds: null,
+      chipBounds: { ...defaultHeQcGeometry.rect },
       handles: [],
       imageTransform: {
         rotationDegrees: 0,
         flipHorizontal: false,
         flipVertical: false,
         scale: 1,
+      },
+      autoProposal: {
+        status: 'idle',
+        method: null,
+        coarseBounds: null,
+        refinedBounds: null,
+        refinedQuad: null,
+        rotationDegrees: null,
+        eccCorrelation: null,
+        failureReason: null,
       },
       focusedImageDataUrl: null,
     },
@@ -161,6 +183,7 @@ const createBaseProject = (): PreprocessProject => {
         scale: 1,
       },
       overlayOpacity: 0.5,
+      source: null,
       controlPoints: [],
       inlierMask: null,
       affineMatrix: null,
@@ -185,7 +208,9 @@ const createBaseProject = (): PreprocessProject => {
       isStale: false,
       updatedAt: null,
       error: null,
-      cropRect: null,
+      eosinReferenceGeometry: { ...defaultEosinReferenceGeometry, rect: { ...defaultEosinReferenceGeometry.rect } },
+      heQcGeometry: { ...defaultHeQcGeometry, rect: { ...defaultHeQcGeometry.rect } },
+      cropRect: { ...defaultEosinReferenceGeometry.rect },
       cropWidth: 640,
       cropHeight: 640,
       paddingRatio: 0.02,
@@ -278,10 +303,9 @@ const createBaseProject = (): PreprocessProject => {
 
 const createLegacy50umProject = (): LegacyPreprocessProject => {
   const project = createBaseProject();
-  const { tissueSelection, ...rest } = project;
 
   return {
-    ...rest,
+    ...project,
     workflowVersion: 2,
     storageVersion: 4,
     currentStep: 'tissueSelection',
@@ -313,13 +337,19 @@ const createLegacy50umProject = (): LegacyPreprocessProject => {
 
 const toCanonicalProjectPayload = (project: PreprocessProject) => {
   const {
-    forcedInSpotIds: _forcedInSpotIds,
-    forcedOutSpotIds: _forcedOutSpotIds,
-    overrideNotice: _overrideNotice,
-    regions: _regions,
-    selectedRegionId: _selectedRegionId,
+    forcedInSpotIds,
+    forcedOutSpotIds,
+    overrideNotice,
+    regions,
+    selectedRegionId,
     ...canonicalTissueSelection
   } = project.tissueSelection;
+
+  void forcedInSpotIds;
+  void forcedOutSpotIds;
+  void overrideNotice;
+  void regions;
+  void selectedRegionId;
 
   return {
     ...project,
@@ -442,5 +472,43 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows).toHaveLength(64);
     expect(rows[63]).toHaveLength(64);
     expect(rows[63]?.[63]).toBe('1');
+  });
+
+  it('keeps export readiness and zip structure stable after canonical package round-trip with white-padded HEFocus geometry', async () => {
+    const project = createBaseProject();
+    project.heFocus.chipBounds = {
+      x: -0.14,
+      y: 0.06,
+      width: 0.68,
+      height: 0.68,
+    };
+    project.cropQc.heQcGeometry = {
+      rect: { ...project.heFocus.chipBounds },
+      width: 640,
+      height: 640,
+    };
+
+    const validatedProject = await deserializePreprocessProject(new Blob([
+      JSON.stringify({
+        version: PACKAGE_VERSION,
+        project: toCanonicalProjectPayload(project),
+      }),
+    ], {
+      type: 'application/x-spatial-preprocess+json',
+    }));
+
+    expect(getPreprocessZipExportReadiness(validatedProject)).toMatchObject({ canExport: true });
+
+    const result = await exportProject(validatedProject);
+    const archive = await JSZip.loadAsync(await result.blob.arrayBuffer());
+
+    expect(Object.keys(archive.files).sort()).toEqual([
+      'scalefactors_json.json',
+      'tissue_fullres_image.png',
+      'tissue_hires_image.png',
+      'tissue_lowres_image.png',
+      'tissue_matrix.csv',
+      'tissue_positions.csv',
+    ]);
   });
 });
