@@ -1,4 +1,12 @@
-import type { ProjectedSpot } from '@/types/preprocess';
+import type {
+  CropQcTransitionalGeometryContract,
+  PreprocessRect,
+  ProjectedSpot,
+  SpotExportChipRectSource,
+  SpotExportGeometryContract,
+  SpotExportTemplateAnchor,
+  SpotExportTemplateAnchorBounds,
+} from '@/types/preprocess';
 import type { ChipConfigManifest, ChipTemplateEntry } from './chipConfigs';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -13,6 +21,200 @@ export type ProjectedSpotPixelBounds = {
 export type ProjectedSpotFullresCsvCoordinates = {
   pxl_row_in_fullres: number;
   pxl_col_in_fullres: number;
+};
+
+export type SpotExportFullresCoordinates = {
+  barcode: string;
+  arrayRow: number;
+  arrayCol: number;
+} & ProjectedSpotFullresCsvCoordinates;
+
+export type SpotExportFullresLayout = SpotExportGeometryContract & {
+  spotCenters: SpotExportFullresCoordinates[];
+  squareSideLength: number;
+};
+
+type SpotExportCropQcGeometry = Pick<
+  CropQcTransitionalGeometryContract,
+  'eosinReferenceGeometry' | 'heQcGeometry'
+>;
+
+const resolveSpotExportChipRect = (args: {
+  cropQc?: SpotExportCropQcGeometry | null;
+  cropWidth: number;
+  cropHeight: number;
+}): {
+  chipRect: PreprocessRect;
+  chipRectSource: SpotExportChipRectSource;
+} => {
+  const eosinReferenceRect = args.cropQc?.eosinReferenceGeometry?.rect;
+  const heQcRect = args.cropQc?.heQcGeometry?.rect;
+
+  if (eosinReferenceRect) {
+    return {
+      chipRect: { ...eosinReferenceRect },
+      chipRectSource: 'eosin-reference-geometry',
+    };
+  }
+
+  if (heQcRect) {
+    return {
+      chipRect: { ...heQcRect },
+      chipRectSource: 'he-qc-geometry',
+    };
+  }
+
+  return {
+    chipRect: {
+      x: 0,
+      y: 0,
+      width: args.cropWidth,
+      height: args.cropHeight,
+    },
+    chipRectSource: 'crop-bounds-fallback',
+  };
+};
+
+const toSpotExportTemplateAnchor = (entry: ChipTemplateEntry): SpotExportTemplateAnchor => {
+  if (
+    typeof entry.pxl_row_in_fullres !== 'number'
+    || !Number.isFinite(entry.pxl_row_in_fullres)
+    || typeof entry.pxl_col_in_fullres !== 'number'
+    || !Number.isFinite(entry.pxl_col_in_fullres)
+  ) {
+    throw new Error(`Chip template entry ${entry.barcode} is missing full-resolution anchor metadata.`);
+  }
+
+  return {
+    barcode: entry.barcode,
+    arrayRow: entry.arrayRow,
+    arrayCol: entry.arrayCol,
+    pxl_row_in_fullres: entry.pxl_row_in_fullres,
+    pxl_col_in_fullres: entry.pxl_col_in_fullres,
+  } satisfies SpotExportTemplateAnchor;
+};
+
+const getSpotExportTemplateAnchorBounds = (
+  templateAnchors: SpotExportTemplateAnchor[],
+): SpotExportTemplateAnchorBounds => {
+  const firstAnchor = templateAnchors[0];
+  if (!firstAnchor) {
+    throw new Error('Chip template anchor geometry missing. Reapply chip configuration before export.');
+  }
+
+  let minPxlRowInFullres = firstAnchor.pxl_row_in_fullres;
+  let maxPxlRowInFullres = firstAnchor.pxl_row_in_fullres;
+  let minPxlColInFullres = firstAnchor.pxl_col_in_fullres;
+  let maxPxlColInFullres = firstAnchor.pxl_col_in_fullres;
+
+  for (const anchor of templateAnchors.slice(1)) {
+    minPxlRowInFullres = Math.min(minPxlRowInFullres, anchor.pxl_row_in_fullres);
+    maxPxlRowInFullres = Math.max(maxPxlRowInFullres, anchor.pxl_row_in_fullres);
+    minPxlColInFullres = Math.min(minPxlColInFullres, anchor.pxl_col_in_fullres);
+    maxPxlColInFullres = Math.max(maxPxlColInFullres, anchor.pxl_col_in_fullres);
+  }
+
+  return {
+    minPxlRowInFullres,
+    maxPxlRowInFullres,
+    minPxlColInFullres,
+    maxPxlColInFullres,
+  } satisfies SpotExportTemplateAnchorBounds;
+};
+
+const normalizeTemplateAnchorAxisValue = (value: number, min: number, max: number) => {
+  const span = max - min;
+  if (!Number.isFinite(span) || span <= 0) {
+    return 0.5;
+  }
+
+  return clamp((value - min) / span, 0, 1);
+};
+
+const getSortedUniqueValues = (values: number[]) => Array.from(new Set(values)).sort((left, right) => left - right);
+
+const getMinimumPositiveDifference = (values: number[]) => {
+  let minimumDifference: number | null = null;
+
+  for (let index = 1; index < values.length; index += 1) {
+    const previousValue = values[index - 1];
+    const currentValue = values[index];
+    if (previousValue === undefined || currentValue === undefined) {
+      continue;
+    }
+
+    const difference = currentValue - previousValue;
+    if (difference <= 0) {
+      continue;
+    }
+
+    minimumDifference = minimumDifference === null
+      ? difference
+      : Math.min(minimumDifference, difference);
+  }
+
+  return minimumDifference;
+};
+
+const isValidPositiveNumber = (value: unknown): value is number => (
+  typeof value === 'number'
+  && Number.isFinite(value)
+  && value > 0
+);
+
+const resolveSpotExportAnchorCoordinates = (args: {
+  templateAnchor: SpotExportTemplateAnchor;
+  exportGeometry: Pick<SpotExportGeometryContract, 'chipRect' | 'templateAnchorBounds'>;
+}) => {
+  const {
+    templateAnchor,
+    exportGeometry: {
+      chipRect,
+      templateAnchorBounds,
+    },
+  } = args;
+
+  const rowFraction = normalizeTemplateAnchorAxisValue(
+    templateAnchor.pxl_row_in_fullres,
+    templateAnchorBounds.minPxlRowInFullres,
+    templateAnchorBounds.maxPxlRowInFullres,
+  );
+  const colFraction = normalizeTemplateAnchorAxisValue(
+    templateAnchor.pxl_col_in_fullres,
+    templateAnchorBounds.minPxlColInFullres,
+    templateAnchorBounds.maxPxlColInFullres,
+  );
+
+  return {
+    pxl_row_in_fullres: chipRect.y + rowFraction * chipRect.height,
+    pxl_col_in_fullres: chipRect.x + colFraction * chipRect.width,
+  } satisfies ProjectedSpotFullresCsvCoordinates;
+};
+
+const roundProjectedSpotFullresCoordinates = (
+  coordinates: ProjectedSpotFullresCsvCoordinates,
+): ProjectedSpotFullresCsvCoordinates => ({
+  pxl_row_in_fullres: Math.round(coordinates.pxl_row_in_fullres),
+  pxl_col_in_fullres: Math.round(coordinates.pxl_col_in_fullres),
+});
+
+const resolveSpotExportAxisPitch = (args: {
+  sourceValues: number[];
+  sourceMin: number;
+  sourceMax: number;
+  targetSpan: number;
+}) => {
+  const minimumSourceStep = getMinimumPositiveDifference(getSortedUniqueValues(args.sourceValues));
+  if (minimumSourceStep === null) {
+    return null;
+  }
+
+  const sourceSpan = args.sourceMax - args.sourceMin;
+  if (!Number.isFinite(sourceSpan) || sourceSpan <= 0) {
+    return null;
+  }
+
+  return (minimumSourceStep / sourceSpan) * args.targetSpan;
 };
 
 const resolveProjectedSpotDimensions = (spot: ProjectedSpot) => {
@@ -96,6 +298,90 @@ export function getProjectedSpotFullresCsvCoordinates(args: {
   } satisfies ProjectedSpotFullresCsvCoordinates;
 }
 
+export function resolveSpotExportGeometry(args: {
+  templateEntries: ChipTemplateEntry[];
+  cropQc?: SpotExportCropQcGeometry | null;
+  cropWidth: number;
+  cropHeight: number;
+}) {
+  const {
+    templateEntries,
+    cropQc,
+    cropWidth,
+    cropHeight,
+  } = args;
+  const templateAnchors = templateEntries.map(toSpotExportTemplateAnchor);
+  const { chipRect, chipRectSource } = resolveSpotExportChipRect({
+    cropQc,
+    cropWidth,
+    cropHeight,
+  });
+
+  return {
+    chipRect,
+    chipRectSource,
+    templateAnchorBounds: getSpotExportTemplateAnchorBounds(templateAnchors),
+    templateAnchors,
+  } satisfies SpotExportGeometryContract;
+}
+
+export function resolveSpotExportFullresLayout(args: {
+  templateEntries: ChipTemplateEntry[];
+  chipManifest: Pick<ChipConfigManifest, 'spotDiameter' | 'spotGap'>;
+  cropQc?: SpotExportCropQcGeometry | null;
+  cropWidth: number;
+  cropHeight: number;
+}) {
+  const {
+    templateEntries,
+    chipManifest,
+    cropQc,
+    cropWidth,
+    cropHeight,
+  } = args;
+  const exportGeometry = resolveSpotExportGeometry({
+    templateEntries,
+    cropQc,
+    cropWidth,
+    cropHeight,
+  });
+  const rowPitch = resolveSpotExportAxisPitch({
+    sourceValues: exportGeometry.templateAnchors.map((anchor) => anchor.pxl_row_in_fullres),
+    sourceMin: exportGeometry.templateAnchorBounds.minPxlRowInFullres,
+    sourceMax: exportGeometry.templateAnchorBounds.maxPxlRowInFullres,
+    targetSpan: exportGeometry.chipRect.height,
+  });
+  const colPitch = resolveSpotExportAxisPitch({
+    sourceValues: exportGeometry.templateAnchors.map((anchor) => anchor.pxl_col_in_fullres),
+    sourceMin: exportGeometry.templateAnchorBounds.minPxlColInFullres,
+    sourceMax: exportGeometry.templateAnchorBounds.maxPxlColInFullres,
+    targetSpan: exportGeometry.chipRect.width,
+  });
+  const squareSideLengthCandidates = [rowPitch, colPitch].filter((pitch): pitch is number => pitch !== null);
+
+  if (squareSideLengthCandidates.length === 0) {
+    throw new Error('Spot export geometry is missing anchor spacing. Reapply chip configuration before export.');
+  }
+
+  const spotPitchRatio = chipManifest.spotDiameter / (chipManifest.spotDiameter + chipManifest.spotGap);
+
+  return {
+    ...exportGeometry,
+    spotCenters: exportGeometry.templateAnchors.map((templateAnchor) => ({
+      barcode: templateAnchor.barcode,
+      arrayRow: templateAnchor.arrayRow,
+      arrayCol: templateAnchor.arrayCol,
+      ...roundProjectedSpotFullresCoordinates(resolveSpotExportAnchorCoordinates({
+        templateAnchor,
+        exportGeometry,
+      })),
+    } satisfies SpotExportFullresCoordinates)),
+    squareSideLength: (squareSideLengthCandidates.reduce((sum, pitch) => sum + pitch, 0)
+      / squareSideLengthCandidates.length)
+      * spotPitchRatio,
+  } satisfies SpotExportFullresLayout;
+}
+
 export function getProjectedSpotFullresSquareSideLength(args: {
   projectedSpots: ProjectedSpot[];
   cropWidth: number;
@@ -129,11 +415,7 @@ export function resolveAuthoritativeSpotDiameterFullres(args: {
     cropHeight,
   } = args;
 
-  if (
-    typeof persistedSpotDiameterFullres === 'number'
-    && Number.isFinite(persistedSpotDiameterFullres)
-    && persistedSpotDiameterFullres > 0
-  ) {
+  if (isValidPositiveNumber(persistedSpotDiameterFullres)) {
     return persistedSpotDiameterFullres;
   }
 
@@ -153,6 +435,17 @@ export function resolveAuthoritativeSpotDiameterFullres(args: {
     cropWidth,
     cropHeight,
   });
+}
+
+export function resolveSpotExportFullresDiameter(args: {
+  persistedSpotDiameterFullres?: number | null;
+  exportLayout: Pick<SpotExportFullresLayout, 'squareSideLength'>;
+}) {
+  if (isValidPositiveNumber(args.persistedSpotDiameterFullres)) {
+    return args.persistedSpotDiameterFullres;
+  }
+
+  return args.exportLayout.squareSideLength;
 }
 
 export function projectSpotsForCrop(args: {

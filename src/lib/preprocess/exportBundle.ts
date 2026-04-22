@@ -1,9 +1,16 @@
-import type { PreprocessProject, ProjectedSpot, TissueActivationMatrix } from '@/types/preprocess';
 import JSZip from 'jszip';
+import type {
+  CropQcTransitionalGeometryContract,
+  PreprocessProject,
+  ProjectedSpot,
+  TissueActivationMatrix,
+} from '@/types/preprocess';
+import { type ChipConfigManifest, loadChipConfigData } from './chipConfigs';
 import { getPreprocessPackageSourceEntries, serializePreprocessProject } from './package';
 import {
-  getProjectedSpotFullresCsvCoordinates,
   resolveAuthoritativeSpotDiameterFullres,
+  resolveSpotExportFullresDiameter,
+  resolveSpotExportFullresLayout,
 } from './spotProjection';
 import { selectedSpotIdsFromMatrix, validateTissueActivationMatrix } from './tissueMatrix';
 import { resolveTissueSelectionSupport } from './tissueSupport';
@@ -47,17 +54,58 @@ const dataUrlToBytes = (dataUrl: string) => {
   return buffer;
 };
 
-const toCsv = (projectedSpots: ProjectedSpot[], selectedSpotIds: Set<string>, cropWidth: number, cropHeight: number) => {
+type ExportOnlySpotCenter = {
+  arrayRow: number;
+  arrayCol: number;
+  pxl_row_in_fullres: number;
+  pxl_col_in_fullres: number;
+};
+
+const getArrayPositionKey = (arrayRow: number, arrayCol: number) => `${arrayRow}:${arrayCol}`;
+
+const isSupportedChipConfigId = (chipType: string | null): chipType is ChipConfigManifest['id'] => chipType === '50um' || chipType === '15um';
+
+const resolveExportOnlyFullresLayout = async (args: {
+  chipType: string | null;
+  cropQc?: Pick<CropQcTransitionalGeometryContract, 'eosinReferenceGeometry' | 'heQcGeometry'> | null;
+  cropWidth: number;
+  cropHeight: number;
+}) => {
+  if (!isSupportedChipConfigId(args.chipType)) {
+    throw new Error('Chip projection geometry or spot diameter metadata is missing. Reapply chip configuration before export.');
+  }
+
+  const { manifest, templateEntries } = await loadChipConfigData(args.chipType);
+
+  return resolveSpotExportFullresLayout({
+    templateEntries,
+    chipManifest: manifest,
+    cropQc: args.cropQc,
+    cropWidth: args.cropWidth,
+    cropHeight: args.cropHeight,
+  });
+};
+
+const toCsv = (
+  projectedSpots: ProjectedSpot[],
+  selectedSpotIds: Set<string>,
+  exportOnlySpotCenters: ExportOnlySpotCenter[],
+) => {
   const lines = [
     'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres',
   ];
+  const exportOnlySpotCentersByArrayPosition = new Map(
+    exportOnlySpotCenters.map((spotCenter) => [
+      getArrayPositionKey(spotCenter.arrayRow, spotCenter.arrayCol),
+      spotCenter,
+    ] as const),
+  );
 
   for (const spot of projectedSpots) {
-    const coordinates = getProjectedSpotFullresCsvCoordinates({
-      spot,
-      cropWidth,
-      cropHeight,
-    });
+    const coordinates = exportOnlySpotCentersByArrayPosition.get(getArrayPositionKey(spot.arrayRow, spot.arrayCol));
+    if (!coordinates) {
+      throw new Error(`Chip template anchor geometry is missing for array position ${spot.arrayRow}:${spot.arrayCol}. Reapply chip configuration before export.`);
+    }
 
     lines.push([
       spot.barcode,
@@ -246,10 +294,19 @@ export async function exportPreprocessZip(args: {
     columns,
     matrixValues,
     selectedSpotIds,
-    spotDiameterFullres,
     tissueHiresScale,
     tissueLowresScale,
   } = readiness.data;
+  const exportOnlyLayout = await resolveExportOnlyFullresLayout({
+    chipType: project.chipConfig.chipType,
+    cropQc: project.cropQc,
+    cropWidth,
+    cropHeight,
+  });
+  const spotDiameterFullres = resolveSpotExportFullresDiameter({
+    persistedSpotDiameterFullres: project.cropQc.spot_diameter_fullres,
+    exportLayout: exportOnlyLayout,
+  });
 
   const scalefactors = {
     spot_diameter_fullres: spotDiameterFullres,
@@ -263,7 +320,7 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_hires_image.png', dataUrlToBytes(heCropAssets.hires.dataUrl));
   zip.file('tissue_lowres_image.png', dataUrlToBytes(heCropAssets.lowres.dataUrl));
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
-  zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, cropWidth, cropHeight));
+  zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, exportOnlyLayout.spotCenters));
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {

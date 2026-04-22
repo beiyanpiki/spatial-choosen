@@ -9,8 +9,20 @@ import type {
   TissueRegion,
 } from '@/types/preprocess';
 
+import type { ChipConfigData } from './chipConfigs';
 import { migratePreprocessProject } from './migrations';
-import { deserializePreprocessProject, PACKAGE_VERSION } from './package';
+import {
+  deserializePreprocessProject,
+  PACKAGE_VERSION,
+  serializePreprocessProject,
+} from './package';
+import { projectSpotsForCrop } from './spotProjection';
+
+const mockLoadChipConfigData = vi.hoisted(() => vi.fn());
+
+vi.mock('./chipConfigs', () => ({
+  loadChipConfigData: mockLoadChipConfigData,
+}));
 
 vi.mock('./tissueRegions', () => ({
   deriveSelectedSpotIdsFromRegions: () => ['spot-b'],
@@ -19,6 +31,49 @@ vi.mock('./tissueRegions', () => ({
 import { exportPreprocessZip, getPreprocessZipExportReadiness } from './exportBundle';
 
 const PNG_DATA_URL = 'data:image/png;base64,AA==';
+
+const createMockChipConfigData = (): ChipConfigData => ({
+  manifest: {
+    id: '50um',
+    label: 'Square grid 50um',
+    gridRows: 64,
+    gridCols: 64,
+    spotDiameter: 50,
+    spotGap: 50,
+    barcodeTemplatePath: '/unused/tissue_positions.csv',
+    tissuePositionsPath: '/unused/tissue_positions.csv',
+  },
+  templateEntries: [
+    {
+      barcode: 'barcode-spot-a',
+      arrayRow: 1,
+      arrayCol: 1,
+      pxl_row_in_fullres: 75,
+      pxl_col_in_fullres: 75,
+    },
+    {
+      barcode: 'barcode-spot-b',
+      arrayRow: 1,
+      arrayCol: 2,
+      pxl_row_in_fullres: 75,
+      pxl_col_in_fullres: 175,
+    },
+    {
+      barcode: 'barcode-spot-c',
+      arrayRow: 2,
+      arrayCol: 1,
+      pxl_row_in_fullres: 175,
+      pxl_col_in_fullres: 75,
+    },
+    {
+      barcode: 'barcode-spot-d',
+      arrayRow: 64,
+      arrayCol: 64,
+      pxl_row_in_fullres: 6375,
+      pxl_col_in_fullres: 6375,
+    },
+  ],
+});
 
 const createProjectedSpot = (
   id: string,
@@ -81,13 +136,13 @@ const createRegionAroundSpot = (spot: ProjectedSpot): TissueRegion => ({
 });
 
 const defaultEosinReferenceGeometry = {
-  rect: { x: 0.2, y: 0.18, width: 0.62, height: 0.62 },
+  rect: { x: 75, y: 75, width: 6300, height: 6300 },
   width: 640,
   height: 640,
 } as const;
 
 const defaultHeQcGeometry = {
-  rect: { x: -0.08, y: 0.1, width: 0.62, height: 0.62 },
+  rect: { x: 35, y: 80, width: 6300, height: 6300 },
   width: 640,
   height: 640,
 } as const;
@@ -335,28 +390,6 @@ const createLegacy50umProject = (): LegacyPreprocessProject => {
   };
 };
 
-const toCanonicalProjectPayload = (project: PreprocessProject) => {
-  const {
-    forcedInSpotIds,
-    forcedOutSpotIds,
-    overrideNotice,
-    regions,
-    selectedRegionId,
-    ...canonicalTissueSelection
-  } = project.tissueSelection;
-
-  void forcedInSpotIds;
-  void forcedOutSpotIds;
-  void overrideNotice;
-  void regions;
-  void selectedRegionId;
-
-  return {
-    ...project,
-    tissueSelection: canonicalTissueSelection,
-  };
-};
-
 const readZipText = async (blob: Blob, fileName: string) => {
   const archive = await JSZip.loadAsync(await blob.arrayBuffer());
   const file = archive.file(fileName);
@@ -367,15 +400,93 @@ const readZipText = async (blob: Blob, fileName: string) => {
   return file.async('string');
 };
 
+type ExportedTissuePositionRow = {
+  barcode: string;
+  in_tissue: number;
+  array_row: number;
+  array_col: number;
+  pxl_row_in_fullres: number;
+  pxl_col_in_fullres: number;
+};
+
+type ExportedScalefactors = {
+  spot_diameter_fullres: number;
+  fiducial_diameter_fullres: number;
+  tissue_hires_scalef: number;
+  tissue_lowres_scalef: number;
+};
+
+const parseTissuePositionsCsv = (csv: string): ExportedTissuePositionRow[] => csv
+  .trim()
+  .split('\n')
+  .slice(1)
+  .map((line) => {
+    const [barcode, in_tissue, array_row, array_col, pxl_row_in_fullres, pxl_col_in_fullres] = line.split(',');
+
+    return {
+      barcode: barcode ?? '',
+      in_tissue: Number(in_tissue),
+      array_row: Number(array_row),
+      array_col: Number(array_col),
+      pxl_row_in_fullres: Number(pxl_row_in_fullres),
+      pxl_col_in_fullres: Number(pxl_col_in_fullres),
+    } satisfies ExportedTissuePositionRow;
+  });
+
+const readExportedTissuePositions = async (blob: Blob) => parseTissuePositionsCsv(
+  await readZipText(blob, 'tissue_positions.csv'),
+);
+
+const readExportedScalefactors = async (blob: Blob) => JSON.parse(
+  await readZipText(blob, 'scalefactors_json.json'),
+) as ExportedScalefactors;
+
+type PackagedProjectPayload = {
+  version: number;
+  project: {
+    chipConfig: Record<string, unknown>;
+  };
+};
+
+const indexRowsByBarcode = (rows: ExportedTissuePositionRow[]) => new Map(
+  rows.map((row) => [row.barcode, row] as const),
+);
+
 const exportProject = async (project: PreprocessProject) => exportPreprocessZip({
   project,
   includeAlignedImage: false,
   includeProjectJson: false,
 });
 
+const rebuildRuntimeProjection = (project: PreprocessProject): PreprocessProject => {
+  const cropWidth = project.cropQc.cropWidth;
+  const cropHeight = project.cropQc.cropHeight;
+
+  if (typeof cropWidth !== 'number' || cropWidth <= 0 || typeof cropHeight !== 'number' || cropHeight <= 0) {
+    throw new Error('Runtime chip projection reconstruction requires crop dimensions.');
+  }
+
+  const chipConfigData = createMockChipConfigData();
+
+  return {
+    ...project,
+    chipConfig: {
+      ...project.chipConfig,
+      projectedSpots: projectSpotsForCrop({
+        chip: chipConfigData.manifest,
+        templateEntries: chipConfigData.templateEntries,
+        cropWidth,
+        cropHeight,
+      }),
+    },
+  };
+};
+
 describe('exportBundle canonical matrix exports', () => {
   beforeEach(() => {
     vi.stubGlobal('window', {});
+    mockLoadChipConfigData.mockReset();
+    mockLoadChipConfigData.mockResolvedValue(createMockChipConfigData());
   });
 
   afterEach(() => {
@@ -396,21 +507,93 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows[63]?.[63]).toBe('1');
   });
 
-  it('writes tissue_positions.csv using only matrix-derived in_tissue flags', async () => {
+  it('writes tissue_positions.csv using canonical 50um full-resolution coordinates and matrix-derived in_tissue flags', async () => {
     const project = createBaseProject();
 
     const result = await exportProject(project);
-    const csv = await readZipText(result.blob, 'tissue_positions.csv');
-    const [, ...lines] = csv.trim().split('\n');
-    const flagsByBarcode = new Map(lines.map((line) => {
-      const [barcode, inTissue] = line.split(',');
-      return [barcode, inTissue];
-    }));
+    const rowsByBarcode = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
 
-    expect(flagsByBarcode.get('barcode-spot-a')).toBe('1');
-    expect(flagsByBarcode.get('barcode-spot-b')).toBe('0');
-    expect(flagsByBarcode.get('barcode-spot-c')).toBe('0');
-    expect(flagsByBarcode.get('barcode-spot-d')).toBe('1');
+    expect(rowsByBarcode.get('barcode-spot-a')).toEqual({
+      barcode: 'barcode-spot-a',
+      in_tissue: 1,
+      array_row: 1,
+      array_col: 1,
+      pxl_row_in_fullres: 75,
+      pxl_col_in_fullres: 75,
+    });
+    expect(rowsByBarcode.get('barcode-spot-b')).toEqual({
+      barcode: 'barcode-spot-b',
+      in_tissue: 0,
+      array_row: 1,
+      array_col: 2,
+      pxl_row_in_fullres: 75,
+      pxl_col_in_fullres: 175,
+    });
+    expect(rowsByBarcode.get('barcode-spot-c')).toEqual({
+      barcode: 'barcode-spot-c',
+      in_tissue: 0,
+      array_row: 2,
+      array_col: 1,
+      pxl_row_in_fullres: 175,
+      pxl_col_in_fullres: 75,
+    });
+    expect(rowsByBarcode.get('barcode-spot-d')).toEqual({
+      barcode: 'barcode-spot-d',
+      in_tissue: 1,
+      array_row: 64,
+      array_col: 64,
+      pxl_row_in_fullres: 6375,
+      pxl_col_in_fullres: 6375,
+    });
+  });
+
+  it('changes only matrix-derived in_tissue flags while keeping exported pxl coordinates identical', async () => {
+    const baselineProject = createBaseProject();
+    const changedMembershipProject = createBaseProject();
+    changedMembershipProject.tissueSelection.matrix = createMatrix(64, 64, [
+      [1, 2],
+      [64, 64],
+    ]);
+
+    const baselineResult = await exportProject(baselineProject);
+    const changedMembershipResult = await exportProject(changedMembershipProject);
+    const baselineRows = await readExportedTissuePositions(baselineResult.blob);
+    const changedMembershipRows = await readExportedTissuePositions(changedMembershipResult.blob);
+    const changedMembershipRowsByBarcode = indexRowsByBarcode(changedMembershipRows);
+
+    expect(getPreprocessZipExportReadiness(baselineProject)).toMatchObject({
+      canExport: true,
+    });
+    expect(getPreprocessZipExportReadiness(changedMembershipProject)).toMatchObject({
+      canExport: true,
+    });
+
+    expect(changedMembershipRows.map((row) => ({
+      barcode: row.barcode,
+      array_row: row.array_row,
+      array_col: row.array_col,
+      pxl_row_in_fullres: row.pxl_row_in_fullres,
+      pxl_col_in_fullres: row.pxl_col_in_fullres,
+    }))).toEqual(baselineRows.map((row) => ({
+      barcode: row.barcode,
+      array_row: row.array_row,
+      array_col: row.array_col,
+      pxl_row_in_fullres: row.pxl_row_in_fullres,
+      pxl_col_in_fullres: row.pxl_col_in_fullres,
+    })));
+    expect(changedMembershipRowsByBarcode.get('barcode-spot-a')?.in_tissue).toBe(0);
+    expect(changedMembershipRowsByBarcode.get('barcode-spot-b')?.in_tissue).toBe(1);
+    expect(changedMembershipRowsByBarcode.get('barcode-spot-c')?.in_tissue).toBe(0);
+    expect(changedMembershipRowsByBarcode.get('barcode-spot-d')?.in_tissue).toBe(1);
+  });
+
+  it('preserves the persisted crop/QC spot diameter in scalefactors_json.json when it is valid', async () => {
+    const project = createBaseProject();
+
+    const result = await exportProject(project);
+    const scalefactors = await readExportedScalefactors(result.blob);
+
+    expect(scalefactors.spot_diameter_fullres).toBe(18);
   });
 
   it('writes 64 rows with 64 columns per row for supported 50um exports', async () => {
@@ -449,18 +632,27 @@ describe('exportBundle canonical matrix exports', () => {
     const legacyProject = createLegacy50umProject();
 
     const migratedProject = migratePreprocessProject(legacyProject);
-    const packagedProject = new Blob([
-      JSON.stringify({
-        version: PACKAGE_VERSION,
-        project: toCanonicalProjectPayload(migratedProject),
-      }),
-    ], {
-      type: 'application/x-spatial-preprocess+json',
-    });
+    const packagedProject = await serializePreprocessProject(migratedProject);
+    const packagedPayload = JSON.parse(await packagedProject.text()) as PackagedProjectPayload;
+
+    expect(packagedPayload.version).toBe(PACKAGE_VERSION);
+    expect(packagedPayload.project.chipConfig.projectedSpots).toBeNull();
+    expect(Object.hasOwn(packagedPayload.project.chipConfig, 'projectedSpotIndex')).toBe(false);
+
     const validatedProject = await deserializePreprocessProject(packagedProject);
-    const result = await exportProject(validatedProject);
+
+    expect(validatedProject.chipConfig.projectedSpots).toBeNull();
+    expect(Object.hasOwn(validatedProject.chipConfig, 'projectedSpotIndex')).toBe(false);
+
+    const runtimeProject = rebuildRuntimeProjection(validatedProject);
+
+    expect(getPreprocessZipExportReadiness(runtimeProject)).toMatchObject({ canExport: true });
+
+    const result = await exportProject(runtimeProject);
     const matrixCsv = await readZipText(result.blob, 'tissue_matrix.csv');
     const rows = matrixCsv.trim().split('\n').map((line) => line.split(','));
+    const positionsByBarcode = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
+    const scalefactors = await readExportedScalefactors(result.blob);
 
     expect(validatedProject.tissueSelection.matrix).toEqual({
       rows: 64,
@@ -472,15 +664,65 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows).toHaveLength(64);
     expect(rows[63]).toHaveLength(64);
     expect(rows[63]?.[63]).toBe('1');
+    expect(positionsByBarcode.get('barcode-spot-a')).toEqual({
+      barcode: 'barcode-spot-a',
+      in_tissue: 0,
+      array_row: 1,
+      array_col: 1,
+      pxl_row_in_fullres: 75,
+      pxl_col_in_fullres: 75,
+    });
+    expect(positionsByBarcode.get('barcode-spot-b')).toEqual({
+      barcode: 'barcode-spot-b',
+      in_tissue: 0,
+      array_row: 1,
+      array_col: 2,
+      pxl_row_in_fullres: 75,
+      pxl_col_in_fullres: 175,
+    });
+    expect(positionsByBarcode.get('barcode-spot-c')).toEqual({
+      barcode: 'barcode-spot-c',
+      in_tissue: 0,
+      array_row: 2,
+      array_col: 1,
+      pxl_row_in_fullres: 175,
+      pxl_col_in_fullres: 75,
+    });
+    expect(positionsByBarcode.get('barcode-spot-d')).toEqual({
+      barcode: 'barcode-spot-d',
+      in_tissue: 1,
+      array_row: 64,
+      array_col: 64,
+      pxl_row_in_fullres: 6375,
+      pxl_col_in_fullres: 6375,
+    });
+    expect(scalefactors.spot_diameter_fullres).toBe(18);
   });
 
-  it('keeps export readiness and zip structure stable after canonical package round-trip with white-padded HEFocus geometry', async () => {
+  it('falls back to export geometry for spot diameter after canonical package round-trip with rotated eosin reference geometry', async () => {
     const project = createBaseProject();
+    project.cropQc.spot_diameter_fullres = null;
+    project.cropQc.eosinReferenceGeometry = {
+      rect: {
+        x: 80,
+        y: 35,
+        width: 6300,
+        height: 6300,
+      },
+      width: 640,
+      height: 640,
+    };
+    project.cropQc.cropRect = {
+      x: 80,
+      y: 35,
+      width: 6300,
+      height: 6300,
+    };
     project.heFocus.chipBounds = {
-      x: -0.14,
-      y: 0.06,
-      width: 0.68,
-      height: 0.68,
+      x: 35,
+      y: 80,
+      width: 6300,
+      height: 6300,
     };
     project.cropQc.heQcGeometry = {
       rect: { ...project.heFocus.chipBounds },
@@ -488,19 +730,22 @@ describe('exportBundle canonical matrix exports', () => {
       height: 640,
     };
 
-    const validatedProject = await deserializePreprocessProject(new Blob([
-      JSON.stringify({
-        version: PACKAGE_VERSION,
-        project: toCanonicalProjectPayload(project),
-      }),
-    ], {
-      type: 'application/x-spatial-preprocess+json',
-    }));
+    const packagedProject = await serializePreprocessProject(project);
+    const packagedPayload = JSON.parse(await packagedProject.text()) as PackagedProjectPayload;
+    const hydratedProject = await deserializePreprocessProject(packagedProject);
+    const runtimeProject = rebuildRuntimeProjection(hydratedProject);
 
-    expect(getPreprocessZipExportReadiness(validatedProject)).toMatchObject({ canExport: true });
+    expect(packagedPayload.version).toBe(PACKAGE_VERSION);
+    expect(packagedPayload.project.chipConfig.projectedSpots).toBeNull();
+    expect(Object.hasOwn(packagedPayload.project.chipConfig, 'projectedSpotIndex')).toBe(false);
+    expect(hydratedProject.chipConfig.projectedSpots).toBeNull();
+    expect(Object.hasOwn(hydratedProject.chipConfig, 'projectedSpotIndex')).toBe(false);
+    expect(getPreprocessZipExportReadiness(runtimeProject)).toMatchObject({ canExport: true });
 
-    const result = await exportProject(validatedProject);
+    const result = await exportProject(runtimeProject);
     const archive = await JSZip.loadAsync(await result.blob.arrayBuffer());
+    const positionsByBarcode = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
+    const scalefactors = await readExportedScalefactors(result.blob);
 
     expect(Object.keys(archive.files).sort()).toEqual([
       'scalefactors_json.json',
@@ -510,5 +755,30 @@ describe('exportBundle canonical matrix exports', () => {
       'tissue_matrix.csv',
       'tissue_positions.csv',
     ]);
+    expect(positionsByBarcode.get('barcode-spot-a')).toMatchObject({
+      array_row: 1,
+      array_col: 1,
+      pxl_row_in_fullres: 35,
+      pxl_col_in_fullres: 80,
+    });
+    expect(positionsByBarcode.get('barcode-spot-b')).toMatchObject({
+      array_row: 1,
+      array_col: 2,
+      pxl_row_in_fullres: 35,
+      pxl_col_in_fullres: 180,
+    });
+    expect(positionsByBarcode.get('barcode-spot-c')).toMatchObject({
+      array_row: 2,
+      array_col: 1,
+      pxl_row_in_fullres: 135,
+      pxl_col_in_fullres: 80,
+    });
+    expect(positionsByBarcode.get('barcode-spot-d')).toMatchObject({
+      array_row: 64,
+      array_col: 64,
+      pxl_row_in_fullres: 6335,
+      pxl_col_in_fullres: 6380,
+    });
+    expect(scalefactors.spot_diameter_fullres).toBe(50);
   });
 });

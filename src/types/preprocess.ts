@@ -320,6 +320,45 @@ export type CropQcSlice = CropQcSliceCore & {
   featureMatchesPreview?: CropQcCheckerboardPreview;
 };
 
+/**
+ * Preferred chip-rect source for export geometry resolution.
+ *
+ * `eosin-reference-geometry` is the primary crop-domain source, followed by
+ * `he-qc-geometry` when present, then `crop-bounds-fallback` as the last resort.
+ */
+export type SpotExportChipRectSource = 'eosin-reference-geometry' | 'he-qc-geometry' | 'crop-bounds-fallback';
+
+export type SpotExportTemplateAnchor = {
+  barcode: string;
+  arrayRow: number;
+  arrayCol: number;
+  pxl_row_in_fullres: number;
+  pxl_col_in_fullres: number;
+};
+
+export type SpotExportTemplateAnchorBounds = {
+  minPxlRowInFullres: number;
+  maxPxlRowInFullres: number;
+  minPxlColInFullres: number;
+  maxPxlColInFullres: number;
+};
+
+/**
+ * Export-only geometry contract.
+ *
+ * The chip rect is resolved in the full-resolution export image frame with
+ * `eosin-reference-geometry` as the preferred source, then `he-qc-geometry`,
+ * then `crop-bounds-fallback`. Template anchors remain the canonical per-spot
+ * source of truth, keeping CSV/export modeling separate from UI
+ * `ProjectedSpot` center semantics.
+ */
+export type SpotExportGeometryContract = {
+  chipRect: PreprocessRect;
+  chipRectSource: SpotExportChipRectSource;
+  templateAnchorBounds: SpotExportTemplateAnchorBounds;
+  templateAnchors: SpotExportTemplateAnchor[];
+};
+
 export type ProjectedSpotBase = {
   id: string;
   barcode: string;
