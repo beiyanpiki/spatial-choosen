@@ -19,7 +19,15 @@ import {
 	Text,
 	useToast,
 } from "@chakra-ui/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	type ComponentProps,
+	type ComponentType,
+} from "react";
 import type {
 	AlignmentSlice,
 	CropQcSlice,
@@ -122,6 +130,12 @@ type HeFocusComparisonSource = {
 	chipBounds: PreprocessRect;
 	imageTransform: LocalizationImageTransform;
 };
+
+type AlignmentPanelWithPaddingBoundaryProps = ComponentProps<typeof AlignmentPanel> & {
+	showMovingImagePaddingBoundary: boolean;
+};
+
+const AlignmentPanelWithPaddingBoundary = AlignmentPanel as ComponentType<AlignmentPanelWithPaddingBoundaryProps>;
 
 const autosaveTone: Record<AutosaveStatus, string> = {
 	saving: "orange",
@@ -696,13 +710,23 @@ export function PreprocessWorkspace({
 	const heFocusImageTransform = project?.heFocus.imageTransform ?? null;
 	const heFocusStatus = project?.heFocus.status ?? null;
 	const alignmentMovingImageKind = project?.alignment.movingImage ?? null;
+	const showMovingImagePaddingBoundary =
+		alignmentMovingImageKind === "he" &&
+		heFocusStatus === "complete" &&
+		heFocusChipBounds !== null &&
+		(
+			heFocusChipBounds.x < 0 ||
+			heFocusChipBounds.y < 0 ||
+			heFocusChipBounds.x + heFocusChipBounds.width > 1 ||
+			heFocusChipBounds.y + heFocusChipBounds.height > 1
+		);
 	const currentStepId = project?.currentStep ?? null;
 	const hasLocalizationChipBounds = Boolean(project?.localization.chipBounds);
 	const hasHeFocusChipBounds = Boolean(project?.heFocus.chipBounds);
 	const tissueAutoDetectionReadiness =
 		resolveTissueAutoDetectionReadiness(project);
 	const exportReadiness = project
-		? getPreprocessZipExportReadiness(project)
+		? getPreprocessZipExportReadiness(project, { includeAlignedImage })
 		: { canExport: false as const, reason: "Project unavailable." };
 	const chipProjectionCropStatus = project?.cropQc.status ?? null;
 	const chipProjectionQcAccepted = project?.cropQc.qcAccepted ?? false;
@@ -710,10 +734,6 @@ export function PreprocessWorkspace({
 	const chipProjectionProjectedSpots = project?.chipConfig.projectedSpots ?? null;
 	const chipProjectionCropWidth = project?.cropQc.cropWidth ?? null;
 	const chipProjectionCropHeight = project?.cropQc.cropHeight ?? null;
-	const chipProjectionGeometryWidth =
-		project?.cropQc.eosinReferenceGeometry?.width ?? null;
-	const chipProjectionGeometryHeight =
-		project?.cropQc.eosinReferenceGeometry?.height ?? null;
 	const hasAcceptedCropAssets = Boolean(
 		project?.cropQc.cropAssets?.eosin?.fullres.dataUrl &&
 			project?.cropQc.cropAssets?.he?.fullres.dataUrl,
@@ -1494,25 +1514,27 @@ export function PreprocessWorkspace({
 					eosinReferenceGeometry: result.eosinReferenceGeometry,
 					heQcGeometry: result.heQcGeometry,
 					cropRect: result.eosinReferenceGeometry.rect,
-					cropWidth: result.eosinReferenceGeometry.width,
-					cropHeight: result.eosinReferenceGeometry.height,
+					cropWidth: result.cropWidth,
+					cropHeight: result.cropHeight,
 					cropAssets: result.cropAssets,
 					tissue_hires_scalef: result.tissue_hires_scalef,
 					tissue_lowres_scalef: result.tissue_lowres_scalef,
 					spot_diameter_fullres: result.spot_diameter_fullres,
 					fiducial_diameter_fullres: result.fiducial_diameter_fullres,
 					checkerboardTileSize: 64,
-					checkerboardPreview: result.checkerboardPreview,
-					featureMatchesPreview: result.featureMatchesPreview,
-					featureMatchesPreviewDataUrl: result.featureMatchesDataUrl,
-					qcAccepted: false,
-					status: "ready",
-					issues: [],
-					eosinPreviewDataUrl: result.cropAssets.eosin.fullres.dataUrl,
-					previewDataUrl: result.cropAssets.he.fullres.dataUrl,
-					checkerboardPreviewDataUrl: result.checkerboardPreview.dataUrl,
-					error: null,
-				}),
+						checkerboardPreview: result.checkerboardPreview,
+						featureMatchesPreview: result.featureMatchesPreview,
+						featureMatchesPreviewDataUrl: result.featureMatchesDataUrl,
+						qcAccepted: false,
+						status: "ready",
+						issues: [],
+						eosinPreviewDataUrl: result.cropAssets.eosin.fullres.dataUrl,
+						previewDataUrl:
+							result.cropAssets.he.hires.dataUrl ??
+							result.cropAssets.he.fullres.dataUrl,
+						checkerboardPreviewDataUrl: result.checkerboardPreview.dataUrl,
+						error: null,
+					}),
 				{ invalidateDownstream: false },
 			);
 		} catch (error) {
@@ -1597,8 +1619,6 @@ export function PreprocessWorkspace({
 			cropWidth <= 0 ||
 			typeof cropHeight !== "number" ||
 			cropHeight <= 0 ||
-			chipProjectionGeometryWidth !== cropWidth ||
-			chipProjectionGeometryHeight !== cropHeight ||
 			!hasAcceptedCropAssets
 		) {
 			return;
@@ -1636,9 +1656,7 @@ export function PreprocessWorkspace({
 							current.chipConfig.chipType !== chipId ||
 							!currentCropGeometry ||
 							current.cropQc.cropWidth !== cropWidth ||
-							current.cropQc.cropHeight !== cropHeight ||
-							currentCropGeometry.width !== cropWidth ||
-							currentCropGeometry.height !== cropHeight
+							current.cropQc.cropHeight !== cropHeight
 						) {
 							return current;
 						}
@@ -1704,9 +1722,7 @@ export function PreprocessWorkspace({
 							current.chipConfig.chipType !== chipId ||
 							!currentCropGeometry ||
 							current.cropQc.cropWidth !== cropWidth ||
-							current.cropQc.cropHeight !== cropHeight ||
-							currentCropGeometry.width !== cropWidth ||
-							currentCropGeometry.height !== cropHeight
+							current.cropQc.cropHeight !== cropHeight
 						) {
 							return current;
 						}
@@ -1732,8 +1748,6 @@ export function PreprocessWorkspace({
 		chipProjectionCropHeight,
 		chipProjectionCropStatus,
 		chipProjectionCropWidth,
-		chipProjectionGeometryHeight,
-		chipProjectionGeometryWidth,
 		chipProjectionProjectedSpots,
 		chipProjectionQcAccepted,
 		onProjectMutate,
@@ -2443,10 +2457,10 @@ export function PreprocessWorkspace({
 									</Flex>
 								</Stack>
 							) : project.currentStep === "alignment" ? (
-								<AlignmentPanel
-									alignment={project.alignment}
-									autoProposalStatus={project.heFocus.autoProposal.status}
-									autoProposalMethod={project.heFocus.autoProposal.method}
+						<AlignmentPanelWithPaddingBoundary
+							alignment={project.alignment}
+							autoProposalStatus={project.heFocus.autoProposal.status}
+							autoProposalMethod={project.heFocus.autoProposal.method}
 									chipBounds={project.localization.chipBounds}
 									movingImage={alignmentMovingImage}
 									onSolveAccepted={() => {
@@ -2471,17 +2485,18 @@ export function PreprocessWorkspace({
 										onStepChange("heFocus");
 									}}
 									referenceImage={alignmentReferenceImage}
-									referenceImageTransform={{
-										rotationDegrees:
-											project.localization.imageTransform.rotationDegrees,
-										flipHorizontal:
-											project.localization.imageTransform.flipHorizontal,
-										flipVertical:
-											project.localization.imageTransform.flipVertical,
-										scale: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM.scale,
-									}}
-									onAlignmentChange={applyAlignmentUpdate}
-								/>
+							referenceImageTransform={{
+								rotationDegrees:
+									project.localization.imageTransform.rotationDegrees,
+								flipHorizontal:
+									project.localization.imageTransform.flipHorizontal,
+								flipVertical:
+									project.localization.imageTransform.flipVertical,
+								scale: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM.scale,
+							}}
+							showMovingImagePaddingBoundary={showMovingImagePaddingBoundary}
+							onAlignmentChange={applyAlignmentUpdate}
+						/>
 							) : project.currentStep === "cropQc" ? (
 								<CropQcPanel
 									cropHeight={project.cropQc.cropHeight}
@@ -3059,7 +3074,9 @@ export function PreprocessWorkspace({
 									canExport={exportReadiness.canExport}
 									onDownload={() => {
 										const currentExportReadiness =
-											getPreprocessZipExportReadiness(project);
+											getPreprocessZipExportReadiness(project, {
+												includeAlignedImage,
+											});
 										if (!currentExportReadiness.canExport) {
 											toast({
 												title: "Export blocked",

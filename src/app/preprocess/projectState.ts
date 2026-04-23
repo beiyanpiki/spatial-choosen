@@ -50,6 +50,9 @@ export const createHeFocusAutoProposal = (): HeFocusAutoProposal => ({
 const isFiniteNumber = (value: unknown): value is number =>
 	typeof value === "number" && Number.isFinite(value);
 
+const normalizePositiveNumber = (value: unknown): number | null =>
+	isFiniteNumber(value) && value > 0 ? value : null;
+
 const normalizeRect = (value: unknown): PreprocessRect | null => {
 	if (!value || typeof value !== "object") return null;
 
@@ -164,14 +167,16 @@ const normalizeCropQcSlice = (slice: CropQcSlice): CropQcSlice => {
 				)
 			: null);
 	const heQcGeometry = isStale ? null : normalizeCropQcGeometry(slice.heQcGeometry);
+	const cropWidth = normalizePositiveNumber(slice.cropWidth) ?? eosinReferenceGeometry?.width ?? null;
+	const cropHeight = normalizePositiveNumber(slice.cropHeight) ?? eosinReferenceGeometry?.height ?? null;
 
 	return {
 		...slice,
 		eosinReferenceGeometry,
 		heQcGeometry,
 		cropRect: eosinReferenceGeometry?.rect ?? null,
-		cropWidth: eosinReferenceGeometry?.width ?? null,
-		cropHeight: eosinReferenceGeometry?.height ?? null,
+		cropWidth,
+		cropHeight,
 	};
 };
 

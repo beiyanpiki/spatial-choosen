@@ -180,6 +180,59 @@ const createAcceptedAutoAlignmentSlice = (): AlignmentSlice => ({
 });
 
 describe('AlignmentPanel', () => {
+  it('renders the moving-image padding boundary only for the target pane and keeps it coupled to the shared transform layer', async () => {
+    const alignment = createAlignmentSlice();
+    alignment.movingImageTransform = {
+      rotationDegrees: 90,
+      flipHorizontal: true,
+      flipVertical: false,
+      scale: 1,
+    };
+
+    const { rerender } = render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={alignment}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={createSourceImage('he')}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={true}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    expect(await screen.findByTestId('alignment-target-image-boundary')).toBeInTheDocument();
+    expect(screen.queryByTestId('alignment-source-image-boundary')).not.toBeInTheDocument();
+
+    const transformLayer = screen.getByTestId('alignment-target-image-transform-layer');
+    expect(transformLayer).toHaveStyle({
+      transform: 'rotate(90deg) scale(-1, 1)',
+      transformOrigin: 'center center',
+    });
+    expect(within(transformLayer).getByTestId('alignment-target-image-boundary')).toBeInTheDocument();
+
+    rerender(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={alignment}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={createSourceImage('he')}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    expect(screen.queryByTestId('alignment-target-image-boundary')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('alignment-source-image-boundary')).not.toBeInTheDocument();
+  });
+
   it('does not auto-advance when all-points solve is rejected by strict acceptance', async () => {
     const onSolveAccepted = vi.fn();
 
@@ -192,6 +245,7 @@ describe('AlignmentPanel', () => {
           onSolveAccepted={onSolveAccepted}
           referenceImage={createSourceImage('eosin')}
           referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
           onAlignmentChange={vi.fn()}
         />
       </ChakraProvider>,
@@ -230,6 +284,7 @@ describe('AlignmentPanel', () => {
 					onSolveAccepted={vi.fn()}
 					referenceImage={createSourceImage('eosin')}
 					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
 					onAlignmentChange={onAlignmentChange}
 				/>
 			</ChakraProvider>,
@@ -279,6 +334,7 @@ describe('AlignmentPanel', () => {
 					onRecomputeAutoLocalization={onRecomputeAutoLocalization}
 					referenceImage={createSourceImage('eosin')}
 					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
 					onAlignmentChange={vi.fn()}
 				/>
 			</ChakraProvider>,

@@ -1,12 +1,13 @@
 import { ChakraProvider } from '@chakra-ui/react';
 import { act, render, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PreprocessProject } from '@/types/preprocess';
 
 const mockRunCropQc = vi.fn();
 const mockLoadOpenCv = vi.fn();
+let latestProject: PreprocessProject | null = null;
 type CapturedCropQcPanelProps = {
   canRun: boolean;
   onRunCrop: () => void;
@@ -384,6 +385,10 @@ const createProject = (overrides?: {
 function WorkspaceHarness({ initialProject }: { initialProject: PreprocessProject }) {
   const [project, setProject] = useState(initialProject);
 
+  useEffect(() => {
+    latestProject = project;
+  }, [project]);
+
   return (
     <ChakraProvider theme={theme}>
       <PreprocessWorkspace
@@ -408,6 +413,7 @@ describe('PreprocessWorkspace crop gating contract', () => {
     mockLoadOpenCv.mockReset();
     mockRunCropQc.mockReset();
     capturedCropQcPanelProps = null;
+    latestProject = null;
     mockLoadOpenCv.mockResolvedValue({ cv: {} });
     mockRunCropQc.mockResolvedValue(baseRunResult);
   });
@@ -544,4 +550,54 @@ describe('PreprocessWorkspace crop gating contract', () => {
     expect(automaticRequest.solveAccepted).toBe(true);
     expect(manualRequest.solveAccepted).toBe(true);
   });
+
+  it('stores the lighter HE hires preview in the crop preview alias after crop/QC completes', async () => {
+    render(<WorkspaceHarness initialProject={createProject()} />);
+
+    await act(async () => {
+      capturedCropQcPanelProps?.onRunCrop();
+    });
+
+    await waitFor(() => {
+      expect(mockRunCropQc).toHaveBeenCalledTimes(1);
+      expect(latestProject?.cropQc.previewDataUrl).toBe(baseRunResult.cropAssets.he.hires.dataUrl);
+    });
+
+    expect(latestProject?.cropQc.cropAssets.he.fullres.dataUrl).toBe(baseRunResult.cropAssets.he.fullres.dataUrl);
+  });
+
+	it('preserves emitted Crop/QC export-frame dimensions instead of overwriting them with eosinReferenceGeometry evidence', async () => {
+		mockRunCropQc.mockResolvedValueOnce({
+			...baseRunResult,
+			eosinReferenceGeometry: {
+				...baseRunResult.eosinReferenceGeometry,
+				width: 30,
+				height: 40,
+			},
+			cropWidth: 64,
+			cropHeight: 96,
+			cropAssets: {
+				...baseRunResult.cropAssets,
+				he: {
+					...baseRunResult.cropAssets.he,
+					fullres: { dataUrl: 'data:image/png;base64,he-fullres-64x96' },
+				},
+			},
+		});
+
+		render(<WorkspaceHarness initialProject={createProject()} />);
+
+		await act(async () => {
+			capturedCropQcPanelProps?.onRunCrop();
+		});
+
+		await waitFor(() => {
+			expect(mockRunCropQc).toHaveBeenCalledTimes(1);
+			expect(latestProject?.cropQc.cropWidth).toBe(64);
+			expect(latestProject?.cropQc.cropHeight).toBe(96);
+		});
+
+		expect(latestProject?.cropQc.eosinReferenceGeometry?.width).toBe(30);
+		expect(latestProject?.cropQc.eosinReferenceGeometry?.height).toBe(40);
+	});
 });

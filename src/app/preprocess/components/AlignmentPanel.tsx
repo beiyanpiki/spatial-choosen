@@ -65,6 +65,7 @@ type AlignmentPanelProps = {
 	onRecomputeAutoLocalization?: () => void;
 	referenceImage: PreprocessSourceImage | null;
 	referenceImageTransform: LocalizationImageTransform;
+	showMovingImagePaddingBoundary: boolean;
 };
 
 type InteractionMode =
@@ -90,6 +91,7 @@ type LandmarkCanvasProps = {
 	interactionMode: InteractionMode;
 	selectedPairId: string | null;
 	imageTransform: LocalizationImageTransform;
+	showImageBoundary?: boolean;
 	panelContent?: ReactNode;
 	onBackgroundPoint: (
 		imageKey: "source" | "target",
@@ -148,6 +150,7 @@ function LandmarkCanvas({
 	title,
 	interactionMode,
 	imageTransform,
+	showImageBoundary = false,
 	panelContent,
 	onBackgroundPoint,
 	onBackgroundFallback,
@@ -517,21 +520,38 @@ function LandmarkCanvas({
 								overflow="visible"
 								pointerEvents="none"
 							>
-								<img
-									src={imageDataUrl}
-									alt={title || "Alignment source image"}
-									draggable={false}
+								<Box
+									position="absolute"
+									inset={0}
+									data-testid={`${testIdPrefix}-image-transform-layer`}
 									style={{
-										display: "block",
-										width: "100%",
-										height: "100%",
-										objectFit: "contain",
-										userSelect: "none",
-										pointerEvents: "none",
 										transformOrigin: "center center",
 										transform: `rotate(${imageTransform.rotationDegrees}deg) scale(${imageTransform.flipHorizontal ? -1 : 1}, ${imageTransform.flipVertical ? -1 : 1})`,
 									}}
-								/>
+								>
+									<img
+										src={imageDataUrl}
+										alt={title || "Alignment source image"}
+										draggable={false}
+										style={{
+											display: "block",
+											width: "100%",
+											height: "100%",
+											objectFit: "contain",
+											userSelect: "none",
+											pointerEvents: "none",
+										}}
+									/>
+									{showImageBoundary ? (
+										<Box
+											position="absolute"
+											inset={0}
+											data-testid={`${testIdPrefix}-image-boundary`}
+											pointerEvents="none"
+											outline="1px solid black"
+										/>
+									) : null}
+								</Box>
 							</Box>
 							<svg
 								width="100%"
@@ -632,6 +652,7 @@ export function AlignmentPanel({
 	onRecomputeAutoLocalization,
 	referenceImage,
 	referenceImageTransform,
+	showMovingImagePaddingBoundary,
 }: AlignmentPanelProps) {
 	const [interactionMode, setInteractionMode] =
 		useState<InteractionMode>("awaiting-source");
@@ -1737,6 +1758,7 @@ export function AlignmentPanel({
 						title="H&E landmarks (moving)"
 						interactionMode={interactionMode}
 						selectedPairId={selectedPairId}
+						showImageBoundary={showMovingImagePaddingBoundary}
 						panelContent={movingViewControls}
 						onBackgroundPoint={handleBackgroundPoint}
 						onBackgroundFallback={clearLocalInteractionState}

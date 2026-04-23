@@ -6,6 +6,44 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LegacyPreprocessProject, PreprocessProject } from '@/types/preprocess';
 
+type MockExportReadinessArgs = {
+  includeAlignedImage?: boolean;
+};
+
+type CapturedExportPanelProps = {
+  includeAlignedImage: boolean;
+  canExport: boolean;
+  onToggleIncludeAlignedImage: (value: boolean) => void;
+  onDownload: () => void;
+};
+
+const mockExportPreprocessZip = vi.fn();
+const mockGetPreprocessZipExportReadiness = vi.fn((_: unknown, options?: MockExportReadinessArgs) => (
+  options?.includeAlignedImage
+    ? { canExport: false, reason: 'Aligned tissue image export requires checkerboard Crop/QC data.' }
+    : {
+        canExport: true,
+        data: {
+          cropWidth: 100,
+          cropHeight: 100,
+          heCropAssets: {
+            fullres: { dataUrl: 'data:image/png;base64,AA==' },
+            hires: { dataUrl: 'data:image/png;base64,AA==' },
+            lowres: { dataUrl: 'data:image/png;base64,AA==' },
+          },
+          projectedSpots: [],
+          rows: 1,
+          columns: 1,
+          matrixValues: [1],
+          selectedSpotIds: new Set<string>(),
+          spotDiameterFullres: 1,
+          tissueHiresScale: 1,
+          tissueLowresScale: 1,
+        },
+      }
+));
+let capturedExportPanelProps: CapturedExportPanelProps | null = null;
+
 vi.mock('../../../lib/preprocess/alignment', () => ({
   applyAcceptedAutoAlignment: (...args: unknown[]) => mockApplyAcceptedAutoAlignment(...args),
   classifyAutoRefinementOutcome: ({
@@ -51,8 +89,8 @@ vi.mock('../../../lib/preprocess/cropQc', () => ({
 }));
 
 vi.mock('../../../lib/preprocess/exportBundle', () => ({
-  exportPreprocessZip: vi.fn(),
-  getPreprocessZipExportReadiness: () => ({ canExport: false, reason: 'Not used in this test.' }),
+  exportPreprocessZip: (...args: unknown[]) => mockExportPreprocessZip(...args),
+  getPreprocessZipExportReadiness: (...args: unknown[]) => mockGetPreprocessZipExportReadiness(...args),
 }));
 
 vi.mock('../../../lib/preprocess/invalidation', () => ({
@@ -148,7 +186,10 @@ vi.mock('./CropQcPanel', () => ({
 }));
 
 vi.mock('./ExportPanel', () => ({
-  ExportPanel: () => null,
+  ExportPanel: (props: CapturedExportPanelProps) => {
+    capturedExportPanelProps = props;
+    return null;
+  },
 }));
 
 vi.mock('./StepSidebar', () => ({
@@ -191,6 +232,12 @@ beforeAll(() => {
     stroke: vi.fn(),
     closePath: vi.fn(),
   })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+});
+
+beforeEach(() => {
+  capturedExportPanelProps = null;
+  mockExportPreprocessZip.mockReset();
+  mockGetPreprocessZipExportReadiness.mockClear();
 });
 
 function WorkspaceHarness({
@@ -1240,6 +1287,107 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
       height: 0.34,
     });
     expect(latestProject.heFocus.status).toBe('complete');
+  });
+});
+
+describe('PreprocessWorkspace export readiness gating', () => {
+  it('threads includeAlignedImage through export readiness and blocks download before export when checkerboard data is missing', async () => {
+    const exportProject = {
+      ...createProject(),
+      currentStep: 'exportState' as const,
+    };
+
+    render(<WorkspaceHarness initialProject={exportProject} />);
+
+    await waitFor(() => {
+      expect(capturedExportPanelProps?.canExport).toBe(true);
+    });
+    expect(mockGetPreprocessZipExportReadiness).toHaveBeenLastCalledWith(expect.anything(), { includeAlignedImage: false });
+
+    await act(async () => {
+      capturedExportPanelProps?.onToggleIncludeAlignedImage(true);
+    });
+
+    await waitFor(() => {
+      expect(capturedExportPanelProps?.includeAlignedImage).toBe(true);
+      expect(capturedExportPanelProps?.canExport).toBe(false);
+    });
+    expect(mockGetPreprocessZipExportReadiness).toHaveBeenLastCalledWith(expect.anything(), { includeAlignedImage: true });
+
+    await act(async () => {
+      capturedExportPanelProps?.onDownload();
+    });
+
+    expect(mockExportPreprocessZip).not.toHaveBeenCalled();
+    expect(mockGetPreprocessZipExportReadiness).toHaveBeenLastCalledWith(expect.anything(), { includeAlignedImage: true });
+  });
+});
+
+describe('PreprocessWorkspace chip projection auto-run guards', () => {
+  it('still auto-runs chip projection when emitted crop dimensions differ from eosinReferenceGeometry evidence', async () => {
+    mockLoadChipConfigData.mockResolvedValue({
+      manifest: {
+        id: '15um',
+        label: '15um',
+        gridRows: 2,
+        gridCols: 2,
+        spotDiameter: 10,
+        spotGap: 10,
+        barcodeTemplatePath: '/unused/template.csv',
+        tissuePositionsPath: '/unused/template.csv',
+      },
+      templateEntries: [
+        {
+          barcode: 'spot-a',
+          arrayRow: 1,
+          arrayCol: 1,
+          pxl_row_in_fullres: 20,
+          pxl_col_in_fullres: 20,
+        },
+        {
+          barcode: 'spot-b',
+          arrayRow: 1,
+          arrayCol: 2,
+          pxl_row_in_fullres: 20,
+          pxl_col_in_fullres: 40,
+        },
+      ],
+    });
+
+    const initialProject = createProject();
+    initialProject.cropQc.eosinReferenceGeometry = {
+      rect: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      width: 30,
+      height: 40,
+    };
+    initialProject.cropQc.cropRect = initialProject.cropQc.eosinReferenceGeometry.rect;
+    initialProject.cropQc.cropWidth = 64;
+    initialProject.cropQc.cropHeight = 96;
+    initialProject.cropQc.qcAccepted = true;
+    initialProject.chipConfig.status = 'idle';
+    initialProject.chipConfig.isStale = false;
+    initialProject.chipConfig.chipType = '15um';
+    initialProject.chipConfig.projectedSpots = null;
+
+    let latestProject = initialProject;
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectChange={(project) => {
+          latestProject = project;
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockLoadChipConfigData).toHaveBeenCalledWith('15um');
+      expect(latestProject.chipConfig.projectedSpots).not.toBeNull();
+    });
+
+    expect(latestProject.cropQc.cropWidth).toBe(64);
+    expect(latestProject.cropQc.cropHeight).toBe(96);
+    expect(latestProject.cropQc.eosinReferenceGeometry?.width).toBe(30);
+    expect(latestProject.cropQc.eosinReferenceGeometry?.height).toBe(40);
   });
 });
 

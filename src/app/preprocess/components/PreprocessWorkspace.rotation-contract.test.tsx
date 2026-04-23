@@ -559,6 +559,58 @@ describe('PreprocessWorkspace rotation contract', () => {
 		});
 	});
 
+	it('derives moving-image padding boundary only for committed out-of-bounds HE focus', async () => {
+		const outOfBoundsProject = createBaseProject();
+		outOfBoundsProject.currentStep = 'alignment';
+		outOfBoundsProject.alignment.movingImage = 'he';
+		outOfBoundsProject.heFocus.chipBounds = { x: -0.1, y: 0.12, width: 0.4, height: 0.3 };
+
+		render(<WorkspaceHarness initialProject={outOfBoundsProject} />);
+
+		await waitFor(() => {
+			expect(alignmentPanelSpy).toHaveBeenCalled();
+		});
+
+		const outOfBoundsProps = alignmentPanelSpy.mock.calls.at(-1)?.[0] as
+			| { showMovingImagePaddingBoundary?: boolean }
+			| undefined;
+		expect(outOfBoundsProps?.showMovingImagePaddingBoundary).toBe(true);
+
+		alignmentPanelSpy.mockReset();
+
+		const inBoundsProject = createBaseProject();
+		inBoundsProject.currentStep = 'alignment';
+		inBoundsProject.alignment.movingImage = 'he';
+
+		render(<WorkspaceHarness initialProject={inBoundsProject} />);
+
+		await waitFor(() => {
+			expect(alignmentPanelSpy).toHaveBeenCalled();
+		});
+
+		const inBoundsProps = alignmentPanelSpy.mock.calls.at(-1)?.[0] as
+			| { showMovingImagePaddingBoundary?: boolean }
+			| undefined;
+		expect(inBoundsProps?.showMovingImagePaddingBoundary).toBe(false);
+
+		alignmentPanelSpy.mockReset();
+
+		const nonHeProject = createBaseProject();
+		nonHeProject.currentStep = 'alignment';
+		nonHeProject.alignment.movingImage = 'eosin';
+
+		render(<WorkspaceHarness initialProject={nonHeProject} />);
+
+		await waitFor(() => {
+			expect(alignmentPanelSpy).toHaveBeenCalled();
+		});
+
+		const nonHeProps = alignmentPanelSpy.mock.calls.at(-1)?.[0] as
+			| { showMovingImagePaddingBoundary?: boolean }
+			| undefined;
+		expect(nonHeProps?.showMovingImagePaddingBoundary).toBe(false);
+	});
+
 	it('keeps Localization overlay fixed while stored image rotation changes', async () => {
 		const user = userEvent.setup();
 		let latestProject = createBaseProject();
