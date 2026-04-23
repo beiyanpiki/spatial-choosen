@@ -393,6 +393,7 @@ function PreprocessContent() {
     try {
       const nextProject = buildEmptyPreprocessProject(projectName);
       await upsertPreprocessProject(nextProject);
+      await refreshProjects();
       setProjectName('');
       toast({ title: 'Preprocess project created', status: 'success' });
       openProject(nextProject.id);
@@ -406,7 +407,7 @@ function PreprocessContent() {
     } finally {
       setIsCreating(false);
     }
-  }, [openProject, projectName, toast]);
+  }, [openProject, projectName, toast, refreshProjects]);
 
   const handleDeleteProject = useCallback(async (projectId: string) => {
     setIsDeletingId(projectId);
