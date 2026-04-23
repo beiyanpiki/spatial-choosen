@@ -434,6 +434,7 @@ function PreprocessContent() {
     try {
         const importedProject = normalizeProjectForWorkspace(await deserializePreprocessImport(fileList[0]));
         await upsertPreprocessProject(importedProject);
+        await refreshProjects();
       toast({ title: 'Preprocess project imported', status: 'success' });
       openProject(importedProject.id);
     } catch (error) {
