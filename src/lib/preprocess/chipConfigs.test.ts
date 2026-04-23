@@ -145,6 +145,8 @@ describe('chip config helpers', () => {
         barcode: '50um-001-001',
         arrayRow: 1,
         arrayCol: 1,
+        pxl_row_in_fullres: 0,
+        pxl_col_in_fullres: 0,
       },
     ]);
   });
@@ -158,21 +160,29 @@ describe('chip config helpers', () => {
       barcode: '15um-001-001',
       arrayRow: 1,
       arrayCol: 1,
+      pxl_row_in_fullres: 33,
+      pxl_col_in_fullres: 33,
     });
     expect(templateEntries[1]).toEqual({
       barcode: '15um-001-002',
       arrayRow: 1,
       arrayCol: 2,
+      pxl_row_in_fullres: 33,
+      pxl_col_in_fullres: 73,
     });
     expect(templateEntries[96]).toEqual({
       barcode: '15um-002-001',
       arrayRow: 2,
       arrayCol: 1,
+      pxl_row_in_fullres: 73,
+      pxl_col_in_fullres: 33,
     });
     expect(templateEntries.at(-1)).toEqual({
       barcode: '15um-096-096',
       arrayRow: 96,
       arrayCol: 96,
+      pxl_row_in_fullres: 3833,
+      pxl_col_in_fullres: 3833,
     });
   });
 });
