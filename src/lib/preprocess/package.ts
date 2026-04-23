@@ -417,6 +417,12 @@ const assertNullableString = (value: unknown, fieldName: string) => {
   }
 };
 
+const assertNull = (value: unknown, fieldName: string) => {
+  if (value !== null) {
+    throw new Error(`Project field "${fieldName}" is invalid or missing`);
+  }
+};
+
 const assertNonEmptyString = (value: unknown, fieldName: string) => {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`Project field "${fieldName}" is invalid or missing`);
@@ -649,11 +655,14 @@ const assertCanonicalCropQcContract = (slice: Record<string, unknown>) => {
 
   assertObject(slice.checkerboardPreview, 'cropQc.checkerboardPreview');
   const checkerboardPreview = slice.checkerboardPreview as Record<string, unknown>;
-  assertNullableString(checkerboardPreview.dataUrl, 'cropQc.checkerboardPreview.dataUrl');
-  assertNullableString(slice.featureMatchesPreviewDataUrl, 'cropQc.featureMatchesPreviewDataUrl');
+  assertNull(checkerboardPreview.dataUrl, 'cropQc.checkerboardPreview.dataUrl');
+  assertNull(slice.eosinPreviewDataUrl, 'cropQc.eosinPreviewDataUrl');
+  assertNull(slice.previewDataUrl, 'cropQc.previewDataUrl');
+  assertNull(slice.checkerboardPreviewDataUrl, 'cropQc.checkerboardPreviewDataUrl');
+  assertNull(slice.featureMatchesPreviewDataUrl, 'cropQc.featureMatchesPreviewDataUrl');
   assertObject(slice.featureMatchesPreview, 'cropQc.featureMatchesPreview');
   const featureMatchesPreview = slice.featureMatchesPreview as Record<string, unknown>;
-  assertNullableString(featureMatchesPreview.dataUrl, 'cropQc.featureMatchesPreview.dataUrl');
+  assertNull(featureMatchesPreview.dataUrl, 'cropQc.featureMatchesPreview.dataUrl');
 
   const eosinAssets = cropAssets.eosin;
   const heAssets = cropAssets.he;

@@ -354,8 +354,8 @@ describe('preprocess package matrix-first validation', () => {
     }))).rejects.toThrow(/64x64|50um/i);
   });
 
-  it('rejects canonical version 4 payloads that still include region-first fields as current data', async () => {
-    const project = createProject();
+	it('rejects canonical version 4 payloads that still include region-first fields as current data', async () => {
+	  const project = createProject();
 
     await expect(deserializePreprocessProject(createPackageBlob({
       version: PACKAGE_VERSION,
@@ -377,8 +377,34 @@ describe('preprocess package matrix-first validation', () => {
           ],
         },
       },
-    }))).rejects.toThrow(/region-first|legacy/i);
-  });
+	  }))).rejects.toThrow(/region-first|legacy/i);
+	});
+
+	it('rejects canonical version 4 payloads that retain raw crop preview aliases', async () => {
+	  const project = createProject();
+	  project.cropQc.cropAssets = {
+	    eosin: {
+	      fullres: { dataUrl: 'data:image/png;base64,eosin-fullres' },
+	      hires: { dataUrl: 'data:image/png;base64,eosin-hires' },
+	      lowres: { dataUrl: 'data:image/png;base64,eosin-lowres' },
+	    },
+	    he: {
+	      fullres: { dataUrl: 'data:image/png;base64,he-fullres' },
+	      hires: { dataUrl: 'data:image/png;base64,he-hires' },
+	      lowres: { dataUrl: 'data:image/png;base64,he-lowres' },
+	    },
+	  };
+	  project.cropQc.tissue_hires_scalef = 0.5;
+	  project.cropQc.tissue_lowres_scalef = 0.25;
+	  project.cropQc.spot_diameter_fullres = 18;
+	  project.cropQc.fiducial_diameter_fullres = 27;
+	  project.cropQc.previewDataUrl = 'blob:legacy-preview';
+
+	  await expect(deserializePreprocessProject(createPackageBlob({
+	    version: PACKAGE_VERSION,
+	    project: toCanonicalProjectPayload(project),
+	  }))).rejects.toThrow(/cropQc\.previewDataUrl/i);
+	});
 
   it('still migrates older package versions through the legacy path', async () => {
     const project = createProject();
