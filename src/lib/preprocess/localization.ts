@@ -81,6 +81,15 @@ export function clampNormalizedSquareRect(
   };
 }
 
+export function buildPermissiveHeFocusHandles(rect: PreprocessRect): LocalizationHandle[] {
+  return [
+    { id: "nw", label: "NW", point: { x: rect.x, y: rect.y } },
+    { id: "ne", label: "NE", point: { x: rect.x + rect.width, y: rect.y } },
+    { id: "se", label: "SE", point: { x: rect.x + rect.width, y: rect.y + rect.height } },
+    { id: "sw", label: "SW", point: { x: rect.x, y: rect.y + rect.height } },
+  ];
+}
+
 export function buildLocalizationHandles(rect: PreprocessRect): LocalizationHandle[] {
   const nextRect = clampNormalizedRect(rect);
 
@@ -120,20 +129,42 @@ export function computeLocalizationStatus(hasImage: boolean, chipBounds: Preproc
   return chipBounds ? "complete" : "ready";
 }
 
+type ChipBoundsClampOptions = {
+  clampToImage?: boolean;
+};
+
+const normalizeSquareRect = (
+  rect: PreprocessRect,
+  imageAspectRatio = 1,
+  minSize = LOCALIZATION_MIN_BOX_SIZE,
+): PreprocessRect => {
+  const aspectRatio = Math.max(imageAspectRatio, Number.EPSILON);
+  const size = Math.max(rect.width, rect.height / aspectRatio, minSize);
+
+  return {
+    x: rect.x,
+    y: rect.y,
+    width: size,
+    height: size * aspectRatio,
+  };
+};
+
 export function translateChipBounds(
   rect: PreprocessRect,
   delta: PreprocessPoint,
   imageAspectRatio = 1,
+  options?: ChipBoundsClampOptions,
 ): PreprocessRect {
-  const aspectRatio = Math.max(imageAspectRatio, Number.EPSILON);
-  const size = Math.max(rect.width, rect.height / aspectRatio, LOCALIZATION_MIN_BOX_SIZE);
-
-  return clampNormalizedSquareRect({
+  const nextRect = normalizeSquareRect({
     x: rect.x + delta.x,
     y: rect.y + delta.y,
-    width: size,
-    height: size * aspectRatio,
-  }, aspectRatio);
+    width: rect.width,
+    height: rect.height,
+  }, imageAspectRatio);
+
+  return options?.clampToImage === false
+    ? nextRect
+    : clampNormalizedSquareRect(nextRect, imageAspectRatio);
 }
 
 type RectEdges = {
@@ -142,6 +173,15 @@ type RectEdges = {
   right: number;
   bottom: number;
 };
+
+const clampSquareChipBounds = (
+  rect: PreprocessRect,
+  imageAspectRatio: number,
+  minSize: number,
+  options?: ChipBoundsClampOptions,
+) => options?.clampToImage === false
+  ? normalizeSquareRect(rect, imageAspectRatio, minSize)
+  : clampNormalizedSquareRect(rect, imageAspectRatio, minSize);
 
 const toEdges = (rect: PreprocessRect): RectEdges => ({
   left: rect.x,
@@ -156,6 +196,7 @@ export function resizeChipBounds(
   point: PreprocessPoint,
   imageAspectRatio = 1,
   minSize = LOCALIZATION_MIN_BOX_SIZE,
+  options?: ChipBoundsClampOptions,
 ): PreprocessRect {
   const aspectRatio = Math.max(imageAspectRatio, Number.EPSILON);
   const edges = toEdges(rect);
@@ -183,12 +224,12 @@ export function resizeChipBounds(
       y: opposite.y + signY * size * aspectRatio,
     };
 
-    return clampNormalizedSquareRect({
+    return clampSquareChipBounds({
       x: Math.min(opposite.x, movedCorner.x),
       y: Math.min(opposite.y, movedCorner.y),
       width: Math.abs(movedCorner.x - opposite.x),
       height: Math.abs(movedCorner.y - opposite.y),
-    }, aspectRatio, minSize);
+    }, aspectRatio, minSize, options);
   }
 
   const center = {
@@ -198,33 +239,49 @@ export function resizeChipBounds(
 
   if (handle === 'e' || handle === 'w') {
     const anchorX = handle === 'e' ? edges.left : edges.right;
-    const maxSizeByX = handle === 'e' ? 1 - anchorX : anchorX;
-    const maxSizeByCenterY = Math.min((2 * center.y) / aspectRatio, (2 * (1 - center.y)) / aspectRatio);
     const proposedSize = handle === 'e'
       ? point.x - anchorX
       : anchorX - point.x;
-    const size = clamp(Math.min(proposedSize, maxSizeByX, maxSizeByCenterY), minSize, 1);
+    const size = options?.clampToImage === false
+      ? Math.max(proposedSize, minSize)
+      : clamp(
+          Math.min(
+            proposedSize,
+            handle === 'e' ? 1 - anchorX : anchorX,
+            Math.min((2 * center.y) / aspectRatio, (2 * (1 - center.y)) / aspectRatio),
+          ),
+          minSize,
+          1,
+        );
     const nextX = handle === 'e' ? anchorX : anchorX - size;
-    return clampNormalizedSquareRect({
+    return clampSquareChipBounds({
       x: nextX,
       y: center.y - (size * aspectRatio) / 2,
       width: size,
       height: size * aspectRatio,
-    }, aspectRatio, minSize);
+    }, aspectRatio, minSize, options);
   }
 
   const anchorY = handle === 's' ? edges.top : edges.bottom;
-  const maxSizeByY = handle === 's' ? (1 - anchorY) / aspectRatio : anchorY / aspectRatio;
-  const maxSizeByCenterX = Math.min(2 * center.x, 2 * (1 - center.x));
   const proposedSize = (handle === 's'
     ? point.y - anchorY
     : anchorY - point.y) / aspectRatio;
-  const size = clamp(Math.min(proposedSize, maxSizeByY, maxSizeByCenterX), minSize, 1);
+  const size = options?.clampToImage === false
+    ? Math.max(proposedSize, minSize)
+    : clamp(
+        Math.min(
+          proposedSize,
+          handle === 's' ? (1 - anchorY) / aspectRatio : anchorY / aspectRatio,
+          Math.min(2 * center.x, 2 * (1 - center.x)),
+        ),
+        minSize,
+        1,
+      );
   const nextY = handle === 's' ? anchorY : anchorY - size * aspectRatio;
-  return clampNormalizedSquareRect({
+  return clampSquareChipBounds({
     x: center.x - size / 2,
     y: nextY,
     width: size,
     height: size * aspectRatio,
-  }, aspectRatio, minSize);
+  }, aspectRatio, minSize, options);
 }

@@ -1,18 +1,33 @@
 import type {
   AlignmentAffineMatrix,
   AlignmentControlPoint,
+  CanonicalCropQcGeometry,
   CropQcCanonicalAsset,
   CropQcCanonicalAssetSet,
+  HeFocusAutoProposalQuad,
   LocalizationImageTransform,
   PreprocessRect,
 } from '@/types/preprocess';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+import { LOCALIZATION_MIN_BOX_SIZE } from './localization';
 
 type Size = { width: number; height: number };
 type PixelRect = { x: number; y: number; width: number; height: number };
 type PixelPoint = { x: number; y: number };
+
+export type CropQcBlockedReason = 'missing-accepted-transform' | 'missing-accepted-chip-bounds';
+
+export class CropQcBlockedError extends Error {
+  readonly code: CropQcBlockedReason;
+
+  constructor(code: CropQcBlockedReason, message?: string) {
+    super(message ?? (code === 'missing-accepted-transform'
+      ? 'Crop/QC is blocked until an accepted alignment transform is available.'
+      : 'Crop/QC is blocked until canonical accepted chip geometry is available.'));
+    this.name = 'CropQcBlockedError';
+    this.code = code;
+  }
+}
 
 const disposeCanvas = (canvas: HTMLCanvasElement) => {
   canvas.width = 0;
@@ -20,6 +35,8 @@ const disposeCanvas = (canvas: HTMLCanvasElement) => {
 };
 
 export type CropQcResult = {
+  eosinReferenceGeometry: CanonicalCropQcGeometry;
+  heQcGeometry: CanonicalCropQcGeometry | null;
   cropRect: PreprocessRect;
   cropWidth: number;
   cropHeight: number;
@@ -71,8 +88,62 @@ const drawCanvas = (source: CanvasImageSource, size: Size) => {
   return canvas;
 };
 
+const fillCanvasWhite = (context: CanvasRenderingContext2D, size: Size) => {
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, size.width, size.height);
+};
+
+const preserveRequestedSquareRect = (
+  rect: PreprocessRect,
+  imageAspectRatio = 1,
+  minSize = LOCALIZATION_MIN_BOX_SIZE,
+): PreprocessRect => {
+  const aspectRatio = Math.max(imageAspectRatio, Number.EPSILON);
+  const size = Math.max(rect.width, rect.height / aspectRatio, minSize);
+
+  return {
+    x: rect.x,
+    y: rect.y,
+    width: size,
+    height: size * aspectRatio,
+  };
+};
+
+const resolvePixelIntersection = (
+  pixelRect: PixelRect,
+  imageSize: Size,
+): {
+  sourceRect: PixelRect;
+  destinationOrigin: PixelPoint;
+} | null => {
+  const sourceX = Math.max(0, pixelRect.x);
+  const sourceY = Math.max(0, pixelRect.y);
+  const sourceEndX = Math.min(imageSize.width, pixelRect.x + pixelRect.width);
+  const sourceEndY = Math.min(imageSize.height, pixelRect.y + pixelRect.height);
+  const sourceWidth = Math.max(0, sourceEndX - sourceX);
+  const sourceHeight = Math.max(0, sourceEndY - sourceY);
+
+  if (sourceWidth === 0 || sourceHeight === 0) {
+    return null;
+  }
+
+  return {
+    sourceRect: {
+      x: sourceX,
+      y: sourceY,
+      width: sourceWidth,
+      height: sourceHeight,
+    },
+    destinationOrigin: {
+      x: sourceX - pixelRect.x,
+      y: sourceY - pixelRect.y,
+    },
+  };
+};
+
 const cropCanvas = (
   source: CanvasImageSource,
+  sourceSize: Size,
   pixelRect: PixelRect,
 ) => {
   const canvas = document.createElement('canvas');
@@ -82,17 +153,23 @@ const cropCanvas = (
   if (!context) throw new Error('Crop canvas context unavailable');
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  context.drawImage(
-    source,
-    pixelRect.x,
-    pixelRect.y,
-    pixelRect.width,
-    pixelRect.height,
-    0,
-    0,
-    pixelRect.width,
-    pixelRect.height,
-  );
+  fillCanvasWhite(context, { width: pixelRect.width, height: pixelRect.height });
+
+  const intersection = resolvePixelIntersection(pixelRect, sourceSize);
+  if (intersection) {
+    context.drawImage(
+      source,
+      intersection.sourceRect.x,
+      intersection.sourceRect.y,
+      intersection.sourceRect.width,
+      intersection.sourceRect.height,
+      intersection.destinationOrigin.x,
+      intersection.destinationOrigin.y,
+      intersection.sourceRect.width,
+      intersection.sourceRect.height,
+    );
+  }
+
   return canvas;
 };
 
@@ -168,6 +245,19 @@ const getScaleFactor = (assetSize: Size, fullresSize: Size) => {
   return fullresMaxSide > 0 ? emittedMaxSide / fullresMaxSide : 1;
 };
 
+const getAxisScale = (xComponent: number, yComponent: number) => {
+  const scale = Math.hypot(xComponent, yComponent);
+  return Number.isFinite(scale) && scale > Number.EPSILON ? scale : 1;
+};
+
+const getOriginalDensityCropSize = (
+  pixelRect: PixelRect,
+  affineMatrix: AlignmentAffineMatrix,
+): Size => ({
+  width: Math.max(1, Math.round(pixelRect.width / getAxisScale(affineMatrix[0], affineMatrix[3]))),
+  height: Math.max(1, Math.round(pixelRect.height / getAxisScale(affineMatrix[1], affineMatrix[4]))),
+});
+
 const loadImage = (dataUrl: string) => new Promise<HTMLImageElement>((resolve, reject) => {
   const image = new window.Image();
   image.onload = () => resolve(image);
@@ -192,31 +282,23 @@ const normalizeRect = (
   chipBounds: PreprocessRect,
   imageSize: Size,
 ): { rect: PreprocessRect; pixelRect: PixelRect } => {
-  const minX = clamp(chipBounds.x, 0, 1);
-  const maxX = clamp(chipBounds.x + chipBounds.width, 0, 1);
-  const minY = clamp(chipBounds.y, 0, 1);
-  const maxY = clamp(chipBounds.y + chipBounds.height, 0, 1);
-
-  const widthNorm = Math.max(1 / Math.max(1, imageSize.width), maxX - minX);
-  const heightNorm = Math.max(1 / Math.max(1, imageSize.height), maxY - minY);
-
-  const pxX = clamp(Math.round(minX * imageSize.width), 0, Math.max(0, imageSize.width - 1));
-  const pxY = clamp(Math.round(minY * imageSize.height), 0, Math.max(0, imageSize.height - 1));
-  const pxWidth = Math.max(1, Math.round(widthNorm * imageSize.width));
-  const pxHeight = Math.max(1, Math.round(heightNorm * imageSize.height));
+  const pxX = Math.round(chipBounds.x * imageSize.width);
+  const pxY = Math.round(chipBounds.y * imageSize.height);
+  const pxWidth = Math.max(1, Math.round(chipBounds.width * imageSize.width));
+  const pxHeight = Math.max(1, Math.round(chipBounds.height * imageSize.height));
 
   return {
     rect: {
-      x: minX,
-      y: minY,
-      width: widthNorm,
-      height: heightNorm,
+      x: chipBounds.x,
+      y: chipBounds.y,
+      width: chipBounds.width,
+      height: chipBounds.height,
     },
     pixelRect: {
       x: pxX,
       y: pxY,
-      width: Math.min(pxWidth, imageSize.width - pxX),
-      height: Math.min(pxHeight, imageSize.height - pxY),
+      width: pxWidth,
+      height: pxHeight,
     },
   };
 };
@@ -257,6 +339,30 @@ const toPixelPoint = (point: { x: number; y: number }, size: Size): PixelPoint =
   y: point.y * size.height,
 });
 
+const toRectCornerPoints = (
+  rect: PreprocessRect,
+  size: Size,
+): [PixelPoint, PixelPoint, PixelPoint, PixelPoint] => ([
+  toPixelPoint({ x: rect.x, y: rect.y }, size),
+  toPixelPoint({ x: rect.x + rect.width, y: rect.y }, size),
+  toPixelPoint({ x: rect.x + rect.width, y: rect.y + rect.height }, size),
+  toPixelPoint({ x: rect.x, y: rect.y + rect.height }, size),
+]);
+
+const toPixelBounds = (points: readonly PixelPoint[]): PixelRect => {
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
 const applyAffineToPoint = (
   point: PixelPoint,
   affineMatrix: AlignmentAffineMatrix,
@@ -265,10 +371,93 @@ const applyAffineToPoint = (
   y: affineMatrix[3] * point.x + affineMatrix[4] * point.y + affineMatrix[5],
 });
 
+const usesCanonicalAcceptedGeometryContract = (args: {
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
+  acceptedChipBounds?: PreprocessRect | null;
+  coarseChipBounds?: PreprocessRect | null;
+}) => args.acceptedChipQuad !== undefined
+  || args.acceptedChipBounds !== undefined
+  || args.coarseChipBounds !== undefined;
+
+const toCanonicalCropQcGeometry = (normalized: {
+  rect: PreprocessRect;
+  pixelRect: PixelRect;
+}): CanonicalCropQcGeometry => ({
+  rect: normalized.rect,
+  width: normalized.pixelRect.width,
+  height: normalized.pixelRect.height,
+});
+
+const resolveCropBounds = (args: {
+  chipBounds: PreprocessRect;
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
+  acceptedChipBounds?: PreprocessRect | null;
+  coarseChipBounds?: PreprocessRect | null;
+  referenceSize: Size;
+  alignmentAccepted?: boolean;
+  solveAccepted?: boolean;
+}) => {
+  const usesAcceptedGeometryContract = usesCanonicalAcceptedGeometryContract(args);
+  if (usesAcceptedGeometryContract) {
+    const hasAcceptedTransform = args.solveAccepted ?? args.alignmentAccepted ?? false;
+    if (!hasAcceptedTransform) {
+      throw new CropQcBlockedError('missing-accepted-transform');
+    }
+  }
+
+  const squareChipBounds = preserveRequestedSquareRect(
+    args.chipBounds,
+    args.referenceSize.width / Math.max(args.referenceSize.height, Number.EPSILON),
+  );
+
+  return normalizeRect(squareChipBounds, args.referenceSize);
+};
+
 const toCropLocalPoint = (point: PixelPoint, pixelRect: PixelRect): PixelPoint => ({
   x: point.x - pixelRect.x,
   y: point.y - pixelRect.y,
 });
+
+const toCropLocalGeometry = (
+  points: readonly PixelPoint[],
+  cropSize: Size,
+): CanonicalCropQcGeometry => {
+  const bounds = toPixelBounds(points);
+
+  return {
+    rect: {
+      x: bounds.x / cropSize.width,
+      y: bounds.y / cropSize.height,
+      width: bounds.width / cropSize.width,
+      height: bounds.height / cropSize.height,
+    },
+    width: bounds.width,
+    height: bounds.height,
+  };
+};
+
+const resolveHeQcGeometry = (args: {
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
+  acceptedChipBounds?: PreprocessRect | null;
+  movingSize: Size;
+  affineMatrix: AlignmentAffineMatrix;
+  cropPixelRect: PixelRect;
+}): CanonicalCropQcGeometry | null => {
+  const sourcePoints = args.acceptedChipQuad?.map((point) => toPixelPoint(point, args.movingSize))
+    ?? (args.acceptedChipBounds ? toRectCornerPoints(args.acceptedChipBounds, args.movingSize) : null);
+  if (!sourcePoints) {
+    return null;
+  }
+
+  const cropLocalPoints = sourcePoints
+    .map((point) => applyAffineToPoint(point, args.affineMatrix))
+    .map((point) => toCropLocalPoint(point, args.cropPixelRect));
+
+  return toCropLocalGeometry(cropLocalPoints, {
+    width: args.cropPixelRect.width,
+    height: args.cropPixelRect.height,
+  });
+};
 
 const getFeatureMatchCandidates = (
   controlPoints: AlignmentControlPoint[],
@@ -333,6 +522,10 @@ const makeFeatureMatchesPreview = (args: {
   const candidates = args.alignmentAccepted
     ? getFeatureMatchCandidates(args.controlPoints, args.inlierMask)
     : args.controlPoints;
+  const acceptedScale = {
+    x: args.alignmentAccepted ? leftCanvas.width / Math.max(args.pixelRect.width, 1) : 1,
+    y: args.alignmentAccepted ? leftCanvas.height / Math.max(args.pixelRect.height, 1) : 1,
+  };
   let drawableIndex = 0;
 
   for (const candidate of candidates) {
@@ -343,10 +536,16 @@ const makeFeatureMatchesPreview = (args: {
       : movingPoint;
 
     const leftPoint = args.alignmentAccepted
-      ? toCropLocalPoint(referencePoint, args.pixelRect)
+      ? {
+        x: toCropLocalPoint(referencePoint, args.pixelRect).x * acceptedScale.x,
+        y: toCropLocalPoint(referencePoint, args.pixelRect).y * acceptedScale.y,
+      }
       : referencePoint;
     const rightLocalPoint = args.alignmentAccepted
-      ? toCropLocalPoint(warpedMovingPoint, args.pixelRect)
+      ? {
+        x: toCropLocalPoint(warpedMovingPoint, args.pixelRect).x * acceptedScale.x,
+        y: toCropLocalPoint(warpedMovingPoint, args.pixelRect).y * acceptedScale.y,
+      }
       : warpedMovingPoint;
     const rightPoint = {
       x: leftCanvas.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
@@ -376,6 +575,7 @@ const makeWarpedHeCrop = (
   heCanvas: HTMLCanvasElement,
   affineMatrix: AlignmentAffineMatrix,
   pixelRect: PixelRect,
+  outputSize: Size,
 ) => {
   const context = heCanvas.getContext('2d');
   if (!context) throw new Error('HE canvas context unavailable');
@@ -385,18 +585,20 @@ const makeWarpedHeCrop = (
   let matrix: CvMat | null = null;
   let dst: CvMat | null = null;
   try {
+    const scaleX = outputSize.width / Math.max(pixelRect.width, 1);
+    const scaleY = outputSize.height / Math.max(pixelRect.height, 1);
     src = cv.matFromImageData(imageData);
     matrix = cv.matFromArray(2, 3, cv.CV_64F, [
-      affineMatrix[0],
-      affineMatrix[1],
-      affineMatrix[2] - pixelRect.x,
-      affineMatrix[3],
-      affineMatrix[4],
-      affineMatrix[5] - pixelRect.y,
+      affineMatrix[0] * scaleX,
+      affineMatrix[1] * scaleX,
+      (affineMatrix[2] - pixelRect.x) * scaleX,
+      affineMatrix[3] * scaleY,
+      affineMatrix[4] * scaleY,
+      (affineMatrix[5] - pixelRect.y) * scaleY,
     ]);
     dst = new cv.Mat();
-    const size = new cv.Size(pixelRect.width, pixelRect.height);
-    const fill = new cv.Scalar(0, 0, 0, 255);
+    const size = new cv.Size(outputSize.width, outputSize.height);
+    const fill = new cv.Scalar(255, 255, 255, 255);
 
     cv.warpAffine(
       src,
@@ -409,10 +611,10 @@ const makeWarpedHeCrop = (
     );
 
     const pixelData = new Uint8ClampedArray(dst.data);
-    const warpedImageData = new ImageData(pixelData, pixelRect.width, pixelRect.height);
+    const warpedImageData = new ImageData(pixelData, outputSize.width, outputSize.height);
     const canvas = document.createElement('canvas');
-    canvas.width = pixelRect.width;
-    canvas.height = pixelRect.height;
+    canvas.width = outputSize.width;
+    canvas.height = outputSize.height;
     const warpedContext = canvas.getContext('2d');
     if (!warpedContext) throw new Error('Warp output context unavailable');
     warpedContext.imageSmoothingEnabled = true;
@@ -431,6 +633,9 @@ export async function runCropQc(args: {
   eosinDataUrl: string;
   heDataUrl: string;
   chipBounds: PreprocessRect;
+  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
+  acceptedChipBounds?: PreprocessRect | null;
+  coarseChipBounds?: PreprocessRect | null;
   imageTransform: LocalizationImageTransform;
   affineMatrix: AlignmentAffineMatrix;
   alignmentAccepted?: boolean;
@@ -441,25 +646,55 @@ export async function runCropQc(args: {
   const eosin = await imageToCanvas(args.eosinDataUrl);
   const he = await imageToCanvas(args.heDataUrl);
 
-  const normalized = normalizeRect(args.chipBounds, { width: eosin.width, height: eosin.height });
+  const normalized = resolveCropBounds({
+    chipBounds: args.chipBounds,
+    acceptedChipQuad: args.acceptedChipQuad,
+    acceptedChipBounds: args.acceptedChipBounds,
+    coarseChipBounds: args.coarseChipBounds,
+    referenceSize: { width: eosin.width, height: eosin.height },
+    alignmentAccepted: args.alignmentAccepted,
+    solveAccepted: args.solveAccepted,
+  });
+  const heFullresSize = getOriginalDensityCropSize(normalized.pixelRect, args.affineMatrix);
 
-  const eosinCrop = cropCanvas(eosin.canvas, normalized.pixelRect);
-  const heCrop = makeWarpedHeCrop(args.cv, he.canvas, args.affineMatrix, normalized.pixelRect);
+  const eosinCrop = cropCanvas(
+    eosin.canvas,
+    { width: eosin.width, height: eosin.height },
+    normalized.pixelRect,
+  );
+  const eosinFrame = heFullresSize.width === eosinCrop.width && heFullresSize.height === eosinCrop.height
+    ? eosinCrop
+    : drawCanvas(eosinCrop, heFullresSize);
+  const heCrop = makeWarpedHeCrop(
+    args.cv,
+    he.canvas,
+    args.affineMatrix,
+    normalized.pixelRect,
+    heFullresSize,
+  );
   const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
 
   try {
-    const eosinAssetSet = buildCanonicalAssetSet(eosinCrop);
+    const eosinReferenceGeometry = toCanonicalCropQcGeometry(normalized);
+    const heQcGeometry = resolveHeQcGeometry({
+      acceptedChipQuad: args.acceptedChipQuad,
+      acceptedChipBounds: args.acceptedChipBounds,
+      movingSize: { width: he.width, height: he.height },
+      affineMatrix: args.affineMatrix,
+      cropPixelRect: normalized.pixelRect,
+    });
+    const eosinAssetSet = buildCanonicalAssetSet(eosinFrame);
     const heAssetSet = buildCanonicalAssetSet(heCrop);
     const cropAssets = {
       eosin: eosinAssetSet.assets,
       he: heAssetSet.assets,
     };
 
-    const checkerboardDataUrl = makeCheckerboard(eosinCrop, heCrop);
+    const checkerboardDataUrl = makeCheckerboard(eosinFrame, heCrop);
     const featureMatchesDataUrl = makeFeatureMatchesPreview({
       alignmentAccepted: useAcceptedFeatureMatchesPreview,
       eosinFull: eosin.canvas,
-      eosinCrop,
+      eosinCrop: eosinFrame,
       heFull: he.canvas,
       heCrop,
       pixelRect: normalized.pixelRect,
@@ -483,9 +718,11 @@ export async function runCropQc(args: {
     const spot_diameter_fullres = null;
 
     return {
-      cropRect: normalized.rect,
-      cropWidth: normalized.pixelRect.width,
-      cropHeight: normalized.pixelRect.height,
+      eosinReferenceGeometry,
+      heQcGeometry,
+      cropRect: eosinReferenceGeometry.rect,
+      cropWidth: fullresSize.width,
+      cropHeight: fullresSize.height,
       cropAssets,
       tissue_hires_scalef,
       tissue_lowres_scalef,
@@ -502,6 +739,9 @@ export async function runCropQc(args: {
     disposeCanvas(eosin.canvas);
     disposeCanvas(he.canvas);
     disposeCanvas(eosinCrop);
+    if (eosinFrame !== eosinCrop) {
+      disposeCanvas(eosinFrame);
+    }
     disposeCanvas(heCrop);
   }
 }

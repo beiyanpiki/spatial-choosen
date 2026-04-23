@@ -206,6 +206,101 @@ const readRawProjects = (): unknown[] => {
   }
 };
 
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+const normalizeStoredCropRect = (value: PreprocessProject['cropQc']['cropRect']) => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const rect = value as Partial<NonNullable<PreprocessProject['cropQc']['cropRect']>>;
+  return isFiniteNumber(rect.x)
+    && isFiniteNumber(rect.y)
+    && isFiniteNumber(rect.width)
+    && isFiniteNumber(rect.height)
+    ? {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      }
+    : null;
+};
+
+const normalizeStoredCropGeometry = (
+  value: PreprocessProject['cropQc']['eosinReferenceGeometry'],
+) => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const geometry = value as Partial<NonNullable<PreprocessProject['cropQc']['eosinReferenceGeometry']>>;
+  const rect = normalizeStoredCropRect(geometry.rect ?? null);
+  return rect !== null && isFiniteNumber(geometry.width) && isFiniteNumber(geometry.height)
+    ? {
+        rect,
+        width: geometry.width,
+        height: geometry.height,
+      }
+    : null;
+};
+
+const normalizeStoredLegacyCropGeometry = (
+  cropRect: PreprocessProject['cropQc']['cropRect'],
+  cropWidth: PreprocessProject['cropQc']['cropWidth'],
+  cropHeight: PreprocessProject['cropQc']['cropHeight'],
+) => {
+  const rect = normalizeStoredCropRect(cropRect);
+  return rect !== null && isFiniteNumber(cropWidth) && isFiniteNumber(cropHeight)
+    ? {
+        rect,
+        width: cropWidth,
+        height: cropHeight,
+      }
+    : null;
+};
+
+type CropGeometryCarrier = {
+  storageVersion?: number;
+  cropQc: {
+    status: PreprocessProject['cropQc']['status'];
+    eosinReferenceGeometry?: PreprocessProject['cropQc']['eosinReferenceGeometry'];
+    cropRect: PreprocessProject['cropQc']['cropRect'];
+    cropWidth: PreprocessProject['cropQc']['cropWidth'];
+    cropHeight: PreprocessProject['cropQc']['cropHeight'];
+  };
+};
+
+const repairCurrentSchemaCropGeometry = <TProject extends {
+  storageVersion?: number;
+  cropQc: CropGeometryCarrier['cropQc'];
+}>(project: TProject): TProject => {
+	if ((project.storageVersion ?? 0) < PREPROCESS_STORAGE_SCHEMA_VERSION) {
+		return project;
+	}
+
+	const canUseLegacyGeometryFallback = project.cropQc.status !== 'stale';
+	const eosinReferenceGeometry = normalizeStoredCropGeometry(project.cropQc.eosinReferenceGeometry)
+		?? (canUseLegacyGeometryFallback
+			? normalizeStoredLegacyCropGeometry(
+					project.cropQc.cropRect,
+          project.cropQc.cropWidth,
+					project.cropQc.cropHeight,
+				)
+			: null);
+
+  return {
+    ...project,
+    cropQc: {
+      ...project.cropQc,
+      eosinReferenceGeometry,
+      cropRect: eosinReferenceGeometry?.rect ?? null,
+      cropWidth: eosinReferenceGeometry?.width ?? null,
+      cropHeight: eosinReferenceGeometry?.height ?? null,
+    },
+  };
+};
+
 const selectedSpotIdsFromStoredIndex = (
   matrix: PreprocessProject['tissueSelection']['matrix'],
   projectedSpotIndex: StoredProjectedSpotIndexEntry[] | null,
@@ -421,6 +516,8 @@ const clearHydratedCropQc = (cropQc: StoredCropQcSlice): HydratedCropQcSlice => 
   ...cropQc,
   status: 'stale',
   isStale: true,
+  eosinReferenceGeometry: null,
+  heQcGeometry: null,
   cropRect: null,
   cropWidth: null,
   cropHeight: null,
@@ -508,6 +605,11 @@ const hydrateCropQcSlice = async (
   if (!expectsCanonicalAssets) {
     return {
       ...cropQc,
+      eosinReferenceGeometry: null,
+      heQcGeometry: null,
+      cropRect: null,
+      cropWidth: null,
+      cropHeight: null,
       cropAssets: {
         eosin: null,
         he: null,
@@ -648,62 +750,66 @@ const hydrateDerivedImagePayload = async (payload: string | Blob | undefined) =>
   if (payload instanceof Blob) {
     return URL.createObjectURL(payload);
   }
+  if (payload.startsWith('blob:')) {
+    return null;
+  }
   return payload;
 };
 
 const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessProject | undefined> => {
-  const eosinDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'eosin'));
-  const heDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(meta.id, 'he'));
-  const eosinThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'eosin'));
-  const heThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(meta.id, 'he'));
-  const focusedHePayload = await readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(meta.id));
-  const cropQc = await hydrateCropQcSlice(meta.id, meta.cropQc);
+  const repairedMeta = repairCurrentSchemaCropGeometry(meta);
+  const eosinDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'eosin'));
+  const heDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he'));
+  const eosinThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'eosin'));
+  const heThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'he'));
+  const focusedHePayload = await readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(repairedMeta.id));
+  const cropQc = await hydrateCropQcSlice(repairedMeta.id, repairedMeta.cropQc);
 
-  const eosinResult = await hydrateSourceImage(meta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
-  const heResult = await hydrateSourceImage(meta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
+  const eosinResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
+  const heResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
   const eosin = eosinResult.image;
   const he = heResult.image;
-  const focusedImageDataUrl = await hydrateDerivedImagePayload(focusedHePayload ?? meta.heFocus?.focusedImageDataUrl ?? undefined);
+  const focusedImageDataUrl = await hydrateDerivedImagePayload(focusedHePayload ?? repairedMeta.heFocus?.focusedImageDataUrl ?? undefined);
 
-  if (meta.sourceAssets.images.eosin && !eosin) return undefined;
-  if (meta.sourceAssets.images.he && !he) return undefined;
+  if (repairedMeta.sourceAssets.images.eosin && !eosin) return undefined;
+  if (repairedMeta.sourceAssets.images.he && !he) return undefined;
 
   const writes: Promise<void>[] = [];
   if (eosinResult.thumbnailRegenerated && eosin) {
-    writes.push(syncImageStores(meta.id, eosin, 'eosin'));
+    writes.push(syncImageStores(repairedMeta.id, eosin, 'eosin'));
   }
   if (heResult.thumbnailRegenerated && he) {
-    writes.push(syncImageStores(meta.id, he, 'he'));
+    writes.push(syncImageStores(repairedMeta.id, he, 'he'));
   }
 
-  const repairedProjectedSpotIndex = await repairProjectedSpotIndex(meta.chipConfig);
+  const repairedProjectedSpotIndex = await repairProjectedSpotIndex(repairedMeta.chipConfig);
 
   const runtimeSelectedSpotIds = selectedSpotIdsFromStoredIndex(
-    meta.tissueSelection.matrix,
+    repairedMeta.tissueSelection.matrix,
     repairedProjectedSpotIndex,
   );
 
   const project = migratePreprocessProject({
-    ...meta,
+    ...repairedMeta,
     sourceAssets: {
-      ...meta.sourceAssets,
+      ...repairedMeta.sourceAssets,
       images: {
         eosin,
         he,
       },
     },
-    heFocus: meta.heFocus
+    heFocus: repairedMeta.heFocus
       ? {
-          ...meta.heFocus,
+          ...repairedMeta.heFocus,
           focusedImageDataUrl,
         }
-      : meta.heFocus,
+      : repairedMeta.heFocus,
     cropQc,
     chipConfig: {
-      ...meta.chipConfig,
+      ...repairedMeta.chipConfig,
       projectedSpots: null,
     },
-    tissueSelection: meta.tissueSelection,
+    tissueSelection: repairedMeta.tissueSelection,
   });
 
   const hydratedProject = {
@@ -742,7 +848,8 @@ const readMetas = async (): Promise<PreprocessProjectMeta[]> => readRawProjects(
 
 export const upsertPreprocessProjectMetadata = (project: PreprocessProject) => {
   const metas = readRawProjects() as PreprocessProjectMeta[];
-  const migratedProject = migratePreprocessProject(project);
+  const repairedProject = repairCurrentSchemaCropGeometry(project);
+  const migratedProject = migratePreprocessProject(repairedProject);
   const meta = toProjectMeta(migratedProject);
   const index = metas.findIndex((entry) => entry.id === project.id);
   if (index >= 0) {

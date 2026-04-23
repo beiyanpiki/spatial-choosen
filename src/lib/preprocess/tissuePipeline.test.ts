@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectedSpot } from '@/types/preprocess';
+import type { ChipTemplateEntry } from './chipConfigs';
+import { projectSpotsForCrop } from './spotProjection';
 import { runTissueAutoSelection } from './tissuePipeline';
 
 type Rgb = readonly [number, number, number];
@@ -69,6 +71,40 @@ const ZERO_BASED_PROJECTED_SPOTS: ProjectedSpot[] = [
   createProjectedSpot({ id: 'spot-c', arrayRow: 2, arrayCol: 3, x: 0.75, y: 0.75 }),
 ];
 
+const PROJECTED_SPOT_CHIP = {
+  id: '15um',
+  label: 'Test chip',
+  gridRows: 2,
+  gridCols: 2,
+  spotDiameter: 10,
+  spotGap: 4,
+  barcodeTemplatePath: '/unused/template.csv',
+  tissuePositionsPath: '/unused/tissue.csv',
+} as const;
+
+const PROJECTED_SPOT_TEMPLATE_ENTRIES: ChipTemplateEntry[] = [
+  {
+    barcode: 'spot-a',
+    arrayRow: 1,
+    arrayCol: 1,
+  },
+  {
+    barcode: 'spot-b',
+    arrayRow: 1,
+    arrayCol: 2,
+  },
+  {
+    barcode: 'spot-c',
+    arrayRow: 2,
+    arrayCol: 1,
+  },
+  {
+    barcode: 'spot-d',
+    arrayRow: 2,
+    arrayCol: 2,
+  },
+];
+
 const installImageDataStub = (args: {
   projectedSpots: ProjectedSpot[];
   colorsBySpotId: Record<string, Rgb>;
@@ -132,6 +168,101 @@ afterEach(() => {
 });
 
 describe('runTissueAutoSelection', () => {
+  it('keeps matrix shape and selection stable for projected crop spots', async () => {
+    const projectedSpots = projectSpotsForCrop({
+      chip: PROJECTED_SPOT_CHIP,
+      templateEntries: PROJECTED_SPOT_TEMPLATE_ENTRIES,
+      cropWidth: 400,
+      cropHeight: 400,
+    });
+
+    expect(projectedSpots).toEqual([
+      {
+        id: 'spot-a',
+        barcode: 'spot-a',
+        arrayRow: 1,
+        arrayCol: 1,
+        x: 0.28125,
+        y: 0.28125,
+        width: 0.3125,
+        height: 0.3125,
+        diameterX: 0.3125,
+        diameterY: 0.3125,
+      },
+      {
+        id: 'spot-b',
+        barcode: 'spot-b',
+        arrayRow: 1,
+        arrayCol: 2,
+        x: 0.71875,
+        y: 0.28125,
+        width: 0.3125,
+        height: 0.3125,
+        diameterX: 0.3125,
+        diameterY: 0.3125,
+      },
+      {
+        id: 'spot-c',
+        barcode: 'spot-c',
+        arrayRow: 2,
+        arrayCol: 1,
+        x: 0.28125,
+        y: 0.71875,
+        width: 0.3125,
+        height: 0.3125,
+        diameterX: 0.3125,
+        diameterY: 0.3125,
+      },
+      {
+        id: 'spot-d',
+        barcode: 'spot-d',
+        arrayRow: 2,
+        arrayCol: 2,
+        x: 0.71875,
+        y: 0.71875,
+        width: 0.3125,
+        height: 0.3125,
+        diameterX: 0.3125,
+        diameterY: 0.3125,
+      },
+    ]);
+
+    installImageDataStub({
+      projectedSpots,
+      colorsBySpotId: {
+        'spot-a': [255, 0, 0],
+        'spot-b': [255, 0, 0],
+        'spot-c': [80, 80, 80],
+        'spot-d': [255, 0, 0],
+      },
+      width: 400,
+      height: 400,
+    });
+
+    const result = await runTissueAutoSelection({
+      eosinLowresCropDataUrl: 'data:image/png;base64,stub',
+      cropWidth: 400,
+      cropHeight: 400,
+      tissueLowresScaleFactor: 1,
+      matrixRows: 2,
+      matrixColumns: 2,
+      projectedSpots,
+      params: {
+        thresholdMode: 'raw',
+        activationThreshold: 0.5,
+        blockThreshold: 10,
+        dbscanEps: 0.2,
+        dbscanMinSamples: 1,
+        minConnectedSpotCount: 1,
+      },
+    });
+
+    expect(result.selectedIds).toEqual(['spot-a', 'spot-b', 'spot-d']);
+    expect(result.matrix.rows).toBe(2);
+    expect(result.matrix.columns).toBe(2);
+    expect(result.matrix.values).toEqual([1, 1, 0, 1]);
+  });
+
   it('returns distinct raw, gray-max, and gray-min selections from the same RGB fixture and preserves a 96x96 matrix', async () => {
     installImageDataStub({
       projectedSpots: FIFTEEN_UM_PROJECTED_SPOTS,

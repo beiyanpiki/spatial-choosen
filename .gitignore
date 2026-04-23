@@ -30,6 +30,7 @@
 .serena/
 .sisyphus/
 .superpowers/
+/ref/
 /test-results/
 /preprocess-initial-snapshot.md
 /preprocess-workspace-source.png

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PreprocessProject, ProjectedSpot } from '@/types/preprocess';
+import {
+	normalizeProjectForPersistence,
+	normalizeProjectForWorkspace,
+} from '@/app/preprocess/projectState';
+import type { PreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
 import { deserializePreprocessProject, PACKAGE_VERSION } from './package';
 
@@ -19,6 +23,17 @@ const createProjectedSpot = (
   height: 0.08,
   diameterX: 0.08,
   diameterY: 0.08,
+});
+
+const createSourceImage = (kind: 'eosin' | 'he') => ({
+  id: `${kind}-source`,
+  kind,
+  fileName: `${kind}.png`,
+  mimeType: 'image/png',
+  sizeBytes: 1,
+  width: 2048,
+  height: 2048,
+  lastModified: 0,
 });
 
 const createProject = (): PreprocessProject => ({
@@ -73,6 +88,16 @@ const createProject = (): PreprocessProject => ({
       flipVertical: false,
       scale: 1,
     },
+    autoProposal: {
+      status: 'idle',
+      method: null,
+      coarseBounds: null,
+      refinedBounds: null,
+      refinedQuad: null,
+      rotationDegrees: null,
+      eccCorrelation: null,
+      failureReason: null,
+    },
     focusedImageDataUrl: null,
   },
   alignment: {
@@ -103,16 +128,19 @@ const createProject = (): PreprocessProject => ({
       scaleRange: false,
       accepted: false,
     },
-    solveAccepted: false,
-    failureReason: null,
-    transform: null,
-    previewDataUrl: null,
-  },
+      solveAccepted: false,
+      failureReason: null,
+      transform: null,
+      previewDataUrl: null,
+      source: null,
+    },
   cropQc: {
     status: 'complete',
     isStale: false,
     updatedAt: null,
     error: null,
+    eosinReferenceGeometry: null,
+    heQcGeometry: null,
     cropRect: null,
     cropWidth: null,
     cropHeight: null,
@@ -203,17 +231,42 @@ const createPackageBlob = (payload: Record<string, unknown>) => new Blob([
 
 const toCanonicalProjectPayload = (project: PreprocessProject) => {
   const {
-    forcedInSpotIds: _forcedInSpotIds,
-    forcedOutSpotIds: _forcedOutSpotIds,
-    overrideNotice: _overrideNotice,
-    regions: _regions,
-    selectedRegionId: _selectedRegionId,
+    forcedInSpotIds,
+    forcedOutSpotIds,
+    overrideNotice,
+    regions,
+    selectedRegionId,
     ...canonicalTissueSelection
   } = project.tissueSelection;
+
+  void forcedInSpotIds;
+  void forcedOutSpotIds;
+  void overrideNotice;
+  void regions;
+  void selectedRegionId;
 
   return {
     ...project,
     tissueSelection: canonicalTissueSelection,
+  };
+};
+
+const toLegacyCropMetadataPayload = (project: PreprocessProject) => {
+  const canonicalProject = toCanonicalProjectPayload(project) as PreprocessProject & {
+    cropQc: PreprocessProject['cropQc'] & {
+      eosinReferenceGeometry?: PreprocessProject['cropQc']['eosinReferenceGeometry'];
+      heQcGeometry?: PreprocessProject['cropQc']['heQcGeometry'];
+    };
+  };
+
+  const { eosinReferenceGeometry, heQcGeometry, ...legacyCropQc } = canonicalProject.cropQc;
+
+  void eosinReferenceGeometry;
+  void heQcGeometry;
+
+  return {
+    ...canonicalProject,
+    cropQc: legacyCropQc,
   };
 };
 
@@ -276,7 +329,7 @@ describe('preprocess package matrix-first validation', () => {
     project.tissueSelection.matrix = {
       rows: 64,
       columns: 64,
-      values: Array.from({ length: 4096 }, (_, index) => (index === 0 ? 2 : 0)),
+      values: Array.from({ length: 4096 }, (_, index) => (index === 0 ? 2 : 0)) as TissueActivationValue[],
     };
 
     await expect(deserializePreprocessProject(createPackageBlob({
@@ -301,8 +354,8 @@ describe('preprocess package matrix-first validation', () => {
     }))).rejects.toThrow(/64x64|50um/i);
   });
 
-  it('rejects canonical version 4 payloads that still include region-first fields as current data', async () => {
-    const project = createProject();
+	it('rejects canonical version 4 payloads that still include region-first fields as current data', async () => {
+	  const project = createProject();
 
     await expect(deserializePreprocessProject(createPackageBlob({
       version: PACKAGE_VERSION,
@@ -324,8 +377,34 @@ describe('preprocess package matrix-first validation', () => {
           ],
         },
       },
-    }))).rejects.toThrow(/region-first|legacy/i);
-  });
+	  }))).rejects.toThrow(/region-first|legacy/i);
+	});
+
+	it('rejects canonical version 4 payloads that retain raw crop preview aliases', async () => {
+	  const project = createProject();
+	  project.cropQc.cropAssets = {
+	    eosin: {
+	      fullres: { dataUrl: 'data:image/png;base64,eosin-fullres' },
+	      hires: { dataUrl: 'data:image/png;base64,eosin-hires' },
+	      lowres: { dataUrl: 'data:image/png;base64,eosin-lowres' },
+	    },
+	    he: {
+	      fullres: { dataUrl: 'data:image/png;base64,he-fullres' },
+	      hires: { dataUrl: 'data:image/png;base64,he-hires' },
+	      lowres: { dataUrl: 'data:image/png;base64,he-lowres' },
+	    },
+	  };
+	  project.cropQc.tissue_hires_scalef = 0.5;
+	  project.cropQc.tissue_lowres_scalef = 0.25;
+	  project.cropQc.spot_diameter_fullres = 18;
+	  project.cropQc.fiducial_diameter_fullres = 27;
+	  project.cropQc.previewDataUrl = 'blob:legacy-preview';
+
+	  await expect(deserializePreprocessProject(createPackageBlob({
+	    version: PACKAGE_VERSION,
+	    project: toCanonicalProjectPayload(project),
+	  }))).rejects.toThrow(/cropQc\.previewDataUrl/i);
+	});
 
   it('still migrates older package versions through the legacy path', async () => {
     const project = createProject();
@@ -362,4 +441,112 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.tissueSelection.thresholdMode).toBe('gray-min');
     expect(result.tissueSelection.matrix?.values[0]).toBe(1);
   });
+
+  it('downgrades canonical version 4 payloads missing repaired crop metadata to stale-from-crop on import', async () => {
+    const project = createProject();
+    project.currentStep = 'exportState';
+    project.sourceAssets.images = {
+      eosin: createSourceImage('eosin'),
+      he: createSourceImage('he'),
+    };
+    project.alignment.solveAccepted = true;
+    project.alignment.qualityFlags.accepted = true;
+    project.cropQc.cropRect = {
+      x: 0.25,
+      y: 0,
+      width: 0.75,
+      height: 0.95,
+    };
+    project.cropQc.cropWidth = 1799;
+    project.cropQc.cropHeight = 2413;
+    project.cropQc.qcAccepted = true;
+
+    const result = normalizeProjectForWorkspace(await deserializePreprocessProject(createPackageBlob({
+      version: PACKAGE_VERSION,
+      project: toLegacyCropMetadataPayload(project),
+    })));
+
+		expect(result.currentStep).toBe('cropQc');
+		expect(result.cropQc.status).toBe('stale');
+		expect(result.cropQc.eosinReferenceGeometry).toBeNull();
+		expect(result.cropQc.heQcGeometry).toBeNull();
+		expect(result.cropQc.cropRect).toBeNull();
+		expect(result.cropQc.cropWidth).toBeNull();
+		expect(result.cropQc.cropHeight).toBeNull();
+		expect(result.chipConfig.status).toBe('stale');
+		expect(result.chipConfig.projectedSpots).toBeNull();
+		expect(result.tissueSelection.status).toBe('stale');
+		expect(result.tissueSelection.matrix).toBeNull();
+    expect(result.tissueSelection.selectedSpotIds).toBeNull();
+    expect(result.tissueSelection.supportState).toBe('unsupported');
+    expect(result.exportState.status).toBe('stale');
+  });
+
+  it('preserves localization and heFocus geometry through canonical package deserialization when transforms are rotated or flipped', async () => {
+    const project = createProject();
+
+    project.localization.chipBounds = {
+      x: 0.14,
+      y: 0.24,
+      width: 0.32,
+      height: 0.32,
+    };
+    project.localization.handles = [];
+    project.localization.imageTransform = {
+      rotationDegrees: 90,
+      flipHorizontal: true,
+      flipVertical: false,
+      scale: 1.5,
+    };
+
+    project.heFocus.chipBounds = {
+      x: 0.18,
+      y: 0.28,
+      width: 0.22,
+      height: 0.22,
+    };
+    project.heFocus.handles = [];
+    project.heFocus.imageTransform = {
+      rotationDegrees: -90,
+      flipHorizontal: false,
+      flipVertical: true,
+      scale: 0.75,
+    };
+
+    const result = await deserializePreprocessProject(createPackageBlob({
+      version: PACKAGE_VERSION,
+      project: toCanonicalProjectPayload(project),
+    }));
+
+    expect(result.localization.chipBounds).toEqual(project.localization.chipBounds);
+    expect(result.localization.imageTransform).toEqual(project.localization.imageTransform);
+    expect(result.heFocus.chipBounds).toEqual(project.heFocus.chipBounds);
+    expect(result.heFocus.imageTransform).toEqual(project.heFocus.imageTransform);
+  });
+
+	it('preserves fully outside HEFocus bounds through canonical package import and workspace normalization', async () => {
+		const project = createProject();
+		const heFocusBounds = {
+			x: 1.18,
+			y: 1.12,
+			width: 0.24,
+			height: 0.24,
+		};
+
+		project.heFocus.chipBounds = heFocusBounds;
+		project.heFocus.handles = [];
+
+		const result = normalizeProjectForWorkspace(
+			await deserializePreprocessProject(
+				createPackageBlob({
+					version: PACKAGE_VERSION,
+					project: toCanonicalProjectPayload(
+						normalizeProjectForPersistence(project),
+					),
+				}),
+			),
+		);
+
+		expect(result.heFocus.chipBounds).toEqual(heFocusBounds);
+	});
 });

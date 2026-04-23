@@ -417,6 +417,12 @@ const assertNullableString = (value: unknown, fieldName: string) => {
   }
 };
 
+const assertNull = (value: unknown, fieldName: string) => {
+  if (value !== null) {
+    throw new Error(`Project field "${fieldName}" is invalid or missing`);
+  }
+};
+
 const assertNonEmptyString = (value: unknown, fieldName: string) => {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`Project field "${fieldName}" is invalid or missing`);
@@ -462,6 +468,22 @@ const assertPreprocessRect = (value: unknown, fieldName: string) => {
   assertNumber(rect.y, `${fieldName}.y`);
   assertNumber(rect.width, `${fieldName}.width`);
   assertNumber(rect.height, `${fieldName}.height`);
+};
+
+const assertCanonicalCropQcGeometry = (value: unknown, fieldName: string) => {
+  assertObject(value, fieldName);
+  const geometry = value as Record<string, unknown>;
+  assertPreprocessRect(geometry.rect, `${fieldName}.rect`);
+  assertNumber(geometry.width, `${fieldName}.width`);
+  assertNumber(geometry.height, `${fieldName}.height`);
+};
+
+const assertNullableCanonicalCropQcGeometry = (value: unknown, fieldName: string) => {
+  if (value === null) {
+    return;
+  }
+
+  assertCanonicalCropQcGeometry(value, fieldName);
 };
 
 const assertPreprocessPoint = (value: unknown, fieldName: string) => {
@@ -633,11 +655,14 @@ const assertCanonicalCropQcContract = (slice: Record<string, unknown>) => {
 
   assertObject(slice.checkerboardPreview, 'cropQc.checkerboardPreview');
   const checkerboardPreview = slice.checkerboardPreview as Record<string, unknown>;
-  assertNullableString(checkerboardPreview.dataUrl, 'cropQc.checkerboardPreview.dataUrl');
-  assertNullableString(slice.featureMatchesPreviewDataUrl, 'cropQc.featureMatchesPreviewDataUrl');
+  assertNull(checkerboardPreview.dataUrl, 'cropQc.checkerboardPreview.dataUrl');
+  assertNull(slice.eosinPreviewDataUrl, 'cropQc.eosinPreviewDataUrl');
+  assertNull(slice.previewDataUrl, 'cropQc.previewDataUrl');
+  assertNull(slice.checkerboardPreviewDataUrl, 'cropQc.checkerboardPreviewDataUrl');
+  assertNull(slice.featureMatchesPreviewDataUrl, 'cropQc.featureMatchesPreviewDataUrl');
   assertObject(slice.featureMatchesPreview, 'cropQc.featureMatchesPreview');
   const featureMatchesPreview = slice.featureMatchesPreview as Record<string, unknown>;
-  assertNullableString(featureMatchesPreview.dataUrl, 'cropQc.featureMatchesPreview.dataUrl');
+  assertNull(featureMatchesPreview.dataUrl, 'cropQc.featureMatchesPreview.dataUrl');
 
   const eosinAssets = cropAssets.eosin;
   const heAssets = cropAssets.he;
@@ -689,6 +714,12 @@ const assertLegacyCropQcContract = (slice: Record<string, unknown>) => {
 const assertCropQcSlice = (value: unknown) => {
   assertPreprocessSliceBase(value, "cropQc");
   const slice = value as Record<string, unknown>;
+  if ('eosinReferenceGeometry' in slice) {
+    assertNullableCanonicalCropQcGeometry(slice.eosinReferenceGeometry, 'cropQc.eosinReferenceGeometry');
+  }
+  if ('heQcGeometry' in slice) {
+    assertNullableCanonicalCropQcGeometry(slice.heQcGeometry, 'cropQc.heQcGeometry');
+  }
   if (slice.cropRect !== null) assertPreprocessRect(slice.cropRect, "cropQc.cropRect");
   if (slice.cropWidth !== null) assertNumber(slice.cropWidth, "cropQc.cropWidth");
   if (slice.cropHeight !== null) assertNumber(slice.cropHeight, "cropQc.cropHeight");

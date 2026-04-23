@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { normalizeProjectForWorkspace } from '@/app/preprocess/projectState';
 import type { LegacyPreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
 import { PREPROCESS_STORAGE_SCHEMA_VERSION } from './constants';
@@ -18,8 +19,19 @@ const createProjectedSpot = (
   y: arrayRow / 10,
   width: 0.08,
   height: 0.08,
-  diameterX: 0.08,
-  diameterY: 0.08,
+    diameterX: 0.08,
+    diameterY: 0.08,
+});
+
+const createSourceImage = (kind: 'eosin' | 'he') => ({
+  id: `${kind}-source`,
+  kind,
+  fileName: `${kind}.png`,
+  mimeType: 'image/png',
+  sizeBytes: 1,
+  width: 2048,
+  height: 2048,
+  lastModified: 0,
 });
 
 const createRegion = (spotIds: string[]) => ({
@@ -127,6 +139,8 @@ const createLegacyProject = (): LegacyPreprocessProject => ({
     isStale: false,
     updatedAt: null,
     error: null,
+    eosinReferenceGeometry: null,
+    heQcGeometry: null,
     cropRect: null,
     cropWidth: null,
     cropHeight: null,
@@ -194,6 +208,35 @@ const createLegacyProject = (): LegacyPreprocessProject => ({
     artifacts: [],
   },
 });
+
+const applyCanonicalEmptyCropContract = (project: LegacyPreprocessProject) => {
+  Object.assign(project.cropQc, {
+    cropAssets: {
+      eosin: null,
+      he: null,
+    },
+    tissue_hires_scalef: null,
+    tissue_lowres_scalef: null,
+    spot_diameter_fullres: null,
+    fiducial_diameter_fullres: null,
+    checkerboardPreview: {
+      dataUrl: null,
+    },
+    featureMatchesPreview: {
+      dataUrl: null,
+    },
+  });
+};
+
+const removeRepairedCropGeometry = (project: LegacyPreprocessProject) => {
+  const cropQc = project.cropQc as typeof project.cropQc & {
+    eosinReferenceGeometry?: unknown;
+    heQcGeometry?: unknown;
+  };
+
+  delete cropQc.eosinReferenceGeometry;
+  delete cropQc.heQcGeometry;
+};
 
 describe('migratePreprocessProject tissue matrix migration', () => {
   it('migrates selectedSpotIds legacy state into canonical matrix-first tissue data', () => {
@@ -309,4 +352,157 @@ describe('migratePreprocessProject tissue matrix migration', () => {
     expect(migrated.tissueSelection.selectedSpotIds).toEqual([]);
     expect(migrated.tissueSelection.warning).toMatch(/50um/i);
   });
+
+  it('rewinds legacy projects on crop or later back to alignment when strict alignment acceptance is false', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'cropQc';
+    project.alignment.status = 'complete';
+    project.alignment.qualityFlags.accepted = false;
+    project.alignment.solveAccepted = false;
+    applyCanonicalEmptyCropContract(project);
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.currentStep).toBe('alignment');
+    expect(migrated.alignment.status).not.toBe('complete');
+  });
+
+  it('stales downstream slices when legacy alignment is complete-looking but strict acceptance is false', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'tissueSelection';
+    project.alignment.status = 'complete';
+    project.alignment.qualityFlags.accepted = false;
+    project.alignment.solveAccepted = false;
+    project.cropQc.status = 'complete';
+    project.cropQc.qcAccepted = true;
+    project.chipConfig.status = 'complete';
+    project.tissueSelection.status = 'complete';
+    project.exportState.status = 'ready';
+    applyCanonicalEmptyCropContract(project);
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.currentStep).toBe('alignment');
+    expect(migrated.cropQc.status).toBe('stale');
+    expect(migrated.chipConfig.status).toBe('stale');
+    expect(migrated.tissueSelection.status).toBe('stale');
+    expect(migrated.exportState.status).toBe('stale');
+  });
+
+  it('keeps currentStep on alignment but still stales downstream slices for invalid legacy complete alignment', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'alignment';
+    project.alignment.status = 'complete';
+    project.alignment.qualityFlags.accepted = false;
+    project.alignment.solveAccepted = false;
+    project.cropQc.status = 'complete';
+    project.cropQc.qcAccepted = true;
+    project.chipConfig.status = 'complete';
+    project.tissueSelection.status = 'complete';
+    project.exportState.status = 'ready';
+    applyCanonicalEmptyCropContract(project);
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.currentStep).toBe('alignment');
+    expect(migrated.cropQc.status).toBe('stale');
+    expect(migrated.chipConfig.status).toBe('stale');
+    expect(migrated.tissueSelection.status).toBe('stale');
+    expect(migrated.exportState.status).toBe('stale');
+  });
+
+  it('rewinds completed legacy projects missing repaired crop metadata back to cropQc and clears downstream derived state', () => {
+    const project = createLegacyProject();
+    project.currentStep = 'exportState';
+    project.sourceAssets.images = {
+      eosin: createSourceImage('eosin'),
+      he: createSourceImage('he'),
+    };
+    project.alignment.solveAccepted = true;
+    project.alignment.qualityFlags.accepted = true;
+    project.cropQc.cropRect = {
+      x: 0.25,
+      y: 0,
+      width: 0.75,
+      height: 0.95,
+    };
+    project.cropQc.cropWidth = 1799;
+    project.cropQc.cropHeight = 2413;
+    project.cropQc.qcAccepted = true;
+    project.tissueSelection.selectedSpotIds = ['spot-a'];
+    applyCanonicalEmptyCropContract(project);
+    removeRepairedCropGeometry(project);
+
+    const migrated = migratePreprocessProject(project);
+
+		expect(migrated.currentStep).toBe('cropQc');
+		expect(migrated.cropQc.status).toBe('stale');
+		expect(migrated.cropQc.eosinReferenceGeometry).toBeNull();
+		expect(migrated.cropQc.heQcGeometry).toBeNull();
+		expect(migrated.cropQc.cropRect).toBeNull();
+		expect(migrated.cropQc.cropWidth).toBeNull();
+		expect(migrated.cropQc.cropHeight).toBeNull();
+		expect(migrated.chipConfig.status).toBe('stale');
+		expect(migrated.chipConfig.projectedSpots).toBeNull();
+		expect(migrated.tissueSelection.status).toBe('stale');
+		expect(migrated.tissueSelection.matrix).toBeNull();
+    expect(migrated.tissueSelection.selectedSpotIds).toBeNull();
+    expect(migrated.tissueSelection.supportState).toBe('unsupported');
+    expect(migrated.exportState.status).toBe('stale');
+    expect(migrated.exportState.lastExportedAt).toBeNull();
+  });
+
+  it('preserves localization and heFocus bounds when migrating legacy rotated or flipped transforms', () => {
+    const project = createLegacyProject();
+    const heFocus = project.heFocus as NonNullable<typeof project.heFocus>;
+    project.localization.chipBounds = {
+      x: 0.12,
+      y: 0.26,
+      width: 0.24,
+      height: 0.24,
+    };
+    project.localization.imageTransform = {
+      rotationDegrees: 90,
+      flipHorizontal: true,
+      flipVertical: false,
+      scale: 1.25,
+    };
+    heFocus.chipBounds = {
+      x: 0.18,
+      y: 0.3,
+      width: 0.2,
+      height: 0.2,
+    };
+    heFocus.imageTransform = {
+      rotationDegrees: -90,
+      flipHorizontal: false,
+      flipVertical: true,
+      scale: 0.75,
+    };
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.localization.chipBounds).toEqual(project.localization.chipBounds);
+    expect(migrated.localization.imageTransform).toEqual(project.localization.imageTransform);
+    expect(migrated.heFocus.chipBounds).toEqual(heFocus.chipBounds);
+    expect(migrated.heFocus.imageTransform).toEqual(heFocus.imageTransform);
+  });
+
+	it('preserves fully outside HEFocus bounds when legacy projects normalize into workspace state', () => {
+		const project = createLegacyProject();
+		const heFocus = project.heFocus as NonNullable<typeof project.heFocus>;
+		const heFocusBounds = {
+			x: 1.18,
+			y: 1.12,
+			width: 0.24,
+			height: 0.24,
+		};
+
+		heFocus.chipBounds = heFocusBounds;
+		heFocus.handles = [];
+
+		expect(normalizeProjectForWorkspace(project).heFocus.chipBounds).toEqual(
+			heFocusBounds,
+		);
+	});
 });

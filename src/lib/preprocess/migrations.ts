@@ -2,8 +2,10 @@ import type {
 	CanonicalCropQcSlice,
 	CanonicalProjectedSpot,
 	HeFocusSlice,
+	LegacyAlignmentSlice,
 	LegacyChipConfigSlice,
 	LegacyCropQcSlice,
+	LegacyHeFocusSlice,
 	LegacyPreprocessProject,
 	LegacyProjectedSpot,
 	LegacyTissueSelectionSlice,
@@ -13,6 +15,7 @@ import type {
 	ProjectedSpot,
 	TissueThresholdMode,
 } from "@/types/preprocess";
+import { computeAlignmentStatus, normalizeAlignmentSlice } from "./alignment";
 import {
 	PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
 	PREPROCESS_STORAGE_SCHEMA_VERSION,
@@ -48,6 +51,13 @@ const STEPS_BEYOND_CROP_QC = new Set<PreprocessStepId>([
 	"exportState",
 ]);
 
+const STEPS_AT_OR_BEYOND_CROP_QC = new Set<PreprocessStepId>([
+	"cropQc",
+	"chipConfig",
+	"tissueSelection",
+	"exportState",
+]);
+
 const STEPS_BEYOND_CHIP_CONFIG = new Set<PreprocessStepId>([
 	"tissueSelection",
 	"exportState",
@@ -70,11 +80,21 @@ const createHeFocusSlice = (): HeFocusSlice => ({
 	imageTransform: {
 		...DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 	},
+	autoProposal: {
+		status: "idle",
+		method: null,
+		coarseBounds: null,
+		refinedBounds: null,
+		refinedQuad: null,
+		rotationDegrees: null,
+		eccCorrelation: null,
+		failureReason: null,
+	},
 	focusedImageDataUrl: null,
 });
 
 const normalizeHeFocusSlice = (
-	slice: HeFocusSlice | undefined,
+	slice: HeFocusSlice | LegacyHeFocusSlice | undefined,
 ): HeFocusSlice => {
 	if (!slice) {
 		return createHeFocusSlice();
@@ -83,9 +103,18 @@ const normalizeHeFocusSlice = (
 	return {
 		...slice,
 		targetImage: "he",
+		autoProposal: slice.autoProposal ?? createHeFocusSlice().autoProposal,
 		focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
 	};
 };
+
+const normalizeLegacyAlignmentSource = (
+	slice: LegacyAlignmentSlice | PreprocessProject["alignment"],
+): PreprocessProject["alignment"] => ({
+	...slice,
+	source:
+		slice.source === "auto" || slice.source === "manual" ? slice.source : null,
+});
 
 const markSliceStale = <TSlice extends PreprocessSliceBase>(
 	slice: TSlice,
@@ -100,6 +129,8 @@ const shouldRewindToHeFocus = (stepId: PreprocessStepId) =>
 	STEPS_BEYOND_LOCALIZATION.has(stepId);
 const shouldRewindToCropQc = (stepId: PreprocessStepId) =>
 	STEPS_BEYOND_CROP_QC.has(stepId);
+const shouldRewindToAlignment = (stepId: PreprocessStepId) =>
+	STEPS_AT_OR_BEYOND_CROP_QC.has(stepId);
 const shouldRewindToChipConfig = (stepId: PreprocessStepId) =>
 	STEPS_BEYOND_CHIP_CONFIG.has(stepId);
 
@@ -115,8 +146,24 @@ const isNonEmptyString = (value: unknown): value is string =>
 const isPositiveInteger = (value: unknown): value is number =>
 	typeof value === "number" && Number.isInteger(value) && value > 0;
 
-const isSupportedTissueChipType = (chipType: string | null): chipType is "15um" | "50um" =>
-	chipType === "15um" || chipType === "50um";
+const isCanonicalCropQcGeometry = (value: unknown) => {
+	if (!isRecord(value) || !isRecord(value.rect)) {
+		return false;
+	}
+
+	return (
+		isFiniteNumber(value.rect.x) &&
+		isFiniteNumber(value.rect.y) &&
+		isFiniteNumber(value.rect.width) &&
+		isFiniteNumber(value.rect.height) &&
+		isFiniteNumber(value.width) &&
+		isFiniteNumber(value.height)
+	);
+};
+
+const isSupportedTissueChipType = (
+	chipType: string | null,
+): chipType is "15um" | "50um" => chipType === "15um" || chipType === "50um";
 
 const normalizeLegacyThresholdMode = (
 	thresholdMode: LegacyTissueSelectionSlice["thresholdMode"] | undefined,
@@ -191,7 +238,9 @@ const normalizeCanonicalMatrixFirstTissueSelection = (
 	void _previewDataUrl;
 
 	const normalizedParams = normalizeTissueParams({
-		thresholdMode: normalizeLegacyThresholdMode(project.tissueSelection.thresholdMode),
+		thresholdMode: normalizeLegacyThresholdMode(
+			project.tissueSelection.thresholdMode,
+		),
 		activationThreshold: project.tissueSelection.activationThreshold,
 		blockThreshold: project.tissueSelection.blockThreshold,
 		dbscanEps: project.tissueSelection.dbscanEps,
@@ -207,12 +256,16 @@ const normalizeCanonicalMatrixFirstTissueSelection = (
 		previewDataUrl: null,
 	};
 	const projectedSpots = project.chipConfig.projectedSpots;
-	const normalizedMatrix = matrix == null ? null : validateTissueActivationMatrix(matrix);
-	const selectedSpotIds = normalizedMatrix && projectedSpots
-		? selectedSpotIdsFromMatrix(normalizedMatrix, projectedSpots)
-		: null;
-	const normalizedMode = project.tissueSelection.mode === "imported" ? "imported" : "matrix";
-	const normalizedSupportState = supportState === "supported" ? "supported" : "unsupported";
+	const normalizedMatrix =
+		matrix == null ? null : validateTissueActivationMatrix(matrix);
+	const selectedSpotIds =
+		normalizedMatrix && projectedSpots
+			? selectedSpotIdsFromMatrix(normalizedMatrix, projectedSpots)
+			: null;
+	const normalizedMode =
+		project.tissueSelection.mode === "imported" ? "imported" : "matrix";
+	const normalizedSupportState =
+		supportState === "supported" ? "supported" : "unsupported";
 	const normalizedUnsupportedReason = unsupportedReason ?? null;
 
 	return {
@@ -230,7 +283,6 @@ const normalizeCanonicalMatrixFirstTissueSelection = (
 const normalizeLegacyTissueSelection = (
 	project: PreprocessProject | LegacyPreprocessProject,
 ): PreprocessProject["tissueSelection"] => {
-
 	const {
 		forcedInSpotIds,
 		forcedOutSpotIds,
@@ -272,7 +324,8 @@ const normalizeLegacyTissueSelection = (
 		dbscanMinSamples: project.tissueSelection.dbscanMinSamples,
 		minConnectedSpotCount: project.tissueSelection.minConnectedSpotCount,
 	});
-	const chipType = project.chipConfig.chipType ?? project.localization.chipType ?? null;
+	const chipType =
+		project.chipConfig.chipType ?? project.localization.chipType ?? null;
 	const rows = project.chipConfig.rows;
 	const columns = project.chipConfig.columns;
 	const support = resolveTissueSelectionSupport({
@@ -283,10 +336,11 @@ const normalizeLegacyTissueSelection = (
 	const autoSelectedSpotIds = project.tissueSelection.autoSelectedSpotIds ?? [];
 	const forcedOutIdSet = new Set(forcedOutSpotIds ?? []);
 	const derivedAutoIds = Array.from(
-		new Set([
-			...autoSelectedSpotIds,
-			...(forcedInSpotIds ?? []),
-		].filter((id) => !forcedOutIdSet.has(id))),
+		new Set(
+			[...autoSelectedSpotIds, ...(forcedInSpotIds ?? [])].filter(
+				(id) => !forcedOutIdSet.has(id),
+			),
+		),
 	);
 	const projectedSpots = project.chipConfig.projectedSpots;
 	const legacySelectedIds =
@@ -296,7 +350,10 @@ const normalizeLegacyTissueSelection = (
 				? extractLegacyRegionSpotIds(regions)
 				: derivedAutoIds;
 
-	if (support.supportState === "unsupported" && !isSupportedTissueChipType(chipType)) {
+	if (
+		support.supportState === "unsupported" &&
+		!isSupportedTissueChipType(chipType)
+	) {
 		return {
 			...rest,
 			...normalizedParams,
@@ -483,6 +540,15 @@ const hasLegacyCropOutputs = (slice: LegacyCropQcSlice) =>
 	isNonEmptyString(slice.previewDataUrl) ||
 	isNonEmptyString(slice.checkerboardPreviewDataUrl);
 
+const hasRepairedCropQcMetadata = (slice: LegacyCropQcSlice) => {
+	if (!isRecord(slice) || !("eosinReferenceGeometry" in slice)) {
+		return false;
+	}
+
+	const geometry = (slice as Record<string, unknown>).eosinReferenceGeometry;
+	return geometry === null || isCanonicalCropQcGeometry(geometry);
+};
+
 const isHydrationMissingCanonicalAssets = (slice: LegacyCropQcSlice) =>
 	isRecord(slice) &&
 	(slice as Record<string, unknown>).hydrationMissingCanonicalAssets === true;
@@ -538,6 +604,11 @@ const normalizeCropQcSlice = (slice: LegacyCropQcSlice) => {
 				hasCanonicalCropContract: true as const,
 				slice: {
 					...baseCropQcSlice,
+ 					eosinReferenceGeometry: null,
+ 					heQcGeometry: null,
+ 					cropRect: null,
+ 					cropWidth: null,
+ 					cropHeight: null,
 					cropAssets: createEmptyCropAssets(),
 					tissue_hires_scalef: null,
 					tissue_lowres_scalef: null,
@@ -567,6 +638,11 @@ const normalizeCropQcSlice = (slice: LegacyCropQcSlice) => {
 				hasCanonicalCropContract: false as const,
 				slice: {
 					...baseCropQcSlice,
+ 					eosinReferenceGeometry: null,
+ 					heQcGeometry: null,
+ 					cropRect: null,
+ 					cropWidth: null,
+ 					cropHeight: null,
 					cropAssets: createEmptyCropAssets(),
 					tissue_hires_scalef: null,
 					tissue_lowres_scalef: null,
@@ -612,6 +688,11 @@ const normalizeCropQcSlice = (slice: LegacyCropQcSlice) => {
 		hasCanonicalCropContract: false as const,
 		slice: {
 			...baseCropQcSlice,
+			eosinReferenceGeometry: null,
+			heQcGeometry: null,
+			cropRect: null,
+			cropWidth: null,
+			cropHeight: null,
 			cropAssets: createEmptyCropAssets(),
 			tissue_hires_scalef: null,
 			tissue_lowres_scalef: null,
@@ -709,6 +790,61 @@ const normalizeChipConfigSlice = (slice: LegacyChipConfigSlice) => {
 	};
 };
 
+const invalidateImportedCropQcSlice = (
+	slice: CanonicalCropQcSlice,
+): CanonicalCropQcSlice => ({
+	...markCropQcStale(slice),
+	cropAssets: createEmptyCropAssets(),
+	tissue_hires_scalef: null,
+	tissue_lowres_scalef: null,
+	spot_diameter_fullres: null,
+	fiducial_diameter_fullres: null,
+	...createEmptyCropPreviewAliases(),
+	checkerboardPreview: createEmptyCheckerboardPreview(),
+	featureMatchesPreview: createEmptyFeatureMatchesPreview(),
+	qcAccepted: false,
+	issues: [],
+});
+
+const markCropQcStale = (
+	slice: CanonicalCropQcSlice,
+): CanonicalCropQcSlice => ({
+	...markSliceStale(slice),
+	eosinReferenceGeometry: null,
+	heQcGeometry: null,
+	cropRect: null,
+	cropWidth: null,
+	cropHeight: null,
+});
+
+const invalidateImportedChipConfigSlice = (
+	slice: PreprocessProject["chipConfig"],
+): PreprocessProject["chipConfig"] => ({
+	...markSliceStale(slice),
+	projectedSpots: null,
+});
+
+const invalidateImportedTissueSelectionSlice = (
+	slice: PreprocessProject["tissueSelection"],
+): PreprocessProject["tissueSelection"] => ({
+	...markSliceStale(slice),
+	previewDataUrl: null,
+	matrix: null,
+	autoSelectedSpotIds: [],
+	selectedSpotIds: null,
+	paritySummary: null,
+	supportState: "unsupported",
+	unsupportedReason: null,
+});
+
+const invalidateImportedExportStateSlice = (
+	slice: PreprocessProject["exportState"],
+): PreprocessProject["exportState"] => ({
+	...markSliceStale(slice),
+	artifacts: [],
+	lastExportedAt: null,
+});
+
 export function migratePreprocessProject(
 	project: PreprocessProject | LegacyPreprocessProject,
 ): PreprocessProject {
@@ -720,8 +856,16 @@ export function migratePreprocessProject(
 		!project.heFocus;
 	const normalizedCropQc = normalizeCropQcSlice(project.cropQc);
 	const normalizedChipConfig = normalizeChipConfigSlice(project.chipConfig);
+	const needsRepairedCropQcMetadataReset =
+		!hasRepairedCropQcMetadata(project.cropQc) &&
+		(project.cropQc.qcAccepted ||
+			project.currentStep === "cropQc" ||
+			shouldRewindToCropQc(project.currentStep) ||
+			project.cropQc.status === "complete" ||
+			project.cropQc.status === "processing");
 	const needsCropQcReset =
 		isHydrationMissingCanonicalAssets(project.cropQc) ||
+		needsRepairedCropQcMetadataReset ||
 		(!normalizedCropQc.hasCanonicalCropContract &&
 			(hasLegacyCropOutputs(project.cropQc) ||
 				project.cropQc.qcAccepted ||
@@ -736,6 +880,45 @@ export function migratePreprocessProject(
 			(project.chipConfig.projectedSpots?.length ?? 0) > 0 ||
 			project.chipConfig.status === "complete" ||
 			project.chipConfig.status === "processing");
+	const normalizedAlignment = normalizeAlignmentSlice(
+		normalizeLegacyAlignmentSource(project.alignment),
+	);
+	const strictAcceptedAlignment =
+		normalizedAlignment.solveAccepted &&
+		normalizedAlignment.qualityFlags.accepted;
+	const normalizedAlignmentStatus = computeAlignmentStatus({
+		hasReferenceImage: Boolean(
+			project.sourceAssets.images[normalizedAlignment.referenceImage],
+		),
+		hasMovingImage: Boolean(
+			project.sourceAssets.images[normalizedAlignment.movingImage],
+		),
+		solveAccepted: strictAcceptedAlignment,
+		failureReason: normalizedAlignment.failureReason,
+	});
+	const migratedAlignmentStatus =
+		project.alignment.status === "complete"
+			? normalizedAlignmentStatus
+			: normalizedAlignment.status;
+	const hasInvalidLegacyCompleteAlignment =
+		project.alignment.status === "complete" &&
+		migratedAlignmentStatus !== "complete";
+	const needsAlignmentRewind =
+		hasInvalidLegacyCompleteAlignment &&
+		shouldRewindToAlignment(project.currentStep);
+	const needsAlignmentDownstreamReset =
+		hasInvalidLegacyCompleteAlignment &&
+		(shouldRewindToAlignment(project.currentStep) ||
+			project.cropQc.qcAccepted ||
+			project.cropQc.status === "complete" ||
+			project.cropQc.status === "processing" ||
+			project.chipConfig.status === "complete" ||
+			project.chipConfig.status === "processing" ||
+			project.tissueSelection.status === "complete" ||
+			project.tissueSelection.status === "processing" ||
+			project.exportState.status === "ready" ||
+			project.exportState.status === "complete" ||
+			project.exportState.status === "processing");
 
 	const tissueSelection = normalizeCanonicalTissueSelection(project);
 
@@ -750,35 +933,54 @@ export function migratePreprocessProject(
 		currentStep:
 			needsHeFocusMigration && shouldRewindToHeFocus(project.currentStep)
 				? "heFocus"
-				: needsCropQcReset && shouldRewindToCropQc(project.currentStep)
-					? "cropQc"
-					: needsChipConfigReset &&
-							shouldRewindToChipConfig(project.currentStep)
-						? "chipConfig"
-						: project.currentStep,
+				: needsAlignmentRewind
+					? "alignment"
+					: needsCropQcReset && shouldRewindToCropQc(project.currentStep)
+						? "cropQc"
+						: needsChipConfigReset &&
+								shouldRewindToChipConfig(project.currentStep)
+							? "chipConfig"
+							: project.currentStep,
 		tissueSelection: needsHeFocusMigration
 			? markSliceStale(tissueSelection)
-			: needsCropQcReset || needsChipConfigReset
-				? markSliceStale(tissueSelection)
-				: tissueSelection,
+			: needsRepairedCropQcMetadataReset
+				? invalidateImportedTissueSelectionSlice(tissueSelection)
+				: needsAlignmentDownstreamReset ||
+						needsCropQcReset ||
+						needsChipConfigReset
+					? markSliceStale(tissueSelection)
+					: tissueSelection,
 		heFocus: normalizeHeFocusSlice(project.heFocus),
 		alignment: needsHeFocusMigration
-			? markSliceStale(project.alignment)
-			: project.alignment,
+			? markSliceStale(normalizedAlignment)
+			: {
+					...normalizedAlignment,
+					status: migratedAlignmentStatus,
+				},
 		cropQc: needsHeFocusMigration
-			? markSliceStale(normalizedCropQc.slice)
-			: needsCropQcReset
-				? markSliceStale(normalizedCropQc.slice)
-				: normalizedCropQc.slice,
+			? markCropQcStale(normalizedCropQc.slice)
+			: needsRepairedCropQcMetadataReset
+				? invalidateImportedCropQcSlice(normalizedCropQc.slice)
+				: needsAlignmentDownstreamReset || needsCropQcReset
+					? markCropQcStale(normalizedCropQc.slice)
+					: normalizedCropQc.slice,
 		chipConfig: needsHeFocusMigration
 			? markSliceStale(normalizedChipConfig.slice)
-			: needsCropQcReset || needsChipConfigReset
-				? markSliceStale(normalizedChipConfig.slice)
-				: normalizedChipConfig.slice,
+			: needsRepairedCropQcMetadataReset
+				? invalidateImportedChipConfigSlice(normalizedChipConfig.slice)
+				: needsAlignmentDownstreamReset ||
+						needsCropQcReset ||
+						needsChipConfigReset
+					? markSliceStale(normalizedChipConfig.slice)
+					: normalizedChipConfig.slice,
 		exportState: needsHeFocusMigration
 			? markSliceStale(project.exportState)
-			: needsCropQcReset || needsChipConfigReset
-				? markSliceStale(project.exportState)
-				: project.exportState,
+			: needsRepairedCropQcMetadataReset
+				? invalidateImportedExportStateSlice(project.exportState)
+				: needsAlignmentDownstreamReset ||
+						needsCropQcReset ||
+						needsChipConfigReset
+					? markSliceStale(project.exportState)
+					: project.exportState,
 	};
 }

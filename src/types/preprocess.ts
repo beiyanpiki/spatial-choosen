@@ -105,7 +105,32 @@ export type HeFocusSlice = PreprocessSliceBase & {
   chipBounds: PreprocessRect | null;
   handles: LocalizationHandle[];
   imageTransform: LocalizationImageTransform;
+  autoProposal: HeFocusAutoProposal;
   focusedImageDataUrl: string | null;
+};
+
+export type HeFocusAutoProposalStatus = "idle" | "accepted" | "fallback" | "failed";
+
+export type HeFocusAutoProposalQuad = [
+  PreprocessPoint,
+  PreprocessPoint,
+  PreprocessPoint,
+  PreprocessPoint,
+];
+
+export type HeFocusAutoProposal = {
+  status: HeFocusAutoProposalStatus;
+  method: string | null;
+  coarseBounds: PreprocessRect | null;
+  refinedBounds: PreprocessRect | null;
+  refinedQuad: HeFocusAutoProposalQuad | null;
+  rotationDegrees: number | null;
+  eccCorrelation: number | null;
+  failureReason: string | null;
+};
+
+export type LegacyHeFocusSlice = Omit<HeFocusSlice, "autoProposal"> & {
+  autoProposal?: HeFocusAutoProposal | null;
 };
 
 export type AlignmentControlPoint = {
@@ -147,6 +172,7 @@ export type AlignmentSlice = PreprocessSliceBase & {
   movingImage: PreprocessImageKind;
   movingImageTransform: LocalizationImageTransform;
   overlayOpacity: number;
+  source: "auto" | "manual" | null;
   controlPoints: AlignmentControlPoint[];
   inlierMask: boolean[] | null;
   affineMatrix: AlignmentAffineMatrix | null;
@@ -158,6 +184,10 @@ export type AlignmentSlice = PreprocessSliceBase & {
   failureReason: AlignmentFailureReason | null;
   transform: AlignmentTransform | null;
   previewDataUrl: string | null;
+};
+
+export type LegacyAlignmentSlice = Omit<AlignmentSlice, "source"> & {
+  source?: AlignmentSlice["source"];
 };
 
 export type CropQcIssue = {
@@ -172,8 +202,21 @@ export type CropQcCanonicalAsset = {
 };
 
 export type CropQcCanonicalAssetSet = {
+  /**
+   * Canonical export frame for this crop variant.
+   *
+   * `cropAssets.he.fullres` is the H&E crop rendered at the original H&E pixel
+   * density over the final crop extent. `hires` and `lowres` are derived by
+   * downsampling from this same full-resolution frame only.
+   */
   fullres: CropQcCanonicalAsset;
+  /**
+   * Downsampled derivative of `fullres` for package/UI compatibility.
+   */
   hires: CropQcCanonicalAsset;
+  /**
+   * Downsampled derivative of `fullres` for package/UI compatibility.
+   */
   lowres: CropQcCanonicalAsset;
 };
 
@@ -203,6 +246,69 @@ export type CropQcCheckerboardPreview = {
   dataUrl: string | null;
 };
 
+export type CanonicalCropQcGeometry = {
+  /**
+   * Normalized rect in the geometry's native source frame.
+   *
+   * `eosinReferenceGeometry.rect` is normalized against the full eosin/reference
+   * image. `heQcGeometry.rect` is normalized against the accepted crop-local QC
+   * frame. Export code must convert these rects into the emitted HE fullres
+   * pixel frame instead of treating them as pixel coordinates directly.
+   */
+  rect: PreprocessRect;
+  /**
+   * Pixel width in the geometry's native source frame.
+   *
+   * This is geometry evidence, not necessarily the emitted HE fullres export
+   * width stored in `cropWidth`.
+   */
+  width: number;
+  /**
+   * Pixel height in the geometry's native source frame.
+   *
+   * This is geometry evidence, not necessarily the emitted HE fullres export
+   * height stored in `cropHeight`.
+   */
+  height: number;
+};
+
+/**
+ * Transitional runtime contract for Task 2.
+ *
+ * `eosinReferenceGeometry` is the authoritative crop-domain geometry in
+ * eosin/reference-image space. It is not the derived H&E QC projection, and
+ * its normalized rect must be remapped onto the emitted HE fullres export frame
+ * before export-only math consumes it.
+ * `heQcGeometry` is derived QC evidence in crop-local space, produced from the
+ * projected H&E geometry when available. It may remain null for workflows that
+ * lack accepted/projectable H&E geometry.
+ */
+export type CropQcTransitionalGeometryContract = {
+  eosinReferenceGeometry?: CanonicalCropQcGeometry | null;
+  heQcGeometry?: CanonicalCropQcGeometry | null;
+};
+
+export type DeprecatedCropQcGeometryAliases = {
+  /**
+   * @deprecated Transitional alias for `eosinReferenceGeometry.rect`.
+   */
+  cropRect: PreprocessRect | null;
+  /**
+   * Canonical emitted HE fullres export width.
+   *
+   * @deprecated Transitional alias retained on `cropQc` for export/tissue
+   * consumers that have not yet moved to the canonical asset contract.
+   */
+  cropWidth: number | null;
+  /**
+   * Canonical emitted HE fullres export height.
+   *
+   * @deprecated Transitional alias retained on `cropQc` for export/tissue
+   * consumers that have not yet moved to the canonical asset contract.
+   */
+  cropHeight: number | null;
+};
+
 export type DeprecatedCropQcPreviewAliases = {
   /**
    * @deprecated Transitional alias for `cropAssets.eosin.fullres.dataUrl`.
@@ -222,16 +328,16 @@ export type DeprecatedCropQcPreviewAliases = {
   featureMatchesPreviewDataUrl: string | null;
 };
 
-export type CropQcSliceCore = PreprocessSliceBase & DeprecatedCropQcPreviewAliases & {
-  cropRect: PreprocessRect | null;
-  cropWidth: number | null;
-  cropHeight: number | null;
-  paddingRatio: number;
-  checkerboardTileSize: number;
-  overlayOpacity: number;
-  qcAccepted: boolean;
-  issues: CropQcIssue[];
-};
+export type CropQcSliceCore = PreprocessSliceBase
+  & CropQcTransitionalGeometryContract
+  & DeprecatedCropQcGeometryAliases
+  & DeprecatedCropQcPreviewAliases & {
+    paddingRatio: number;
+    checkerboardTileSize: number;
+    overlayOpacity: number;
+    qcAccepted: boolean;
+    issues: CropQcIssue[];
+  };
 
 export type CanonicalCropQcSlice = CropQcSliceCore & CropQcCanonicalCropState & {
   checkerboardPreview: CropQcCheckerboardPreview;
@@ -253,6 +359,55 @@ export type CropQcSlice = CropQcSliceCore & {
   fiducial_diameter_fullres?: CanonicalCropQcSlice["fiducial_diameter_fullres"];
   checkerboardPreview?: CropQcCheckerboardPreview;
   featureMatchesPreview?: CropQcCheckerboardPreview;
+};
+
+/**
+ * Preferred chip-rect source for export geometry resolution.
+ *
+ * `eosin-reference-geometry` is the primary crop-domain source, followed by
+ * `he-qc-geometry` when present, then `crop-bounds-fallback` as the last resort.
+ */
+export type SpotExportChipRectSource = 'eosin-reference-geometry' | 'he-qc-geometry' | 'crop-bounds-fallback';
+
+export type SpotExportTemplateAnchor = {
+  barcode: string;
+  arrayRow: number;
+  arrayCol: number;
+  /**
+   * Canonical template anchor row in the full-resolution export frame.
+   */
+  pxl_row_in_fullres: number;
+  /**
+   * Canonical template anchor column in the full-resolution export frame.
+   */
+  pxl_col_in_fullres: number;
+};
+
+export type SpotExportTemplateAnchorBounds = {
+  minPxlRowInFullres: number;
+  maxPxlRowInFullres: number;
+  minPxlColInFullres: number;
+  maxPxlColInFullres: number;
+};
+
+/**
+ * Export-only geometry contract.
+ *
+ * The chip rect is resolved in the full-resolution export image frame with
+ * `eosin-reference-geometry` as the preferred source, then `he-qc-geometry`,
+ * then `crop-bounds-fallback`. Template anchors and exported CSV coordinates
+ * live in that same canonical full-resolution frame, keeping ZIP/CSV modeling
+ * separate from UI `ProjectedSpot` center semantics.
+ *
+ * Contractually, `pxl_row_in_fullres` / `pxl_col_in_fullres` describe the
+ * top-left pixel of each exported spot square in the canonical full-resolution
+ * frame.
+ */
+export type SpotExportGeometryContract = {
+  chipRect: PreprocessRect;
+  chipRectSource: SpotExportChipRectSource;
+  templateAnchorBounds: SpotExportTemplateAnchorBounds;
+  templateAnchors: SpotExportTemplateAnchor[];
 };
 
 export type ProjectedSpotBase = {
@@ -445,8 +600,9 @@ export type PreprocessProject = {
   exportState: ExportStateSlice;
 };
 
-export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "cropQc" | "chipConfig" | "tissueSelection"> & {
-  heFocus?: HeFocusSlice;
+export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "alignment" | "cropQc" | "chipConfig" | "tissueSelection"> & {
+  heFocus?: LegacyHeFocusSlice;
+  alignment: LegacyAlignmentSlice;
   cropQc: LegacyCropQcSlice;
   chipConfig: LegacyChipConfigSlice;
   tissueSelection: LegacyTissueSelectionSlice;

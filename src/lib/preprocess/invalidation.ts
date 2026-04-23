@@ -30,6 +30,7 @@ const markStale = <T extends PreprocessSliceBase>(slice: T): T => ({
 
 const invalidateAlignmentSlice = (slice: AlignmentSlice): AlignmentSlice => ({
   ...markStale(slice),
+  source: null,
   controlPoints: [],
   inlierMask: null,
   affineMatrix: null,
@@ -57,6 +58,11 @@ const invalidateHeFocusSlice = (slice: HeFocusSlice): HeFocusSlice => ({
 
 const invalidateCropQcSlice = (slice: CropQcSlice): CropQcSlice => ({
   ...markStale(slice),
+  eosinReferenceGeometry: null,
+  heQcGeometry: null,
+  cropRect: null,
+  cropWidth: null,
+  cropHeight: null,
   cropAssets: {
     eosin: null,
     he: null,
@@ -136,15 +142,21 @@ const invalidateStep = (
   }
 };
 
+const invalidateSpecificSteps = (
+  project: PreprocessProject,
+  stepIds: readonly PreprocessStepId[],
+  causeStepId: PreprocessStepId,
+): PreprocessProject => stepIds.reduce(
+  (nextProject, downstreamStepId) => invalidateStep(nextProject, downstreamStepId, causeStepId),
+  project,
+);
+
 export function getInvalidatedSteps(stepId: PreprocessStepId): readonly PreprocessStepId[] {
   return PREPROCESS_INVALIDATION_GRAPH[stepId];
 }
 
 export function invalidateFromStep(project: PreprocessProject, stepId: PreprocessStepId): PreprocessProject {
-  return PREPROCESS_INVALIDATION_GRAPH[stepId].reduce(
-    (nextProject, downstreamStepId) => invalidateStep(nextProject, downstreamStepId, stepId),
-    project,
-  );
+  return invalidateSpecificSteps(project, PREPROCESS_INVALIDATION_GRAPH[stepId], stepId);
 }
 
 export function invalidateOnSourceAssetsChange(project: PreprocessProject): PreprocessProject {
@@ -156,11 +168,27 @@ export function invalidateOnLocalizationChange(project: PreprocessProject): Prep
 }
 
 export function invalidateOnHeFocusChange(project: PreprocessProject): PreprocessProject {
+  return invalidateOnHeFocusCommit(project);
+}
+
+export function invalidateOnHeFocusCommit(project: PreprocessProject): PreprocessProject {
+  return invalidateOnHeFocusChipBoundsChange(project);
+}
+
+export function invalidateOnHeFocusChipBoundsChange(project: PreprocessProject): PreprocessProject {
   return invalidateFromStep(project, "heFocus");
+}
+
+export function invalidateOnHeFocusAutoProposalChange(project: PreprocessProject): PreprocessProject {
+  return invalidateSpecificSteps(project, ['alignment', 'cropQc'], 'heFocus');
 }
 
 export function invalidateOnAlignmentChange(project: PreprocessProject): PreprocessProject {
   return invalidateFromStep(project, "alignment");
+}
+
+export function invalidateOnAcceptedAlignmentProvenanceChange(project: PreprocessProject): PreprocessProject {
+  return invalidateSpecificSteps(project, ['cropQc'], 'alignment');
 }
 
 export function invalidateOnCropQcChange(project: PreprocessProject): PreprocessProject {
