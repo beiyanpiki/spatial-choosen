@@ -772,12 +772,21 @@ const hydrateDerivedImagePayload = async (payload: string | Blob | undefined) =>
 
 const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessProject | undefined> => {
   const repairedMeta = repairCurrentSchemaCropGeometry(meta);
-  const eosinDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'eosin'));
-  const heDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he'));
-  const eosinThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'eosin'));
-  const heThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'he'));
-  const focusedHePayload = await readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(repairedMeta.id));
-  const cropQc = await hydrateCropQcSlice(repairedMeta.id, repairedMeta.cropQc);
+  const [
+    eosinDataUrl,
+    heDataUrl,
+    eosinThumbnailDataUrl,
+    heThumbnailDataUrl,
+    focusedHePayload,
+    cropQc,
+  ] = await Promise.all([
+    readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'eosin')),
+    readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he')),
+    readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'eosin')),
+    readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'he')),
+    readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(repairedMeta.id)),
+    hydrateCropQcSlice(repairedMeta.id, repairedMeta.cropQc),
+  ]);
 
   const eosinResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
   const heResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
