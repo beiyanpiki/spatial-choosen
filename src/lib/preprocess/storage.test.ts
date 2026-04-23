@@ -441,11 +441,12 @@ describe('preprocess storage tissue metadata', () => {
       cropWidth: 200,
       cropHeight: 200,
       heQcGeometry: {
+        // Normalized coordinates - will be multiplied by cropWidth/cropHeight
         rect: {
-          x: 75,
-          y: 75,
-          width: 100,
-          height: 100,
+          x: 75 / 200,
+          y: 75 / 200,
+          width: 100 / 200,
+          height: 100 / 200,
         },
         width: 200,
         height: 200,
