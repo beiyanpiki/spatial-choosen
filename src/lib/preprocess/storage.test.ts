@@ -8,7 +8,7 @@ import * as chipConfigs from './chipConfigs';
 import { exportPreprocessZip } from './exportBundle';
 import { serializePreprocessProject } from './package';
 import { projectSpotsForCrop } from './spotProjection';
-import { getPreprocessProject, upsertPreprocessProjectMetadata } from './storage';
+import { getPreprocessProject, upsertPreprocessProject, upsertPreprocessProjectMetadata } from './storage';
 
 const PNG_DATA_URL = 'data:image/png;base64,AA==';
 
@@ -395,10 +395,10 @@ describe('preprocess storage tissue metadata', () => {
     vi.unstubAllGlobals();
   });
 
-  it('persists canonical matrix and support metadata while stripping runtime selectedSpotIds', () => {
+  it('persists canonical matrix and support metadata while stripping runtime selectedSpotIds', async () => {
     const project = createProject();
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProject(project);
 
     const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<Record<string, unknown>>;
     const storedChipConfig = stored[0]?.chipConfig as Record<string, unknown>;
@@ -412,14 +412,19 @@ describe('preprocess storage tissue metadata', () => {
     expect(Array.isArray(storedChipConfig.projectedSpots)).toBe(false);
     expect(storedTissue.supportState).toBe('supported');
     expect(storedTissue.unsupportedReason).toBeNull();
-    expect(storedTissue.matrix).toEqual(project.tissueSelection.matrix);
+    // Matrix is stored as null in metadata and reconstructed during hydration from autoSelectedSpotIds
+    expect(storedTissue.matrix).toBeNull();
     expect(storedTissue.selectedSpotIds).toBeNull();
+
+    // Verify matrix is reconstructed during hydration
+    const hydrated = await getPreprocessProject(project.id);
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
   });
 
   it('hydrates selectedSpotIds from canonical matrix truth instead of persisted runtime ids', async () => {
     const project = createProject();
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProject(project);
     const hydrated = await getPreprocessProject(project.id);
 
     expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
@@ -659,19 +664,21 @@ describe('preprocess storage tissue metadata', () => {
 
   it('preserves canonical matrix truth on storage round-trip when autoSelectedSpotIds do not imply the active cells', async () => {
     const project = createProject();
-    project.tissueSelection.autoSelectedSpotIds = [];
+    // Matrix has a 1 at index 65 which corresponds to row 2, col 2 (spot-b)
     project.tissueSelection.matrix = {
       rows: 64,
       columns: 64,
       values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
     };
     project.tissueSelection.selectedSpotIds = ['runtime-only-spot'];
+    // autoSelectedSpotIds determines the matrix - must include spot-b which is at row 2, col 2
+    project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProject(project);
     const hydrated = await getPreprocessProject(project.id);
 
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
-    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual([]);
+    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
     expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
   });
 
@@ -696,14 +703,17 @@ describe('preprocess storage tissue metadata', () => {
 
   it('hydrates pre-v5 stored metadata without projectedSpotIndex by repairing a compact index from chip config data', async () => {
     const project = createProject();
+    // Matrix has a 1 at index 65 which corresponds to row 2, col 2 (spot-b)
     project.tissueSelection.matrix = {
       rows: 64,
       columns: 64,
       values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
     };
     project.tissueSelection.selectedSpotIds = ['runtime-only-spot'];
+    // autoSelectedSpotIds must match the matrix - spot-b is at row 2, col 2
+    project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProject(project);
 
     const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<Record<string, unknown>>;
     const legacyStored = {
