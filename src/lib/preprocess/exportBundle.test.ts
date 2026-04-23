@@ -75,6 +75,49 @@ const createMockChipConfigData = (): ChipConfigData => ({
   ],
 });
 
+const createMock15umChipConfigData = (): ChipConfigData => ({
+  manifest: {
+    id: '15um',
+    label: 'Square grid 15um',
+    gridRows: 96,
+    gridCols: 96,
+    spotDiameter: 25,
+    spotGap: 15,
+    barcodeTemplatePath: '/unused/tissue_positions.csv',
+    tissuePositionsPath: '/unused/tissue_positions.csv',
+  },
+  templateEntries: [
+    {
+      barcode: 'barcode-15um-spot-a',
+      arrayRow: 1,
+      arrayCol: 1,
+      pxl_row_in_fullres: 33,
+      pxl_col_in_fullres: 33,
+    },
+    {
+      barcode: 'barcode-15um-spot-b',
+      arrayRow: 1,
+      arrayCol: 2,
+      pxl_row_in_fullres: 33,
+      pxl_col_in_fullres: 73,
+    },
+    {
+      barcode: 'barcode-15um-spot-c',
+      arrayRow: 2,
+      arrayCol: 1,
+      pxl_row_in_fullres: 73,
+      pxl_col_in_fullres: 33,
+    },
+    {
+      barcode: 'barcode-15um-spot-d',
+      arrayRow: 96,
+      arrayCol: 96,
+      pxl_row_in_fullres: 3833,
+      pxl_col_in_fullres: 3833,
+    },
+  ],
+});
+
 const createProjectedSpot = (
   id: string,
   arrayRow: number,
@@ -390,6 +433,43 @@ const createLegacy50umProject = (): LegacyPreprocessProject => {
   };
 };
 
+const create15umProject = (): PreprocessProject => {
+  const project = createBaseProject();
+
+  return {
+    ...project,
+    localization: {
+      ...project.localization,
+      chipType: '15um',
+    },
+    chipConfig: {
+      ...project.chipConfig,
+      chipType: '15um',
+      rows: 96,
+      columns: 96,
+      pitchX: 15,
+      pitchY: 15,
+      projectedSpots: [
+        createProjectedSpot('15um-spot-a', 1, 1),
+        createProjectedSpot('15um-spot-b', 1, 2),
+        createProjectedSpot('15um-spot-c', 2, 1),
+        createProjectedSpot('15um-spot-d', 96, 96),
+      ],
+    },
+    tissueSelection: {
+      ...project.tissueSelection,
+      autoSelectedSpotIds: [],
+      matrix: createMatrix(96, 96, [
+        [1, 1],
+        [96, 96],
+      ]),
+      selectedSpotIds: [],
+      regions: [],
+      selectedRegionId: null,
+    },
+  };
+};
+
 const readZipText = async (blob: Blob, fileName: string) => {
   const archive = await JSZip.loadAsync(await blob.arrayBuffer());
   const file = archive.file(fileName);
@@ -440,6 +520,33 @@ const readExportedTissuePositions = async (blob: Blob) => parseTissuePositionsCs
 const readExportedScalefactors = async (blob: Blob) => JSON.parse(
   await readZipText(blob, 'scalefactors_json.json'),
 ) as ExportedScalefactors;
+
+const toExportArrayRow = (rows: number, runtimeArrayRow: number) => rows + 1 - runtimeArrayRow;
+
+const createExpectedExportedTissuePositionRow = (args: {
+  barcode: string;
+  inTissue: number;
+  rows: number;
+  runtimeArrayRow: number;
+  arrayCol: number;
+  pxl_row_in_fullres: number;
+  pxl_col_in_fullres: number;
+}) => ({
+  barcode: args.barcode,
+  in_tissue: args.inTissue,
+  array_row: toExportArrayRow(args.rows, args.runtimeArrayRow),
+  array_col: args.arrayCol,
+  pxl_row_in_fullres: args.pxl_row_in_fullres,
+  pxl_col_in_fullres: args.pxl_col_in_fullres,
+} satisfies ExportedTissuePositionRow);
+
+const stripMembershipFromExportedTissuePositionRow = (row: ExportedTissuePositionRow) => ({
+  barcode: row.barcode,
+  array_row: row.array_row,
+  array_col: row.array_col,
+  pxl_row_in_fullres: row.pxl_row_in_fullres,
+  pxl_col_in_fullres: row.pxl_col_in_fullres,
+});
 
 type PackagedProjectPayload = {
   version: number;
@@ -507,47 +614,59 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows[63]?.[63]).toBe('1');
   });
 
-  it('writes tissue_positions.csv using canonical 50um full-resolution coordinates and matrix-derived in_tissue flags', async () => {
+  it('writes 50um tissue_positions.csv in stable barcode order with bottom-left array rows and unchanged top-left full-resolution coordinates', async () => {
     const project = createBaseProject();
 
     const result = await exportProject(project);
-    const rowsByBarcode = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
+    const rows = await readExportedTissuePositions(result.blob);
 
-    expect(rowsByBarcode.get('barcode-spot-a')).toEqual({
-      barcode: 'barcode-spot-a',
-      in_tissue: 1,
-      array_row: 1,
-      array_col: 1,
-      pxl_row_in_fullres: 75,
-      pxl_col_in_fullres: 75,
-    });
-    expect(rowsByBarcode.get('barcode-spot-b')).toEqual({
-      barcode: 'barcode-spot-b',
-      in_tissue: 0,
-      array_row: 1,
-      array_col: 2,
-      pxl_row_in_fullres: 75,
-      pxl_col_in_fullres: 175,
-    });
-    expect(rowsByBarcode.get('barcode-spot-c')).toEqual({
-      barcode: 'barcode-spot-c',
-      in_tissue: 0,
-      array_row: 2,
-      array_col: 1,
-      pxl_row_in_fullres: 175,
-      pxl_col_in_fullres: 75,
-    });
-    expect(rowsByBarcode.get('barcode-spot-d')).toEqual({
-      barcode: 'barcode-spot-d',
-      in_tissue: 1,
-      array_row: 64,
-      array_col: 64,
-      pxl_row_in_fullres: 6375,
-      pxl_col_in_fullres: 6375,
-    });
+    expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-a',
+      'barcode-spot-b',
+      'barcode-spot-c',
+      'barcode-spot-d',
+    ]);
+    expect(rows).toEqual([
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-a',
+        inTissue: 1,
+        rows: 64,
+        runtimeArrayRow: 1,
+        arrayCol: 1,
+        pxl_row_in_fullres: 75,
+        pxl_col_in_fullres: 75,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-b',
+        inTissue: 0,
+        rows: 64,
+        runtimeArrayRow: 1,
+        arrayCol: 2,
+        pxl_row_in_fullres: 75,
+        pxl_col_in_fullres: 175,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-c',
+        inTissue: 0,
+        rows: 64,
+        runtimeArrayRow: 2,
+        arrayCol: 1,
+        pxl_row_in_fullres: 175,
+        pxl_col_in_fullres: 75,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-d',
+        inTissue: 1,
+        rows: 64,
+        runtimeArrayRow: 64,
+        arrayCol: 64,
+        pxl_row_in_fullres: 6375,
+        pxl_col_in_fullres: 6375,
+      }),
+    ]);
   });
 
-  it('changes only matrix-derived in_tissue flags while keeping exported pxl coordinates identical', async () => {
+  it('changes only matrix-derived in_tissue flags while keeping exported barcode order, array coordinates, and top-left pxl coordinates identical', async () => {
     const baselineProject = createBaseProject();
     const changedMembershipProject = createBaseProject();
     changedMembershipProject.tissueSelection.matrix = createMatrix(64, 64, [
@@ -568,23 +687,67 @@ describe('exportBundle canonical matrix exports', () => {
       canExport: true,
     });
 
-    expect(changedMembershipRows.map((row) => ({
-      barcode: row.barcode,
-      array_row: row.array_row,
-      array_col: row.array_col,
-      pxl_row_in_fullres: row.pxl_row_in_fullres,
-      pxl_col_in_fullres: row.pxl_col_in_fullres,
-    }))).toEqual(baselineRows.map((row) => ({
-      barcode: row.barcode,
-      array_row: row.array_row,
-      array_col: row.array_col,
-      pxl_row_in_fullres: row.pxl_row_in_fullres,
-      pxl_col_in_fullres: row.pxl_col_in_fullres,
-    })));
+    expect(changedMembershipRows.map((row) => row.barcode)).toEqual(baselineRows.map((row) => row.barcode));
+    expect(changedMembershipRows.map(stripMembershipFromExportedTissuePositionRow)).toEqual(
+      baselineRows.map(stripMembershipFromExportedTissuePositionRow),
+    );
     expect(changedMembershipRowsByBarcode.get('barcode-spot-a')?.in_tissue).toBe(0);
     expect(changedMembershipRowsByBarcode.get('barcode-spot-b')?.in_tissue).toBe(1);
     expect(changedMembershipRowsByBarcode.get('barcode-spot-c')?.in_tissue).toBe(0);
     expect(changedMembershipRowsByBarcode.get('barcode-spot-d')?.in_tissue).toBe(1);
+  });
+
+  it('writes 15um tissue_positions.csv using the runtime row count for array_row inversion instead of a hardcoded 64', async () => {
+    mockLoadChipConfigData.mockResolvedValue(createMock15umChipConfigData());
+    const project = create15umProject();
+
+    const result = await exportProject(project);
+    const rows = await readExportedTissuePositions(result.blob);
+
+    expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-15um-spot-a',
+      'barcode-15um-spot-b',
+      'barcode-15um-spot-c',
+      'barcode-15um-spot-d',
+    ]);
+    expect(rows).toEqual([
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-15um-spot-a',
+        inTissue: 1,
+        rows: 96,
+        runtimeArrayRow: 1,
+        arrayCol: 1,
+        pxl_row_in_fullres: 75,
+        pxl_col_in_fullres: 75,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-15um-spot-b',
+        inTissue: 0,
+        rows: 96,
+        runtimeArrayRow: 1,
+        arrayCol: 2,
+        pxl_row_in_fullres: 75,
+        pxl_col_in_fullres: 141,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-15um-spot-c',
+        inTissue: 0,
+        rows: 96,
+        runtimeArrayRow: 2,
+        arrayCol: 1,
+        pxl_row_in_fullres: 141,
+        pxl_col_in_fullres: 75,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-15um-spot-d',
+        inTissue: 1,
+        rows: 96,
+        runtimeArrayRow: 96,
+        arrayCol: 96,
+        pxl_row_in_fullres: 6375,
+        pxl_col_in_fullres: 6375,
+      }),
+    ]);
   });
 
   it('preserves the persisted crop/QC spot diameter in scalefactors_json.json when it is valid', async () => {
@@ -664,38 +827,42 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows).toHaveLength(64);
     expect(rows[63]).toHaveLength(64);
     expect(rows[63]?.[63]).toBe('1');
-    expect(positionsByBarcode.get('barcode-spot-a')).toEqual({
+    expect(positionsByBarcode.get('barcode-spot-a')).toEqual(createExpectedExportedTissuePositionRow({
       barcode: 'barcode-spot-a',
-      in_tissue: 0,
-      array_row: 1,
-      array_col: 1,
+      inTissue: 0,
+      rows: 64,
+      runtimeArrayRow: 1,
+      arrayCol: 1,
       pxl_row_in_fullres: 75,
       pxl_col_in_fullres: 75,
-    });
-    expect(positionsByBarcode.get('barcode-spot-b')).toEqual({
+    }));
+    expect(positionsByBarcode.get('barcode-spot-b')).toEqual(createExpectedExportedTissuePositionRow({
       barcode: 'barcode-spot-b',
-      in_tissue: 0,
-      array_row: 1,
-      array_col: 2,
+      inTissue: 0,
+      rows: 64,
+      runtimeArrayRow: 1,
+      arrayCol: 2,
       pxl_row_in_fullres: 75,
       pxl_col_in_fullres: 175,
-    });
-    expect(positionsByBarcode.get('barcode-spot-c')).toEqual({
+    }));
+    expect(positionsByBarcode.get('barcode-spot-c')).toEqual(createExpectedExportedTissuePositionRow({
       barcode: 'barcode-spot-c',
-      in_tissue: 0,
-      array_row: 2,
-      array_col: 1,
+      inTissue: 0,
+      rows: 64,
+      runtimeArrayRow: 2,
+      arrayCol: 1,
       pxl_row_in_fullres: 175,
       pxl_col_in_fullres: 75,
-    });
-    expect(positionsByBarcode.get('barcode-spot-d')).toEqual({
+    }));
+    expect(positionsByBarcode.get('barcode-spot-d')).toEqual(createExpectedExportedTissuePositionRow({
       barcode: 'barcode-spot-d',
-      in_tissue: 1,
-      array_row: 64,
-      array_col: 64,
+      inTissue: 1,
+      rows: 64,
+      runtimeArrayRow: 64,
+      arrayCol: 64,
       pxl_row_in_fullres: 6375,
       pxl_col_in_fullres: 6375,
-    });
+    }));
     expect(scalefactors.spot_diameter_fullres).toBe(18);
   });
 
@@ -756,25 +923,25 @@ describe('exportBundle canonical matrix exports', () => {
       'tissue_positions.csv',
     ]);
     expect(positionsByBarcode.get('barcode-spot-a')).toMatchObject({
-      array_row: 1,
+      array_row: toExportArrayRow(64, 1),
       array_col: 1,
       pxl_row_in_fullres: 35,
       pxl_col_in_fullres: 80,
     });
     expect(positionsByBarcode.get('barcode-spot-b')).toMatchObject({
-      array_row: 1,
+      array_row: toExportArrayRow(64, 1),
       array_col: 2,
       pxl_row_in_fullres: 35,
       pxl_col_in_fullres: 180,
     });
     expect(positionsByBarcode.get('barcode-spot-c')).toMatchObject({
-      array_row: 2,
+      array_row: toExportArrayRow(64, 2),
       array_col: 1,
       pxl_row_in_fullres: 135,
       pxl_col_in_fullres: 80,
     });
     expect(positionsByBarcode.get('barcode-spot-d')).toMatchObject({
-      array_row: 64,
+      array_row: toExportArrayRow(64, 64),
       array_col: 64,
       pxl_row_in_fullres: 6335,
       pxl_col_in_fullres: 6380,

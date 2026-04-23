@@ -1,10 +1,16 @@
+import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { normalizeProjectForPersistence, normalizeProjectForWorkspace } from '@/app/preprocess/projectState';
 import type { PreprocessProject, ProjectedSpot } from '@/types/preprocess';
 
+import * as chipConfigs from './chipConfigs';
+import { exportPreprocessZip } from './exportBundle';
 import { serializePreprocessProject } from './package';
+import { projectSpotsForCrop } from './spotProjection';
 import { getPreprocessProject, upsertPreprocessProjectMetadata } from './storage';
+
+const PNG_DATA_URL = 'data:image/png;base64,AA==';
 
 const createProjectedSpot = (
   id: string,
@@ -211,6 +217,45 @@ const createProject = (): PreprocessProject => ({
   },
 });
 
+type ExportedTissuePositionRow = {
+  barcode: string;
+  in_tissue: number;
+  array_row: number;
+  array_col: number;
+  pxl_row_in_fullres: number;
+  pxl_col_in_fullres: number;
+};
+
+const readExportedTissuePositions = async (blob: Blob): Promise<ExportedTissuePositionRow[]> => {
+  const archive = await JSZip.loadAsync(await blob.arrayBuffer());
+  const file = archive.file('tissue_positions.csv');
+
+  if (!file) {
+    throw new Error('Missing tissue_positions.csv in export archive.');
+  }
+
+  return (await file.async('string'))
+    .trim()
+    .split('\n')
+    .slice(1)
+    .map((line) => {
+      const [barcode, in_tissue, array_row, array_col, pxl_row_in_fullres, pxl_col_in_fullres] = line.split(',');
+
+      return {
+        barcode: barcode ?? '',
+        in_tissue: Number(in_tissue),
+        array_row: Number(array_row),
+        array_col: Number(array_col),
+        pxl_row_in_fullres: Number(pxl_row_in_fullres),
+        pxl_col_in_fullres: Number(pxl_col_in_fullres),
+      };
+    });
+};
+
+const indexRowsByBarcode = (rows: ExportedTissuePositionRow[]) => new Map(
+  rows.map((row) => [row.barcode, row] as const),
+);
+
 class MemoryStorage {
   private readonly map = new Map<string, string>();
 
@@ -346,6 +391,7 @@ describe('preprocess storage tissue metadata', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -382,6 +428,148 @@ describe('preprocess storage tissue metadata', () => {
     expect(Object.hasOwn(hydrated?.tissueSelection ?? {}, 'regions')).toBe(false);
     expect(Object.hasOwn(hydrated?.tissueSelection ?? {}, 'selectedRegionId')).toBe(false);
   });
+
+  it('exports flipped serialized array_row values after storage hydration and runtime reprojection', async () => {
+    const project = createProject();
+    project.cropQc = {
+      ...project.cropQc,
+      cropWidth: 200,
+      cropHeight: 200,
+      heQcGeometry: {
+        rect: {
+          x: 75,
+          y: 75,
+          width: 100,
+          height: 100,
+        },
+        width: 200,
+        height: 200,
+      },
+      cropAssets: {
+        eosin: {
+          fullres: { dataUrl: PNG_DATA_URL },
+          hires: { dataUrl: PNG_DATA_URL },
+          lowres: { dataUrl: PNG_DATA_URL },
+        },
+        he: {
+          fullres: { dataUrl: PNG_DATA_URL },
+          hires: { dataUrl: PNG_DATA_URL },
+          lowres: { dataUrl: PNG_DATA_URL },
+        },
+      },
+      tissue_hires_scalef: 0.5,
+      tissue_lowres_scalef: 0.25,
+      spot_diameter_fullres: 18,
+      fiducial_diameter_fullres: 27,
+    };
+
+    const exportChipConfigData = {
+      manifest: {
+        id: '50um',
+        label: '50um',
+        gridRows: 64,
+        gridCols: 64,
+        spotDiameter: 50,
+        spotGap: 50,
+        barcodeTemplatePath: '/unused/template.csv',
+        tissuePositionsPath: '/unused/template.csv',
+      },
+      templateEntries: [
+        {
+          barcode: 'spot-a',
+          arrayRow: 1,
+          arrayCol: 1,
+          pxl_row_in_fullres: 75,
+          pxl_col_in_fullres: 75,
+        },
+        {
+          barcode: 'spot-b',
+          arrayRow: 2,
+          arrayCol: 2,
+          pxl_row_in_fullres: 175,
+          pxl_col_in_fullres: 175,
+        },
+      ],
+    };
+    const loadChipConfigDataSpy = vi.spyOn(chipConfigs, 'loadChipConfigData').mockResolvedValue(
+      exportChipConfigData as Awaited<ReturnType<typeof chipConfigs.loadChipConfigData>>,
+    );
+
+    upsertPreprocessProjectMetadata(project);
+
+    const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<Record<string, unknown>>;
+    const storedChipConfig = stored[0]?.chipConfig as {
+      projectedSpots: unknown;
+      projectedSpotIndex: Array<{ id: string; arrayRow: number; arrayCol: number }>;
+    };
+
+    expect(storedChipConfig.projectedSpots).toBeNull();
+    expect(storedChipConfig.projectedSpotIndex).toEqual([
+      { id: 'spot-a', arrayRow: 1, arrayCol: 1 },
+      { id: 'spot-b', arrayRow: 2, arrayCol: 2 },
+    ]);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated).toBeDefined();
+    expect(hydrated?.chipConfig.projectedSpots).toBeNull();
+
+    const projectedSpotsByArrayPosition = new Map(
+      projectSpotsForCrop({
+        chip: exportChipConfigData.manifest,
+        templateEntries: exportChipConfigData.templateEntries,
+        cropWidth: project.cropQc.cropWidth ?? 0,
+        cropHeight: project.cropQc.cropHeight ?? 0,
+      }).map((spot) => [`${spot.arrayRow}:${spot.arrayCol}`, spot] as const),
+    );
+    const runtimeProjectedSpots = storedChipConfig.projectedSpotIndex.map((entry) => {
+      const projectedSpot = projectedSpotsByArrayPosition.get(`${entry.arrayRow}:${entry.arrayCol}`);
+
+      if (!projectedSpot) {
+        throw new Error(`Missing reconstructed spot geometry for ${entry.arrayRow}:${entry.arrayCol}.`);
+      }
+
+      return {
+        ...projectedSpot,
+        id: entry.id,
+        barcode: entry.id,
+      };
+    });
+    const runtimeProject: PreprocessProject = {
+      ...(hydrated as PreprocessProject),
+      cropQc: project.cropQc,
+      chipConfig: {
+        ...project.chipConfig,
+        projectedSpots: runtimeProjectedSpots,
+      },
+      tissueSelection: project.tissueSelection,
+    };
+
+    const result = await exportPreprocessZip({
+      project: runtimeProject,
+      includeAlignedImage: false,
+      includeProjectJson: false,
+    });
+    const rowsByBarcode = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
+
+	    expect(loadChipConfigDataSpy).toHaveBeenCalledWith('50um');
+		expect(rowsByBarcode.get('spot-a')).toEqual({
+			barcode: 'spot-a',
+			in_tissue: 1,
+			array_row: 64,
+			array_col: 1,
+			pxl_row_in_fullres: 75,
+			pxl_col_in_fullres: 75,
+		});
+		expect(rowsByBarcode.get('spot-b')).toEqual({
+			barcode: 'spot-b',
+			in_tissue: 0,
+			array_row: 63,
+			array_col: 2,
+			pxl_row_in_fullres: 175,
+			pxl_col_in_fullres: 175,
+		});
+	});
 
   it('keeps a rejected alignment blocked after metadata round-trip hydration', async () => {
     const project = createProject();
@@ -562,8 +750,8 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
   });
 
-  it('does not reintroduce legacy region-first tissue fields into canonical stored state after migration', () => {
-    const project = createProject();
+	it('does not reintroduce legacy region-first tissue fields into canonical stored state after migration', () => {
+	  const project = createProject();
 
     upsertPreprocessProjectMetadata(project);
 
@@ -574,9 +762,9 @@ describe('preprocess storage tissue metadata', () => {
     expect(Object.hasOwn(storedTissue, 'forcedInSpotIds')).toBe(false);
     expect(Object.hasOwn(storedTissue, 'forcedOutSpotIds')).toBe(false);
     expect(Object.hasOwn(storedTissue, 'selectedRegionId')).toBe(false);
-    expect(Object.hasOwn(storedTissue, 'previewDataUrl')).toBe(true);
-    expect(storedTissue.previewDataUrl).toBeNull();
-  });
+	  expect(Object.hasOwn(storedTissue, 'previewDataUrl')).toBe(true);
+	  expect(storedTissue.previewDataUrl).toBeNull();
+	});
 
 	it('preserves out-of-bounds HEFocus bounds across normalized storage save and workspace load', async () => {
 		const project = createProject();

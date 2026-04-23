@@ -90,6 +90,7 @@ const toCsv = (
   projectedSpots: ProjectedSpot[],
   selectedSpotIds: Set<string>,
   exportOnlySpotCenters: ExportOnlySpotCenter[],
+  rows: number,
 ) => {
   const lines = [
     'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres',
@@ -107,10 +108,13 @@ const toCsv = (
       throw new Error(`Chip template anchor geometry is missing for array position ${spot.arrayRow}:${spot.arrayCol}. Reapply chip configuration before export.`);
     }
 
+    // CSV keeps bottom-left array_row while pxl_* stays in top-left image space.
+    const serializedArrayRow = rows + 1 - spot.arrayRow;
+
     lines.push([
       spot.barcode,
       selectedSpotIds.has(spot.id) ? '1' : '0',
-      String(spot.arrayRow),
+      String(serializedArrayRow),
       String(spot.arrayCol),
       String(coordinates.pxl_row_in_fullres),
       String(coordinates.pxl_col_in_fullres),
@@ -129,7 +133,10 @@ const toMatrixCsv = (matrixValues: number[], rows: number, columns: number) => {
   return `${lines.join('\n')}\n`;
 };
 
-export function getPreprocessZipExportReadiness(project: PreprocessProject): PreprocessExportReadiness {
+export function getPreprocessZipExportReadiness(
+  project: PreprocessProject,
+  _options?: { includeAlignedImage?: boolean },
+): PreprocessExportReadiness {
   if (project.cropQc.status !== 'complete' || project.cropQc.isStale) {
     return {
       canExport: false,
@@ -320,7 +327,7 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_hires_image.png', dataUrlToBytes(heCropAssets.hires.dataUrl));
   zip.file('tissue_lowres_image.png', dataUrlToBytes(heCropAssets.lowres.dataUrl));
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
-  zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, exportOnlyLayout.spotCenters));
+  zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, exportOnlyLayout.spotCenters, rows));
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {
