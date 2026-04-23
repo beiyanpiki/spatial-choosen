@@ -13,6 +13,8 @@ export type ChipTemplateEntry = {
   barcode: string;
   arrayRow: number;
   arrayCol: number;
+  pxl_row_in_fullres?: number;
+  pxl_col_in_fullres?: number;
 };
 
 export type ChipConfigData = {
