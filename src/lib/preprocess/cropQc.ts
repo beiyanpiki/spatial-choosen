@@ -245,6 +245,19 @@ const getScaleFactor = (assetSize: Size, fullresSize: Size) => {
   return fullresMaxSide > 0 ? emittedMaxSide / fullresMaxSide : 1;
 };
 
+const getAxisScale = (xComponent: number, yComponent: number) => {
+  const scale = Math.hypot(xComponent, yComponent);
+  return Number.isFinite(scale) && scale > Number.EPSILON ? scale : 1;
+};
+
+const getOriginalDensityCropSize = (
+  pixelRect: PixelRect,
+  affineMatrix: AlignmentAffineMatrix,
+): Size => ({
+  width: Math.max(1, Math.round(pixelRect.width / getAxisScale(affineMatrix[0], affineMatrix[3]))),
+  height: Math.max(1, Math.round(pixelRect.height / getAxisScale(affineMatrix[1], affineMatrix[4]))),
+});
+
 const loadImage = (dataUrl: string) => new Promise<HTMLImageElement>((resolve, reject) => {
   const image = new window.Image();
   image.onload = () => resolve(image);
@@ -509,6 +522,10 @@ const makeFeatureMatchesPreview = (args: {
   const candidates = args.alignmentAccepted
     ? getFeatureMatchCandidates(args.controlPoints, args.inlierMask)
     : args.controlPoints;
+  const acceptedScale = {
+    x: args.alignmentAccepted ? leftCanvas.width / Math.max(args.pixelRect.width, 1) : 1,
+    y: args.alignmentAccepted ? leftCanvas.height / Math.max(args.pixelRect.height, 1) : 1,
+  };
   let drawableIndex = 0;
 
   for (const candidate of candidates) {
@@ -519,10 +536,16 @@ const makeFeatureMatchesPreview = (args: {
       : movingPoint;
 
     const leftPoint = args.alignmentAccepted
-      ? toCropLocalPoint(referencePoint, args.pixelRect)
+      ? {
+        x: toCropLocalPoint(referencePoint, args.pixelRect).x * acceptedScale.x,
+        y: toCropLocalPoint(referencePoint, args.pixelRect).y * acceptedScale.y,
+      }
       : referencePoint;
     const rightLocalPoint = args.alignmentAccepted
-      ? toCropLocalPoint(warpedMovingPoint, args.pixelRect)
+      ? {
+        x: toCropLocalPoint(warpedMovingPoint, args.pixelRect).x * acceptedScale.x,
+        y: toCropLocalPoint(warpedMovingPoint, args.pixelRect).y * acceptedScale.y,
+      }
       : warpedMovingPoint;
     const rightPoint = {
       x: leftCanvas.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
@@ -552,6 +575,7 @@ const makeWarpedHeCrop = (
   heCanvas: HTMLCanvasElement,
   affineMatrix: AlignmentAffineMatrix,
   pixelRect: PixelRect,
+  outputSize: Size,
 ) => {
   const context = heCanvas.getContext('2d');
   if (!context) throw new Error('HE canvas context unavailable');
@@ -561,17 +585,19 @@ const makeWarpedHeCrop = (
   let matrix: CvMat | null = null;
   let dst: CvMat | null = null;
   try {
+    const scaleX = outputSize.width / Math.max(pixelRect.width, 1);
+    const scaleY = outputSize.height / Math.max(pixelRect.height, 1);
     src = cv.matFromImageData(imageData);
     matrix = cv.matFromArray(2, 3, cv.CV_64F, [
-      affineMatrix[0],
-      affineMatrix[1],
-      affineMatrix[2] - pixelRect.x,
-      affineMatrix[3],
-      affineMatrix[4],
-      affineMatrix[5] - pixelRect.y,
+      affineMatrix[0] * scaleX,
+      affineMatrix[1] * scaleX,
+      (affineMatrix[2] - pixelRect.x) * scaleX,
+      affineMatrix[3] * scaleY,
+      affineMatrix[4] * scaleY,
+      (affineMatrix[5] - pixelRect.y) * scaleY,
     ]);
     dst = new cv.Mat();
-    const size = new cv.Size(pixelRect.width, pixelRect.height);
+    const size = new cv.Size(outputSize.width, outputSize.height);
     const fill = new cv.Scalar(255, 255, 255, 255);
 
     cv.warpAffine(
@@ -585,10 +611,10 @@ const makeWarpedHeCrop = (
     );
 
     const pixelData = new Uint8ClampedArray(dst.data);
-    const warpedImageData = new ImageData(pixelData, pixelRect.width, pixelRect.height);
+    const warpedImageData = new ImageData(pixelData, outputSize.width, outputSize.height);
     const canvas = document.createElement('canvas');
-    canvas.width = pixelRect.width;
-    canvas.height = pixelRect.height;
+    canvas.width = outputSize.width;
+    canvas.height = outputSize.height;
     const warpedContext = canvas.getContext('2d');
     if (!warpedContext) throw new Error('Warp output context unavailable');
     warpedContext.imageSmoothingEnabled = true;
@@ -629,13 +655,23 @@ export async function runCropQc(args: {
     alignmentAccepted: args.alignmentAccepted,
     solveAccepted: args.solveAccepted,
   });
+  const heFullresSize = getOriginalDensityCropSize(normalized.pixelRect, args.affineMatrix);
 
   const eosinCrop = cropCanvas(
     eosin.canvas,
     { width: eosin.width, height: eosin.height },
     normalized.pixelRect,
   );
-  const heCrop = makeWarpedHeCrop(args.cv, he.canvas, args.affineMatrix, normalized.pixelRect);
+  const eosinFrame = heFullresSize.width === eosinCrop.width && heFullresSize.height === eosinCrop.height
+    ? eosinCrop
+    : drawCanvas(eosinCrop, heFullresSize);
+  const heCrop = makeWarpedHeCrop(
+    args.cv,
+    he.canvas,
+    args.affineMatrix,
+    normalized.pixelRect,
+    heFullresSize,
+  );
   const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
 
   try {
@@ -647,18 +683,18 @@ export async function runCropQc(args: {
       affineMatrix: args.affineMatrix,
       cropPixelRect: normalized.pixelRect,
     });
-    const eosinAssetSet = buildCanonicalAssetSet(eosinCrop);
+    const eosinAssetSet = buildCanonicalAssetSet(eosinFrame);
     const heAssetSet = buildCanonicalAssetSet(heCrop);
     const cropAssets = {
       eosin: eosinAssetSet.assets,
       he: heAssetSet.assets,
     };
 
-    const checkerboardDataUrl = makeCheckerboard(eosinCrop, heCrop);
+    const checkerboardDataUrl = makeCheckerboard(eosinFrame, heCrop);
     const featureMatchesDataUrl = makeFeatureMatchesPreview({
       alignmentAccepted: useAcceptedFeatureMatchesPreview,
       eosinFull: eosin.canvas,
-      eosinCrop,
+      eosinCrop: eosinFrame,
       heFull: he.canvas,
       heCrop,
       pixelRect: normalized.pixelRect,
@@ -685,8 +721,8 @@ export async function runCropQc(args: {
       eosinReferenceGeometry,
       heQcGeometry,
       cropRect: eosinReferenceGeometry.rect,
-      cropWidth: eosinReferenceGeometry.width,
-      cropHeight: eosinReferenceGeometry.height,
+      cropWidth: fullresSize.width,
+      cropHeight: fullresSize.height,
       cropAssets,
       tissue_hires_scalef,
       tissue_lowres_scalef,
@@ -703,6 +739,9 @@ export async function runCropQc(args: {
     disposeCanvas(eosin.canvas);
     disposeCanvas(he.canvas);
     disposeCanvas(eosinCrop);
+    if (eosinFrame !== eosinCrop) {
+      disposeCanvas(eosinFrame);
+    }
     disposeCanvas(heCrop);
   }
 }

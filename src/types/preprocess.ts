@@ -202,8 +202,21 @@ export type CropQcCanonicalAsset = {
 };
 
 export type CropQcCanonicalAssetSet = {
+  /**
+   * Canonical export frame for this crop variant.
+   *
+   * `cropAssets.he.fullres` is the H&E crop rendered at the original H&E pixel
+   * density over the final crop extent. `hires` and `lowres` are derived by
+   * downsampling from this same full-resolution frame only.
+   */
   fullres: CropQcCanonicalAsset;
+  /**
+   * Downsampled derivative of `fullres` for package/UI compatibility.
+   */
   hires: CropQcCanonicalAsset;
+  /**
+   * Downsampled derivative of `fullres` for package/UI compatibility.
+   */
   lowres: CropQcCanonicalAsset;
 };
 
@@ -234,8 +247,28 @@ export type CropQcCheckerboardPreview = {
 };
 
 export type CanonicalCropQcGeometry = {
+  /**
+   * Normalized rect in the geometry's native source frame.
+   *
+   * `eosinReferenceGeometry.rect` is normalized against the full eosin/reference
+   * image. `heQcGeometry.rect` is normalized against the accepted crop-local QC
+   * frame. Export code must convert these rects into the emitted HE fullres
+   * pixel frame instead of treating them as pixel coordinates directly.
+   */
   rect: PreprocessRect;
+  /**
+   * Pixel width in the geometry's native source frame.
+   *
+   * This is geometry evidence, not necessarily the emitted HE fullres export
+   * width stored in `cropWidth`.
+   */
   width: number;
+  /**
+   * Pixel height in the geometry's native source frame.
+   *
+   * This is geometry evidence, not necessarily the emitted HE fullres export
+   * height stored in `cropHeight`.
+   */
   height: number;
 };
 
@@ -243,7 +276,9 @@ export type CanonicalCropQcGeometry = {
  * Transitional runtime contract for Task 2.
  *
  * `eosinReferenceGeometry` is the authoritative crop-domain geometry in
- * eosin/reference-image space. It is not the derived H&E QC projection.
+ * eosin/reference-image space. It is not the derived H&E QC projection, and
+ * its normalized rect must be remapped onto the emitted HE fullres export frame
+ * before export-only math consumes it.
  * `heQcGeometry` is derived QC evidence in crop-local space, produced from the
  * projected H&E geometry when available. It may remain null for workflows that
  * lack accepted/projectable H&E geometry.
@@ -259,11 +294,17 @@ export type DeprecatedCropQcGeometryAliases = {
    */
   cropRect: PreprocessRect | null;
   /**
-   * @deprecated Transitional alias for `eosinReferenceGeometry.width`.
+   * Canonical emitted HE fullres export width.
+   *
+   * @deprecated Transitional alias retained on `cropQc` for export/tissue
+   * consumers that have not yet moved to the canonical asset contract.
    */
   cropWidth: number | null;
   /**
-   * @deprecated Transitional alias for `eosinReferenceGeometry.height`.
+   * Canonical emitted HE fullres export height.
+   *
+   * @deprecated Transitional alias retained on `cropQc` for export/tissue
+   * consumers that have not yet moved to the canonical asset contract.
    */
   cropHeight: number | null;
 };
@@ -332,7 +373,13 @@ export type SpotExportTemplateAnchor = {
   barcode: string;
   arrayRow: number;
   arrayCol: number;
+  /**
+   * Canonical template anchor row in the full-resolution export frame.
+   */
   pxl_row_in_fullres: number;
+  /**
+   * Canonical template anchor column in the full-resolution export frame.
+   */
   pxl_col_in_fullres: number;
 };
 
@@ -348,9 +395,13 @@ export type SpotExportTemplateAnchorBounds = {
  *
  * The chip rect is resolved in the full-resolution export image frame with
  * `eosin-reference-geometry` as the preferred source, then `he-qc-geometry`,
- * then `crop-bounds-fallback`. Template anchors remain the canonical per-spot
- * source of truth, keeping CSV/export modeling separate from UI
- * `ProjectedSpot` center semantics.
+ * then `crop-bounds-fallback`. Template anchors and exported CSV coordinates
+ * live in that same canonical full-resolution frame, keeping ZIP/CSV modeling
+ * separate from UI `ProjectedSpot` center semantics.
+ *
+ * Contractually, `pxl_row_in_fullres` / `pxl_col_in_fullres` describe the
+ * top-left pixel of each exported spot square in the canonical full-resolution
+ * frame.
  */
 export type SpotExportGeometryContract = {
   chipRect: PreprocessRect;

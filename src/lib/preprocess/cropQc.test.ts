@@ -97,6 +97,7 @@ const IDENTITY_TRANSFORM: LocalizationImageTransform = {
   scale: 1,
 };
 const warpAffineCalls: WarpAffineCall[] = [];
+let mockImageSize = { ...IMAGE_SIZE };
 
 const getCanvasSourceDimensions = (source: unknown) => {
   if (!source || typeof source !== 'object') {
@@ -388,8 +389,8 @@ class MockCanvasElement {
 }
 
 class MockImage {
-  naturalWidth = IMAGE_SIZE.width;
-  naturalHeight = IMAGE_SIZE.height;
+  naturalWidth = mockImageSize.width;
+  naturalHeight = mockImageSize.height;
   onload: null | (() => void) = null;
   onerror: null | (() => void) = null;
 
@@ -516,7 +517,8 @@ const createOpenCvRuntime = (): OpenCvRuntime => ({
   BORDER_CONSTANT: 0,
 });
 
-const installBrowserStubs = () => {
+const installBrowserStubs = (imageSize = IMAGE_SIZE) => {
+  mockImageSize = { ...imageSize };
   vi.stubGlobal('window', { Image: MockImage });
   vi.stubGlobal('document', {
     createElement: vi.fn((tagName: string) => {
@@ -606,6 +608,7 @@ const runCropQcWithArgs = async (args: {
 
 afterEach(() => {
   warpAffineCalls.length = 0;
+  mockImageSize = { ...IMAGE_SIZE };
   vi.unstubAllGlobals();
 });
 
@@ -718,6 +721,88 @@ describe('runCropQc feature match preview', () => {
       borderMode: 0,
       fill: [255, 255, 255, 255],
       matrix: [1, 0, 10, 0, 1, -20],
+    });
+  });
+
+  it('derives HE fullres at original density and downsamples hires when the corrected frame exceeds 2000px', async () => {
+    installBrowserStubs({ width: 1000, height: 1000 });
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [0.4, 0, 0, 0, 0.4, 0],
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, { width: 2500, height: 2500 });
+    expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 2500, height: 2500 });
+    expectAssetCanvasSize(result.cropAssets.he.hires.dataUrl, { width: 2000, height: 2000 });
+    expectAssetCanvasSize(result.cropAssets.he.lowres.dataUrl, { width: 800, height: 800 });
+    expect(result.eosinReferenceGeometry.width).toBe(1000);
+    expect(result.eosinReferenceGeometry.height).toBe(1000);
+    expect(result.cropWidth).toBe(2500);
+    expect(result.cropHeight).toBe(2500);
+    expect(result.tissue_hires_scalef).toBeCloseTo(0.8);
+    expect(result.tissue_lowres_scalef).toBeCloseTo(0.32);
+    expect(getLastWarpAffineCall()).toMatchObject({
+      size: { width: 2500, height: 2500 },
+      matrix: [1, 0, 0, 0, 1, 0],
+    });
+  });
+
+  it('does not upscale hires when the corrected fullres frame is already within the limit', async () => {
+    installBrowserStubs({ width: 1000, height: 1000 });
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 1000, height: 1000 });
+    expectAssetCanvasSize(result.cropAssets.he.hires.dataUrl, { width: 1000, height: 1000 });
+    expectAssetCanvasSize(result.cropAssets.he.lowres.dataUrl, { width: 800, height: 800 });
+    expect(result.tissue_hires_scalef).toBe(1);
+    expect(result.tissue_lowres_scalef).toBeCloseTo(0.8);
+  });
+
+  it('keeps white-fill padding intact for out-of-bounds transformed regions on the larger HE fullres frame', async () => {
+    installBrowserStubs();
+
+    const chipBounds: PreprocessRect = {
+      x: -0.1,
+      y: 0.2,
+      width: 0.4,
+      height: 0.4,
+    };
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [0.5, 0, 0, 0, 0.5, 0],
+      chipBounds,
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 80, height: 80 });
+
+    expect(heSummary.putImageData).toHaveLength(1);
+    expect(heSummary.putImageData[0]).toMatchObject({
+      width: 80,
+      height: 80,
+      firstPixel: WHITE_PIXEL,
+      allPixelsMatch: false,
+    });
+    expectSamplePixels(heSummary.putImageData[0], {
+      topLeft: WHITE_PIXEL,
+      bottomLeft: WHITE_PIXEL,
+      topRight: toSyntheticSourcePixel(59, 40),
+      bottomRight: WHITE_PIXEL,
+      center: toSyntheticSourcePixel(20, 80),
+    });
+    expect(getLastWarpAffineCall()).toMatchObject({
+      size: { width: 80, height: 80 },
+      borderMode: 0,
+      fill: [255, 255, 255, 255],
+      matrix: [1, 0, 20, 0, 1, -40],
     });
   });
 
