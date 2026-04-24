@@ -963,4 +963,28 @@ describe('exportBundle canonical matrix exports', () => {
     // - Diameter: 10.16 * 0.5 ≈ 5.08px
     expect(scalefactors.spot_diameter_fullres).toBeCloseTo(5.08, 1);
   });
+
+  it('exports successfully when crop assets use blob: URLs from IndexedDB hydration', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const blob = new Blob([pngBytes], { type: 'image/png' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    const project = createBaseProject();
+    project.cropQc.cropAssets.he.fullres.dataUrl = blobUrl;
+    project.cropQc.cropAssets.he.hires.dataUrl = blobUrl;
+    project.cropQc.cropAssets.he.lowres.dataUrl = blobUrl;
+
+    const result = await exportProject(project);
+
+    expect(result.blob).toBeInstanceOf(Blob);
+    const archive = await JSZip.loadAsync(await result.blob.arrayBuffer());
+    expect(archive.file('tissue_fullres_image.png')).toBeTruthy();
+    expect(archive.file('tissue_hires_image.png')).toBeTruthy();
+    expect(archive.file('tissue_lowres_image.png')).toBeTruthy();
+
+    const fullresData = await archive.file('tissue_fullres_image.png')!.async('uint8array');
+    expect(fullresData).toEqual(pngBytes);
+
+    URL.revokeObjectURL(blobUrl);
+  });
 });

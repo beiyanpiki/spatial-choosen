@@ -1,8 +1,8 @@
 'use client';
 
 import { useToast } from '@chakra-ui/react';
-import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { deserializePreprocessImport } from '@/lib/preprocess/package';
 import { buildUpdatedProjectSnapshot } from '@/lib/preprocess/projectUpdates';
 import {
@@ -82,9 +82,8 @@ type PersistOptions = {
 function PreprocessContent() {
   const toast = useToast();
   const router = useRouter();
-  const preprocessId = typeof window === 'undefined'
-    ? null
-    : new URLSearchParams(window.location.search).get('preprocess_id');
+  const searchParams = useSearchParams();
+  const preprocessId = searchParams.get('preprocess_id');
   const [projectName, setProjectName] = useState('');
   const [projects, setProjects] = useState<PreprocessProjectSummary[]>([]);
   const [project, setProject] = useState<PreprocessProject | null>(null);
@@ -528,7 +527,11 @@ function PreprocessContent() {
 }
 
 function PreprocessPage() {
-  return <PreprocessContent />;
+  return (
+    <Suspense>
+      <PreprocessContent />
+    </Suspense>
+  );
 }
 
 export default PreprocessPage;

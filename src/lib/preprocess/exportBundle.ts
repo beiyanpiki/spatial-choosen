@@ -43,8 +43,14 @@ type PreprocessExportReadiness =
       };
     };
 
-const dataUrlToBytes = (dataUrl: string) => {
-  const [meta, payload] = dataUrl.split(',', 2);
+const imageSourceToBytes = async (sourceUrl: string): Promise<Uint8Array> => {
+  if (sourceUrl.startsWith('blob:')) {
+    const response = await fetch(sourceUrl);
+    const arrayBuffer = await response.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+  }
+
+  const [meta, payload] = sourceUrl.split(',', 2);
   if (!meta || !payload) throw new Error('Invalid data URL payload');
   const binary = atob(payload);
   const buffer = new Uint8Array(binary.length);
@@ -323,15 +329,15 @@ export async function exportPreprocessZip(args: {
   };
 
   const zip = new JSZip();
-  zip.file('tissue_fullres_image.png', dataUrlToBytes(heCropAssets.fullres.dataUrl));
-  zip.file('tissue_hires_image.png', dataUrlToBytes(heCropAssets.hires.dataUrl));
-  zip.file('tissue_lowres_image.png', dataUrlToBytes(heCropAssets.lowres.dataUrl));
+  zip.file('tissue_fullres_image.png', await imageSourceToBytes(heCropAssets.fullres.dataUrl));
+  zip.file('tissue_hires_image.png', await imageSourceToBytes(heCropAssets.hires.dataUrl));
+  zip.file('tissue_lowres_image.png', await imageSourceToBytes(heCropAssets.lowres.dataUrl));
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
   zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, exportOnlyLayout.spotCenters, rows));
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {
-    zip.file('aligned_tissue_image.png', dataUrlToBytes(heCropAssets.fullres.dataUrl));
+    zip.file('aligned_tissue_image.png', await imageSourceToBytes(heCropAssets.fullres.dataUrl));
   }
 
   if (includeProjectJson) {
