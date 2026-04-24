@@ -1,8 +1,8 @@
 'use client';
 
 import { useToast } from '@chakra-ui/react';
-import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { deserializePreprocessImport } from '@/lib/preprocess/package';
 import { buildUpdatedProjectSnapshot } from '@/lib/preprocess/projectUpdates';
 import {
@@ -82,9 +82,8 @@ type PersistOptions = {
 function PreprocessContent() {
   const toast = useToast();
   const router = useRouter();
-  const preprocessId = typeof window === 'undefined'
-    ? null
-    : new URLSearchParams(window.location.search).get('preprocess_id');
+  const searchParams = useSearchParams();
+  const preprocessId = searchParams.get('preprocess_id');
   const [projectName, setProjectName] = useState('');
   const [projects, setProjects] = useState<PreprocessProjectSummary[]>([]);
   const [project, setProject] = useState<PreprocessProject | null>(null);
@@ -393,6 +392,7 @@ function PreprocessContent() {
     try {
       const nextProject = buildEmptyPreprocessProject(projectName);
       await upsertPreprocessProject(nextProject);
+      await refreshProjects();
       setProjectName('');
       toast({ title: 'Preprocess project created', status: 'success' });
       openProject(nextProject.id);
@@ -406,7 +406,7 @@ function PreprocessContent() {
     } finally {
       setIsCreating(false);
     }
-  }, [openProject, projectName, toast]);
+  }, [openProject, projectName, toast, refreshProjects]);
 
   const handleDeleteProject = useCallback(async (projectId: string) => {
     setIsDeletingId(projectId);
@@ -433,6 +433,7 @@ function PreprocessContent() {
     try {
         const importedProject = normalizeProjectForWorkspace(await deserializePreprocessImport(fileList[0]));
         await upsertPreprocessProject(importedProject);
+        await refreshProjects();
       toast({ title: 'Preprocess project imported', status: 'success' });
       openProject(importedProject.id);
     } catch (error) {
@@ -526,7 +527,11 @@ function PreprocessContent() {
 }
 
 function PreprocessPage() {
-  return <PreprocessContent />;
+  return (
+    <Suspense>
+      <PreprocessContent />
+    </Suspense>
+  );
 }
 
 export default PreprocessPage;

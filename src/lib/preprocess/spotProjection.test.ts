@@ -62,30 +62,28 @@ const exportChip15um = {
 } as const;
 
 describe("spot export geometry contract", () => {
-	it("prefers eosinReferenceGeometry rect when present", () => {
+	it("prefers eosinReferenceGeometry and maps to full crop bounds", () => {
 		expect(
 			resolveSpotExportGeometry({
 				templateEntries,
 				cropQc: {
 					eosinReferenceGeometry: {
+						// eosinReferenceGeometry describes crop region in eosin space
+						// It maps to full HE fullres export frame (the crop)
 						rect: {
-							x: 12,
-							y: 18,
-							width: 340,
-							height: 240,
+							x: 0.1,
+							y: 0.1,
+							width: 0.8,
+							height: 0.8,
 						},
-						width: 340,
-						height: 240,
+						width: 1000,
+						height: 800,
 					},
 					heQcGeometry: {
-						rect: {
-							x: 1,
-							y: 2,
-							width: 350,
-							height: 250,
-						},
-						width: 350,
-						height: 250,
+						// heQcGeometry is ignored when eosinReferenceGeometry is present
+						rect: { x: 0, y: 0, width: 1, height: 1 },
+						width: 400,
+						height: 300,
 					},
 				},
 				cropWidth: 400,
@@ -93,10 +91,11 @@ describe("spot export geometry contract", () => {
 			}),
 		).toEqual({
 				chipRect: {
-					x: 12,
-					y: 18,
-					width: 340,
-					height: 240,
+					// Full crop bounds - eosinReferenceGeometry maps to entire crop
+					x: 0,
+					y: 0,
+					width: 400,
+					height: 300,
 				},
 				chipRectSource: "eosin-reference-geometry",
 				templateAnchorBounds: {
@@ -116,11 +115,12 @@ describe("spot export geometry contract", () => {
 				cropQc: {
 					eosinReferenceGeometry: null,
 					heQcGeometry: {
+						// Normalized coordinates - will be multiplied by cropWidth/cropHeight
 						rect: {
-							x: 12,
-							y: 18,
-							width: 350,
-							height: 250,
+							x: 12 / 400,
+							y: 18 / 300,
+							width: 350 / 400,
+							height: 250 / 300,
 						},
 						width: 350,
 						height: 250,
@@ -185,11 +185,12 @@ describe("spot export fullres layout", () => {
 				chipManifest: exportChip50um,
 				cropQc: {
 					heQcGeometry: {
+						// Normalized coordinates - will be multiplied by cropWidth/cropHeight
 						rect: {
-							x: 75,
-							y: 75,
-							width: 100,
-							height: 100,
+							x: 75 / 250,
+							y: 75 / 250,
+							width: 100 / 250,
+							height: 100 / 250,
 						},
 						width: 100,
 						height: 100,
@@ -247,32 +248,21 @@ describe("spot export fullres layout", () => {
 		});
 	});
 
-	it("maps transformed export centers in the eosin image frame", () => {
+	it("maps template coordinates to full crop when using eosinReferenceGeometry", () => {
+		// eosinReferenceGeometry maps to full crop bounds, ignoring rect values
 		expect(
 			resolveSpotExportFullresLayout({
 				templateEntries,
 				chipManifest: exportChip50um,
 				cropQc: {
 					eosinReferenceGeometry: {
-						rect: {
-							x: 24,
-							y: 96,
-							width: 180,
-							height: 120,
-						},
-						width: 180,
-						height: 120,
+						// eosinReferenceGeometry maps to full crop, rect values ignored
+						rect: { x: 0, y: 0, width: 1, height: 1 },
+						width: 1000,
+						height: 800,
 					},
-					heQcGeometry: {
-						rect: {
-							x: 5,
-							y: 10,
-							width: 150,
-							height: 240,
-						},
-						width: 150,
-						height: 240,
-					},
+					// heQcGeometry is ignored when eosinReferenceGeometry is present
+					heQcGeometry: null,
 				},
 				cropWidth: 500,
 				cropHeight: 500,
@@ -282,29 +272,33 @@ describe("spot export fullres layout", () => {
 				barcode: "spot-a",
 				arrayRow: 1,
 				arrayCol: 1,
-				pxl_row_in_fullres: 96,
-				pxl_col_in_fullres: 24,
+				// Template min (75, 75) maps to crop (0, 0)
+				pxl_row_in_fullres: 0,
+				pxl_col_in_fullres: 0,
 			},
 			{
 				barcode: "spot-b",
 				arrayRow: 1,
 				arrayCol: 2,
-				pxl_row_in_fullres: 96,
-				pxl_col_in_fullres: 204,
+				// Row: min = 0, Col: (175-75)/(175-75)*500 = 500
+				pxl_row_in_fullres: 0,
+				pxl_col_in_fullres: 500,
 			},
 			{
 				barcode: "spot-c",
 				arrayRow: 2,
 				arrayCol: 1,
-				pxl_row_in_fullres: 216,
-				pxl_col_in_fullres: 24,
+				// Row: (175-75)/(175-75)*500 = 500, Col: min = 0
+				pxl_row_in_fullres: 500,
+				pxl_col_in_fullres: 0,
 			},
 			{
 				barcode: "spot-d",
 				arrayRow: 2,
 				arrayCol: 2,
-				pxl_row_in_fullres: 216,
-				pxl_col_in_fullres: 204,
+				// Template max (175, 175) maps to crop (500, 500)
+				pxl_row_in_fullres: 500,
+				pxl_col_in_fullres: 500,
 			},
 		]);
 	});
@@ -316,11 +310,12 @@ describe("spot export fullres layout", () => {
 				chipManifest: exportChip50um,
 				cropQc: {
 					heQcGeometry: {
+						// Normalized coordinates - will be multiplied by cropWidth/cropHeight
 						rect: {
-							x: 35.4,
-							y: 80.6,
-							width: 150.2,
-							height: 240.2,
+							x: 35.4 / 500,
+							y: 80.6 / 500,
+							width: 150.2 / 500,
+							height: 240.2 / 500,
 						},
 						width: 150.2,
 						height: 240.2,
@@ -368,11 +363,12 @@ describe("spot export fullres layout", () => {
 				chipManifest: exportChip50um,
 				cropQc: {
 					heQcGeometry: {
+						// Normalized coordinates - will be multiplied by cropWidth/cropHeight
 						rect: {
-							x: 35,
-							y: 80,
-							width: 150,
-							height: 240,
+							x: 35 / 500,
+							y: 80 / 500,
+							width: 150 / 500,
+							height: 240 / 500,
 						},
 						width: 150,
 						height: 240,
@@ -397,11 +393,12 @@ describe("spot export fullres layout", () => {
 			chipManifest: exportChip15um,
 			cropQc: {
 				heQcGeometry: {
+					// Normalized coordinates - will be multiplied by cropWidth/cropHeight
 					rect: {
-						x: 33,
-						y: 33,
-						width: 40,
-						height: 40,
+						x: 33 / 100,
+						y: 33 / 100,
+						width: 40 / 100,
+						height: 40 / 100,
 					},
 					width: 40,
 					height: 40,
@@ -505,11 +502,12 @@ describe("spot projection canonical crop contract", () => {
 			chipManifest: exportChip50um,
 			cropQc: {
 				heQcGeometry: {
+					// Normalized coordinates - will be multiplied by cropWidth/cropHeight
 					rect: {
-						x: 35,
-						y: 80,
-						width: 150,
-						height: 240,
+						x: 35 / 500,
+						y: 80 / 500,
+						width: 150 / 500,
+						height: 240 / 500,
 					},
 					width: 150,
 					height: 240,
@@ -533,11 +531,12 @@ describe("spot projection canonical crop contract", () => {
 			chipManifest: exportChip50um,
 			cropQc: {
 				heQcGeometry: {
+					// Normalized coordinates - will be multiplied by cropWidth/cropHeight
 					rect: {
-						x: 35,
-						y: 80,
-						width: 150,
-						height: 240,
+						x: 35 / 500,
+						y: 80 / 500,
+						width: 150 / 500,
+						height: 240 / 500,
 					},
 					width: 150,
 					height: 240,

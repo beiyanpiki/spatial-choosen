@@ -6,6 +6,7 @@ import type {
   PreprocessImageKind,
   PreprocessProject,
   PreprocessSourceImage,
+  ProjectedSpot,
   SourceAssetsSlice,
   TissueSelectionSlice,
 } from '../../types/preprocess';
@@ -20,9 +21,11 @@ import {
   PREPROCESS_STORAGE_KEY,
   PREPROCESS_STORAGE_SCHEMA_VERSION,
   PREPROCESS_THUMBNAIL_STORE,
+  PREPROCESS_TISSUE_SELECTION_STORE,
 } from './constants';
 import { migratePreprocessProject } from './migrations';
 import { createThumbnailBlob } from './sourceImage';
+import { matrixFromSelectedSpotIds } from './tissueMatrix';
 
 declare global {
   interface Window {
@@ -107,9 +110,13 @@ type StoredTissueSelectionSlice = Omit<
   | 'selectedRegionId'
   | 'previewDataUrl'
   | 'selectedSpotIds'
+  | 'matrix'
+  | 'autoSelectedSpotIds'
 > & {
   previewDataUrl: null;
   selectedSpotIds: null;
+  matrix: null;
+  autoSelectedSpotIds: null;
 };
 
 type StoredProjectedSpotIndexEntry = {
@@ -182,6 +189,9 @@ const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
     }
     if (!db.objectStoreNames.contains(PREPROCESS_DERIVED_IMAGE_STORE)) {
       db.createObjectStore(PREPROCESS_DERIVED_IMAGE_STORE);
+    }
+    if (!db.objectStoreNames.contains(PREPROCESS_TISSUE_SELECTION_STORE)) {
+      db.createObjectStore(PREPROCESS_TISSUE_SELECTION_STORE);
     }
   };
   request.onsuccess = () => resolve(request.result);
@@ -669,11 +679,15 @@ const toProjectMeta = (project: PreprocessProject): PreprocessProjectMeta => ({
     regions: _regions,
     selectedRegionId: _selectedRegionId,
     previewDataUrl: _previewDataUrl,
+    matrix: _matrix,
+    autoSelectedSpotIds: _autoSelectedSpotIds,
     ...canonicalTissueSelection
   }) => ({
     ...canonicalTissueSelection,
     previewDataUrl: null,
     selectedSpotIds: null,
+    matrix: null,
+    autoSelectedSpotIds: null,
   }))(project.tissueSelection),
   exportState: {
     ...project.exportState,
@@ -758,12 +772,21 @@ const hydrateDerivedImagePayload = async (payload: string | Blob | undefined) =>
 
 const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessProject | undefined> => {
   const repairedMeta = repairCurrentSchemaCropGeometry(meta);
-  const eosinDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'eosin'));
-  const heDataUrl = await readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he'));
-  const eosinThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'eosin'));
-  const heThumbnailDataUrl = await readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'he'));
-  const focusedHePayload = await readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(repairedMeta.id));
-  const cropQc = await hydrateCropQcSlice(repairedMeta.id, repairedMeta.cropQc);
+  const [
+    eosinDataUrl,
+    heDataUrl,
+    eosinThumbnailDataUrl,
+    heThumbnailDataUrl,
+    focusedHePayload,
+    cropQc,
+  ] = await Promise.all([
+    readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'eosin')),
+    readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he')),
+    readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'eosin')),
+    readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'he')),
+    readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(repairedMeta.id)),
+    hydrateCropQcSlice(repairedMeta.id, repairedMeta.cropQc),
+  ]);
 
   const eosinResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
   const heResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
@@ -784,10 +807,38 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
 
   const repairedProjectedSpotIndex = await repairProjectedSpotIndex(repairedMeta.chipConfig);
 
-  const runtimeSelectedSpotIds = selectedSpotIdsFromStoredIndex(
-    repairedMeta.tissueSelection.matrix,
-    repairedProjectedSpotIndex,
-  );
+  // Read autoSelectedSpotIds from IndexedDB (not from metadata to avoid localStorage quota issues)
+  const storedAutoSelectedSpotIds = await readTissueSelectionStore(repairedMeta.id);
+  const autoSelectedSpotIds = storedAutoSelectedSpotIds ?? [];
+
+  const reconstructedMatrix = autoSelectedSpotIds.length > 0 && repairedMeta.chipConfig.rows && repairedMeta.chipConfig.columns && repairedProjectedSpotIndex
+    ? matrixFromSelectedSpotIds({
+        rows: repairedMeta.chipConfig.rows,
+        columns: repairedMeta.chipConfig.columns,
+        projectedSpots: repairedProjectedSpotIndex.map((entry) => ({
+          id: entry.id,
+          barcode: entry.id,
+          arrayRow: entry.arrayRow,
+          arrayCol: entry.arrayCol,
+          x: 0,
+          y: 0,
+          chipX: 0,
+          chipY: 0,
+          imageX: 0,
+          imageY: 0,
+          diameterX: 0,
+          diameterY: 0,
+        })) as ProjectedSpot[],
+        selectedSpotIds: autoSelectedSpotIds,
+      })
+    : null;
+
+  const runtimeSelectedSpotIds = reconstructedMatrix && repairedProjectedSpotIndex
+    ? selectedSpotIdsFromStoredIndex(
+        reconstructedMatrix,
+        repairedProjectedSpotIndex,
+      )
+    : null;
 
   const project = migratePreprocessProject({
     ...repairedMeta,
@@ -809,7 +860,10 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
       ...repairedMeta.chipConfig,
       projectedSpots: null,
     },
-    tissueSelection: repairedMeta.tissueSelection,
+    tissueSelection: {
+      ...repairedMeta.tissueSelection,
+      autoSelectedSpotIds: [],
+    } as TissueSelectionSlice,
   });
 
   const hydratedProject = {
@@ -833,7 +887,9 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
       ...runtimeTissueSelection
     }) => ({
       ...runtimeTissueSelection,
+      matrix: reconstructedMatrix,
       selectedSpotIds: runtimeSelectedSpotIds,
+      autoSelectedSpotIds,
     }))(project.tissueSelection),
   };
 
@@ -911,6 +967,43 @@ const syncCropQcDerivedImageStores = async (projectId: string, cropQc: Preproces
   );
 };
 
+const tissueSelectionStoreKey = (projectId: string) => `${projectId}:tissue-selection`;
+
+const syncTissueSelectionStore = async (
+  projectId: string,
+  tissueSelection: PreprocessProject['tissueSelection'],
+) => {
+  const key = tissueSelectionStoreKey(projectId);
+  const payload = tissueSelection.autoSelectedSpotIds.length > 0
+    ? JSON.stringify(tissueSelection.autoSelectedSpotIds)
+    : undefined;
+
+  if (payload) {
+    await saveStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key, payload);
+    return;
+  }
+
+  await deleteStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key);
+};
+
+const readTissueSelectionStore = async (
+  projectId: string,
+): Promise<string[] | undefined> => {
+  const key = tissueSelectionStoreKey(projectId);
+  const value = await readStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key);
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+        return parsed as string[];
+      }
+    } catch {
+      // Invalid JSON, return undefined
+    }
+  }
+  return undefined;
+};
+
 export async function readPreprocessProjects(): Promise<PreprocessProject[]> {
   const metas = await readMetas();
   const hydrated = await Promise.all(metas.map((meta) => hydrateProject(meta)));
@@ -952,6 +1045,7 @@ export async function upsertPreprocessProject(
     ...PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),
     syncDerivedImageStore(heFocusDerivedImageStoreKey(migratedProject.id), migratedProject.heFocus.focusedImageDataUrl),
     syncCropQcDerivedImageStores(migratedProject.id, migratedProject.cropQc),
+    syncTissueSelectionStore(migratedProject.id, migratedProject.tissueSelection),
   ]);
 }
 
@@ -978,6 +1072,7 @@ export async function deletePreprocessProject(projectId: string) {
       deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(projectId)),
       deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcCheckerboardDerivedImageStoreKey(projectId)),
       deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcFeatureMatchesDerivedImageStoreKey(projectId)),
+      deleteStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, tissueSelectionStoreKey(projectId)),
     ],
   );
 }

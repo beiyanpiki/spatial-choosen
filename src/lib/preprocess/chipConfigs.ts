@@ -76,6 +76,8 @@ export const parseChipTemplateCsv = (chip: ChipConfigManifest, csvText: string):
   const barcodeIndex = header.indexOf('barcode');
   const rowIndex = header.indexOf('array_row');
   const colIndex = header.indexOf('array_col');
+  const pxlRowIndex = header.indexOf('pxl_row_in_fullres');
+  const pxlColIndex = header.indexOf('pxl_col_in_fullres');
   if (barcodeIndex < 0 || rowIndex < 0 || colIndex < 0) {
     throw new Error(`Chip config ${chip.id} template CSV is malformed`);
   }
@@ -88,6 +90,8 @@ export const parseChipTemplateCsv = (chip: ChipConfigManifest, csvText: string):
     const barcode = columns[barcodeIndex]?.trim();
     const arrayRow = Number(columns[rowIndex]);
     const arrayCol = Number(columns[colIndex]);
+    const pxlRow = pxlRowIndex >= 0 ? Number(columns[pxlRowIndex]) : NaN;
+    const pxlCol = pxlColIndex >= 0 ? Number(columns[pxlColIndex]) : NaN;
 
     if (!barcode || !Number.isInteger(arrayRow) || !Number.isInteger(arrayCol)) {
       throw new Error(`Chip config ${chip.id} template CSV is malformed`);
@@ -108,7 +112,14 @@ export const parseChipTemplateCsv = (chip: ChipConfigManifest, csvText: string):
 
     seenBarcodes.add(barcode);
     seenPositions.add(positionKey);
-    entries.push({ barcode, arrayRow, arrayCol });
+    const entry: ChipTemplateEntry = { barcode, arrayRow, arrayCol };
+    if (Number.isFinite(pxlRow)) {
+      entry.pxl_row_in_fullres = pxlRow;
+    }
+    if (Number.isFinite(pxlCol)) {
+      entry.pxl_col_in_fullres = pxlCol;
+    }
+    entries.push(entry);
   }
 
   if (entries.length === 0) {

@@ -47,19 +47,36 @@ const resolveSpotExportChipRect = (args: {
   chipRect: PreprocessRect;
   chipRectSource: SpotExportChipRectSource;
 } => {
-  const eosinReferenceRect = args.cropQc?.eosinReferenceGeometry?.rect;
-  const heQcRect = args.cropQc?.heQcGeometry?.rect;
+  const { cropWidth, cropHeight } = args;
+  const eosinReferenceGeometry = args.cropQc?.eosinReferenceGeometry;
+  const heQcGeometry = args.cropQc?.heQcGeometry;
+  const heQcRect = heQcGeometry?.rect;
 
-  if (eosinReferenceRect) {
+  // eosinReferenceGeometry describes the crop region in eosin image space.
+  // It should map to the full HE fullres export frame (the crop).
+  // See preprocess.ts lines 278-281 for the contract.
+  if (eosinReferenceGeometry) {
     return {
-      chipRect: { ...eosinReferenceRect },
+      chipRect: {
+        x: 0,
+        y: 0,
+        width: cropWidth,
+        height: cropHeight,
+      },
       chipRectSource: 'eosin-reference-geometry',
     };
   }
 
+  // heQcGeometry describes the chip region within the crop-local frame.
+  // Convert normalized coordinates to pixel coordinates.
   if (heQcRect) {
     return {
-      chipRect: { ...heQcRect },
+      chipRect: {
+        x: heQcRect.x * cropWidth,
+        y: heQcRect.y * cropHeight,
+        width: heQcRect.width * cropWidth,
+        height: heQcRect.height * cropHeight,
+      },
       chipRectSource: 'he-qc-geometry',
     };
   }
@@ -68,8 +85,8 @@ const resolveSpotExportChipRect = (args: {
     chipRect: {
       x: 0,
       y: 0,
-      width: args.cropWidth,
-      height: args.cropHeight,
+      width: cropWidth,
+      height: cropHeight,
     },
     chipRectSource: 'crop-bounds-fallback',
   };
