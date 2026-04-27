@@ -10,9 +10,11 @@ import type {
 import {
   PREPROCESS_DB_NAME,
   PREPROCESS_DERIVED_IMAGE_STORE,
+  PREPROCESS_NUMERIC_DEFAULTS,
   PREPROCESS_STORAGE_KEY,
 } from './constants';
 import { migratePreprocessProject } from './migrations';
+import { createDownsampledBlobFromSource, loadImageElement } from './sourceImage';
 import { validateTissueActivationMatrix } from './tissueMatrix';
 import { resolveTissueSelectionSupport } from './tissueSupport';
 
@@ -20,7 +22,15 @@ export const PACKAGE_VERSION = 4;
 
 type PackagedSourceImage = Omit<
   PreprocessSourceImage,
-  'sourceBlob' | 'thumbnailBlob' | 'objectUrl' | 'thumbnailObjectUrl' | 'dataUrl' | 'thumbnailDataUrl'
+  | 'sourceBlob'
+  | 'thumbnailBlob'
+  | 'workingBlob'
+  | 'objectUrl'
+  | 'thumbnailObjectUrl'
+  | 'workingObjectUrl'
+  | 'dataUrl'
+  | 'thumbnailDataUrl'
+  | 'workingDataUrl'
 >;
 
 type PreprocessPackagedProject = Omit<
@@ -101,13 +111,27 @@ const isBrowser = () => typeof window !== "undefined";
 
 const stripRuntimeImageState = (image: PreprocessSourceImage | null): PackagedSourceImage | null => {
   if (!image) return null;
-  const { sourceBlob, thumbnailBlob, objectUrl, thumbnailObjectUrl, dataUrl, thumbnailDataUrl, ...rest } = image;
+  const {
+    sourceBlob,
+    thumbnailBlob,
+    workingBlob,
+    objectUrl,
+    thumbnailObjectUrl,
+    workingObjectUrl,
+    dataUrl,
+    thumbnailDataUrl,
+    workingDataUrl,
+    ...rest
+  } = image;
   void sourceBlob;
   void thumbnailBlob;
+  void workingBlob;
   void objectUrl;
   void thumbnailObjectUrl;
+  void workingObjectUrl;
   void dataUrl;
   void thumbnailDataUrl;
+  void workingDataUrl;
   return rest;
 };
 
@@ -327,14 +351,52 @@ export async function getPreprocessPackageSourceEntries(project: PreprocessProje
   ];
 }
 
-const hydratePackagedSourceBlob = (image: PreprocessSourceImage, blob: Blob): PreprocessSourceImage => {
-  const objectUrl = URL.createObjectURL(blob);
+const getWorkingDimensions = (sourceWidth: number, sourceHeight: number) => {
+  const longestEdge = Math.max(sourceWidth, sourceHeight);
+  const scale = longestEdge > 0 ? Math.min(1, PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension / longestEdge) : 1;
+
   return {
+    width: Math.max(1, Math.round(sourceWidth * scale)),
+    height: Math.max(1, Math.round(sourceHeight * scale)),
+  };
+};
+
+const hydratePackagedSourceBlob = async (image: PreprocessSourceImage, blob: Blob): Promise<PreprocessSourceImage> => {
+  const objectUrl = URL.createObjectURL(blob);
+  const hydratedImage: PreprocessSourceImage = {
     ...image,
     sourceBlob: blob,
     objectUrl,
     dataUrl: objectUrl,
   };
+
+  if (hydratedImage.workingBlob || hydratedImage.workingDataUrl || hydratedImage.workingObjectUrl) {
+    return hydratedImage;
+  }
+
+  try {
+    const sourceImage = await loadImageElement(objectUrl);
+    const workingBlob = await createDownsampledBlobFromSource(
+      sourceImage,
+      sourceImage.naturalWidth,
+      sourceImage.naturalHeight,
+      PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
+    );
+    const workingObjectUrl = URL.createObjectURL(workingBlob);
+    const workingDimensions = getWorkingDimensions(sourceImage.naturalWidth, sourceImage.naturalHeight);
+
+    return {
+      ...hydratedImage,
+      workingBlob,
+      workingObjectUrl,
+      workingDataUrl: workingObjectUrl,
+      workingWidth: hydratedImage.workingWidth ?? workingDimensions.width,
+      workingHeight: hydratedImage.workingHeight ?? workingDimensions.height,
+    };
+  } catch (error) {
+    void error;
+    return hydratedImage;
+  }
 };
 
 const attachPackagedSourceBlobs = async (project: PreprocessProject, zip: JSZip) => {
@@ -349,7 +411,7 @@ const attachPackagedSourceBlobs = async (project: PreprocessProject, zip: JSZip)
       throw new Error(`ZIP is missing ${packageSourcePath(kind)}`);
     }
 
-    images[kind] = hydratePackagedSourceBlob(image, await entry.async('blob'));
+    images[kind] = await hydratePackagedSourceBlob(image, await entry.async('blob'));
   }
 
   return {

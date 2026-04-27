@@ -2,10 +2,11 @@ import type { PreprocessCropAssetScale, PreprocessImageKind, PreprocessStepId } 
 
 export const PREPROCESS_STORAGE_KEY = "spatial-preprocess-projects";
 export const PREPROCESS_DB_NAME = "spatial-preprocess";
-export const PREPROCESS_DB_VERSION = 4;
-export const PREPROCESS_STORAGE_SCHEMA_VERSION = 5;
+export const PREPROCESS_DB_VERSION = 5;
+export const PREPROCESS_STORAGE_SCHEMA_VERSION = 6;
 export const PREPROCESS_SOURCE_IMAGE_STORE = "preprocess-source-images";
 export const PREPROCESS_THUMBNAIL_STORE = "preprocess-thumbnails";
+export const PREPROCESS_WORKING_IMAGE_STORE = "preprocess-working-images";
 export const PREPROCESS_DERIVED_IMAGE_STORE = "preprocess-derived-images";
 export const PREPROCESS_TISSUE_SELECTION_STORE = "preprocess-tissue-selection";
 
@@ -30,6 +31,7 @@ export const PREPROCESS_NUMERIC_DEFAULTS = {
   defaultRotationDegrees: 0,
   defaultScale: 1,
   thumbnailMaxDimension: 1000,
+  workingMaxDimension: 2048,
 } as const;
 
 export const PREPROCESS_OVERSIZED_IMAGE_LIMITS = {

@@ -41,13 +41,13 @@ type SpotExportCropQcGeometry = Pick<
 
 const resolveSpotExportChipRect = (args: {
   cropQc?: SpotExportCropQcGeometry | null;
-  cropWidth: number;
-  cropHeight: number;
+  exportFullresWidth: number;
+  exportFullresHeight: number;
 }): {
   chipRect: PreprocessRect;
   chipRectSource: SpotExportChipRectSource;
 } => {
-  const { cropWidth, cropHeight } = args;
+  const { exportFullresWidth, exportFullresHeight } = args;
   const eosinReferenceGeometry = args.cropQc?.eosinReferenceGeometry;
   const heQcGeometry = args.cropQc?.heQcGeometry;
   const heQcRect = heQcGeometry?.rect;
@@ -60,8 +60,8 @@ const resolveSpotExportChipRect = (args: {
       chipRect: {
         x: 0,
         y: 0,
-        width: cropWidth,
-        height: cropHeight,
+        width: exportFullresWidth,
+        height: exportFullresHeight,
       },
       chipRectSource: 'eosin-reference-geometry',
     };
@@ -72,10 +72,10 @@ const resolveSpotExportChipRect = (args: {
   if (heQcRect) {
     return {
       chipRect: {
-        x: heQcRect.x * cropWidth,
-        y: heQcRect.y * cropHeight,
-        width: heQcRect.width * cropWidth,
-        height: heQcRect.height * cropHeight,
+        x: heQcRect.x * exportFullresWidth,
+        y: heQcRect.y * exportFullresHeight,
+        width: heQcRect.width * exportFullresWidth,
+        height: heQcRect.height * exportFullresHeight,
       },
       chipRectSource: 'he-qc-geometry',
     };
@@ -85,8 +85,8 @@ const resolveSpotExportChipRect = (args: {
     chipRect: {
       x: 0,
       y: 0,
-      width: cropWidth,
-      height: cropHeight,
+      width: exportFullresWidth,
+      height: exportFullresHeight,
     },
     chipRectSource: 'crop-bounds-fallback',
   };
@@ -318,20 +318,20 @@ export function getProjectedSpotFullresCsvCoordinates(args: {
 export function resolveSpotExportGeometry(args: {
   templateEntries: ChipTemplateEntry[];
   cropQc?: SpotExportCropQcGeometry | null;
-  cropWidth: number;
-  cropHeight: number;
+  exportFullresWidth: number;
+  exportFullresHeight: number;
 }) {
   const {
     templateEntries,
     cropQc,
-    cropWidth,
-    cropHeight,
+    exportFullresWidth,
+    exportFullresHeight,
   } = args;
   const templateAnchors = templateEntries.map(toSpotExportTemplateAnchor);
   const { chipRect, chipRectSource } = resolveSpotExportChipRect({
     cropQc,
-    cropWidth,
-    cropHeight,
+    exportFullresWidth,
+    exportFullresHeight,
   });
 
   return {
@@ -346,21 +346,21 @@ export function resolveSpotExportFullresLayout(args: {
   templateEntries: ChipTemplateEntry[];
   chipManifest: Pick<ChipConfigManifest, 'spotDiameter' | 'spotGap'>;
   cropQc?: SpotExportCropQcGeometry | null;
-  cropWidth: number;
-  cropHeight: number;
+  exportFullresWidth: number;
+  exportFullresHeight: number;
 }) {
   const {
     templateEntries,
     chipManifest,
     cropQc,
-    cropWidth,
-    cropHeight,
+    exportFullresWidth,
+    exportFullresHeight,
   } = args;
   const exportGeometry = resolveSpotExportGeometry({
     templateEntries,
     cropQc,
-    cropWidth,
-    cropHeight,
+    exportFullresWidth,
+    exportFullresHeight,
   });
   const rowPitch = resolveSpotExportAxisPitch({
     sourceValues: exportGeometry.templateAnchors.map((anchor) => anchor.pxl_row_in_fullres),

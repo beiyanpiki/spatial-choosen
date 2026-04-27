@@ -9,13 +9,14 @@ import { type ChipConfigManifest, loadChipConfigData } from './chipConfigs';
 import { getPreprocessPackageSourceEntries, serializePreprocessProject } from './package';
 import {
   resolveAuthoritativeSpotDiameterFullres,
-  resolveSpotExportFullresDiameter,
   resolveSpotExportFullresLayout,
 } from './spotProjection';
 import { selectedSpotIdsFromMatrix, validateTissueActivationMatrix } from './tissueMatrix';
 import { resolveTissueSelectionSupport } from './tissueSupport';
 
 const FIDUCIAL_DIAMETER_FULLRES = 0.027;
+const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution HE crop image dimensions are unavailable. Re-run Crop/QC before export.';
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 
 type PreprocessExportReadiness =
   | {
@@ -60,6 +61,41 @@ const imageSourceToBytes = async (sourceUrl: string): Promise<Uint8Array> => {
   return buffer;
 };
 
+export const getPngDimensionsFromBytes = (bytes: Uint8Array) => {
+  const fail = () => {
+    throw new Error(FULLRES_DIMENSIONS_UNAVAILABLE_ERROR);
+  };
+
+  if (bytes.byteLength < 24) {
+    fail();
+  }
+
+  for (let index = 0; index < PNG_SIGNATURE.length; index += 1) {
+    if (bytes[index] !== PNG_SIGNATURE[index]) {
+      fail();
+    }
+  }
+
+  if (
+    bytes[12] !== 0x49
+    || bytes[13] !== 0x48
+    || bytes[14] !== 0x44
+    || bytes[15] !== 0x52
+  ) {
+    fail();
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = view.getUint32(16);
+  const height = view.getUint32(20);
+
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+    fail();
+  }
+
+  return { width, height };
+};
+
 type ExportOnlySpotCenter = {
   arrayRow: number;
   arrayCol: number;
@@ -74,8 +110,8 @@ const isSupportedChipConfigId = (chipType: string | null): chipType is ChipConfi
 const resolveExportOnlyFullresLayout = async (args: {
   chipType: string | null;
   cropQc?: Pick<CropQcTransitionalGeometryContract, 'eosinReferenceGeometry' | 'heQcGeometry'> | null;
-  cropWidth: number;
-  cropHeight: number;
+  exportFullresWidth: number;
+  exportFullresHeight: number;
 }) => {
   if (!isSupportedChipConfigId(args.chipType)) {
     throw new Error('Chip projection geometry or spot diameter metadata is missing. Reapply chip configuration before export.');
@@ -87,8 +123,8 @@ const resolveExportOnlyFullresLayout = async (args: {
     templateEntries,
     chipManifest: manifest,
     cropQc: args.cropQc,
-    cropWidth: args.cropWidth,
-    cropHeight: args.cropHeight,
+    exportFullresWidth: args.exportFullresWidth,
+    exportFullresHeight: args.exportFullresHeight,
   });
 };
 
@@ -299,8 +335,6 @@ export async function exportPreprocessZip(args: {
   }
 
   const {
-    cropWidth,
-    cropHeight,
     heCropAssets,
     projectedSpots,
     rows,
@@ -310,16 +344,15 @@ export async function exportPreprocessZip(args: {
     tissueHiresScale,
     tissueLowresScale,
   } = readiness.data;
+  const heFullresBytes = await imageSourceToBytes(heCropAssets.fullres.dataUrl);
+  const { width: exportFullresWidth, height: exportFullresHeight } = getPngDimensionsFromBytes(heFullresBytes);
   const exportOnlyLayout = await resolveExportOnlyFullresLayout({
     chipType: project.chipConfig.chipType,
     cropQc: project.cropQc,
-    cropWidth,
-    cropHeight,
+    exportFullresWidth,
+    exportFullresHeight,
   });
-  const spotDiameterFullres = resolveSpotExportFullresDiameter({
-    persistedSpotDiameterFullres: project.cropQc.spot_diameter_fullres,
-    exportLayout: exportOnlyLayout,
-  });
+  const spotDiameterFullres = exportOnlyLayout.squareSideLength;
 
   const scalefactors = {
     spot_diameter_fullres: spotDiameterFullres,
@@ -329,7 +362,7 @@ export async function exportPreprocessZip(args: {
   };
 
   const zip = new JSZip();
-  zip.file('tissue_fullres_image.png', await imageSourceToBytes(heCropAssets.fullres.dataUrl));
+  zip.file('tissue_fullres_image.png', heFullresBytes);
   zip.file('tissue_hires_image.png', await imageSourceToBytes(heCropAssets.hires.dataUrl));
   zip.file('tissue_lowres_image.png', await imageSourceToBytes(heCropAssets.lowres.dataUrl));
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
@@ -337,7 +370,7 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {
-    zip.file('aligned_tissue_image.png', await imageSourceToBytes(heCropAssets.fullres.dataUrl));
+    zip.file('aligned_tissue_image.png', heFullresBytes);
   }
 
   if (includeProjectJson) {

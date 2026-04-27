@@ -193,7 +193,7 @@ function LandmarkCanvas({
 	);
 
 	const [zoom, setZoom] = useState(1);
-	const imageDataUrl = image.thumbnailDataUrl ?? image.dataUrl;
+	const imageDataUrl = image.workingDataUrl ?? image.thumbnailDataUrl ?? image.dataUrl;
 	const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
 	const effectiveZoom = zoom * imageTransform.scale;
 	const viewportTransform = useMemo(

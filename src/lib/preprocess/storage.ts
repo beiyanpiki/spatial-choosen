@@ -16,15 +16,17 @@ import {
   PREPROCESS_DB_NAME,
   PREPROCESS_DB_VERSION,
   PREPROCESS_DERIVED_IMAGE_STORE,
+  PREPROCESS_NUMERIC_DEFAULTS,
   PREPROCESS_SOURCE_IMAGE_KINDS,
   PREPROCESS_SOURCE_IMAGE_STORE,
   PREPROCESS_STORAGE_KEY,
   PREPROCESS_STORAGE_SCHEMA_VERSION,
   PREPROCESS_THUMBNAIL_STORE,
   PREPROCESS_TISSUE_SELECTION_STORE,
+  PREPROCESS_WORKING_IMAGE_STORE,
 } from './constants';
 import { migratePreprocessProject } from './migrations';
-import { createThumbnailBlob } from './sourceImage';
+import { createDownsampledBlobFromSource, createThumbnailBlob, loadImageElement } from './sourceImage';
 import { matrixFromSelectedSpotIds } from './tissueMatrix';
 
 declare global {
@@ -35,12 +37,21 @@ declare global {
 
 type StoredSourceImage = Omit<
   PreprocessSourceImage,
-  'sourceBlob' | 'thumbnailBlob' | 'objectUrl' | 'thumbnailObjectUrl' | 'dataUrl' | 'thumbnailDataUrl'
+  | 'sourceBlob'
+  | 'thumbnailBlob'
+  | 'workingBlob'
+  | 'objectUrl'
+  | 'thumbnailObjectUrl'
+  | 'workingObjectUrl'
+  | 'dataUrl'
+  | 'thumbnailDataUrl'
+  | 'workingDataUrl'
 >;
 
 type LegacyStoredSourceImage = StoredSourceImage & {
   dataUrl?: string;
   thumbnailDataUrl?: string;
+  workingDataUrl?: string;
 };
 
 type StoredSourceAssetsSlice = Omit<SourceAssetsSlice, 'images'> & {
@@ -187,6 +198,9 @@ const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
     if (!db.objectStoreNames.contains(PREPROCESS_THUMBNAIL_STORE)) {
       db.createObjectStore(PREPROCESS_THUMBNAIL_STORE);
     }
+    if (!db.objectStoreNames.contains(PREPROCESS_WORKING_IMAGE_STORE)) {
+      db.createObjectStore(PREPROCESS_WORKING_IMAGE_STORE);
+    }
     if (!db.objectStoreNames.contains(PREPROCESS_DERIVED_IMAGE_STORE)) {
       db.createObjectStore(PREPROCESS_DERIVED_IMAGE_STORE);
     }
@@ -298,6 +312,13 @@ const repairCurrentSchemaCropGeometry = <TProject extends {
 					project.cropQc.cropHeight,
 				)
 			: null);
+	// Keep emitted HE fullres dimensions when present; use source-frame geometry evidence only as fallback.
+	const cropWidth = isFiniteNumber(project.cropQc.cropWidth)
+		? project.cropQc.cropWidth
+		: eosinReferenceGeometry?.width ?? null;
+	const cropHeight = isFiniteNumber(project.cropQc.cropHeight)
+		? project.cropQc.cropHeight
+		: eosinReferenceGeometry?.height ?? null;
 
   return {
     ...project,
@@ -305,8 +326,8 @@ const repairCurrentSchemaCropGeometry = <TProject extends {
       ...project.cropQc,
       eosinReferenceGeometry,
       cropRect: eosinReferenceGeometry?.rect ?? null,
-      cropWidth: eosinReferenceGeometry?.width ?? null,
-      cropHeight: eosinReferenceGeometry?.height ?? null,
+      cropWidth,
+      cropHeight,
     },
   };
 };
@@ -409,13 +430,27 @@ const urlToBlob = async (url: string) => {
 
 const stripSourcePayload = (image: PreprocessSourceImage | null): StoredSourceImage | null => {
   if (!image) return null;
-  const { dataUrl, thumbnailDataUrl, objectUrl, thumbnailObjectUrl, sourceBlob, thumbnailBlob, ...rest } = image;
+  const {
+    dataUrl,
+    thumbnailDataUrl,
+    workingDataUrl,
+    objectUrl,
+    thumbnailObjectUrl,
+    workingObjectUrl,
+    sourceBlob,
+    thumbnailBlob,
+    workingBlob,
+    ...rest
+  } = image;
   void dataUrl;
   void thumbnailDataUrl;
+  void workingDataUrl;
   void objectUrl;
   void thumbnailObjectUrl;
+  void workingObjectUrl;
   void sourceBlob;
   void thumbnailBlob;
+  void workingBlob;
   return rest;
 };
 
@@ -717,21 +752,28 @@ const hydrateSourceImage = async (
   meta: StoredSourceImage | null,
   storedSource: string | Blob | undefined,
   storedThumbnail: string | Blob | undefined,
+  storedWorking: string | Blob | undefined,
 ): Promise<{
   image: PreprocessSourceImage | null;
   thumbnailRegenerated: boolean;
+  workingRegenerated: boolean;
 }> => {
-  if (!meta) return { image: null, thumbnailRegenerated: false };
+  if (!meta) return { image: null, thumbnailRegenerated: false, workingRegenerated: false };
 
   const legacyMeta = meta as LegacyStoredSourceImage;
   const source = hydrateSourcePayload(storedSource ?? legacyMeta.dataUrl);
-  if (!source) return { image: null, thumbnailRegenerated: false };
+  if (!source) return { image: null, thumbnailRegenerated: false, workingRegenerated: false };
   const thumbnail = hydrateSourcePayload(storedThumbnail ?? legacyMeta.thumbnailDataUrl);
+  const working = hydrateSourcePayload(storedWorking ?? legacyMeta.workingDataUrl);
 
   let thumbnailBlob = thumbnail?.blob;
   let thumbnailObjectUrl = thumbnail?.objectUrl;
   let thumbnailDataUrl = thumbnail?.displayUrl;
   let thumbnailRegenerated = false;
+  let workingBlob = working?.blob;
+  let workingObjectUrl = working?.objectUrl;
+  let workingDataUrl = working?.displayUrl;
+  let workingRegenerated = false;
 
   if (!thumbnailDataUrl && source.displayUrl) {
     try {
@@ -745,17 +787,39 @@ const hydrateSourceImage = async (
     }
   }
 
+  if (!workingDataUrl && source.displayUrl) {
+    try {
+      const sourceImage = await loadImageElement(source.displayUrl);
+      const generatedBlob = await createDownsampledBlobFromSource(
+        sourceImage,
+        sourceImage.naturalWidth,
+        sourceImage.naturalHeight,
+        PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
+      );
+      workingBlob = generatedBlob;
+      workingObjectUrl = URL.createObjectURL(generatedBlob);
+      workingDataUrl = workingObjectUrl;
+      workingRegenerated = true;
+    } catch (error) {
+      void error;
+    }
+  }
+
   return {
     image: {
       ...meta,
       sourceBlob: source.blob,
       thumbnailBlob,
+      workingBlob,
       objectUrl: source.objectUrl,
       thumbnailObjectUrl,
+      workingObjectUrl,
       dataUrl: source.displayUrl,
       thumbnailDataUrl,
+      workingDataUrl,
     },
     thumbnailRegenerated,
+    workingRegenerated,
   };
 };
 
@@ -777,6 +841,8 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
     heDataUrl,
     eosinThumbnailDataUrl,
     heThumbnailDataUrl,
+    eosinWorkingDataUrl,
+    heWorkingDataUrl,
     focusedHePayload,
     cropQc,
   ] = await Promise.all([
@@ -784,12 +850,16 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
     readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he')),
     readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'eosin')),
     readStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(repairedMeta.id, 'he')),
+    readStoreValue(PREPROCESS_WORKING_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'eosin')),
+    readStoreValue(PREPROCESS_WORKING_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he')),
     readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(repairedMeta.id)),
     hydrateCropQcSlice(repairedMeta.id, repairedMeta.cropQc),
   ]);
 
-  const eosinResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl);
-  const heResult = await hydrateSourceImage(repairedMeta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl);
+  const [eosinResult, heResult] = await Promise.all([
+    hydrateSourceImage(repairedMeta.sourceAssets.images.eosin, eosinDataUrl, eosinThumbnailDataUrl, eosinWorkingDataUrl),
+    hydrateSourceImage(repairedMeta.sourceAssets.images.he, heDataUrl, heThumbnailDataUrl, heWorkingDataUrl),
+  ]);
   const eosin = eosinResult.image;
   const he = heResult.image;
   const focusedImageDataUrl = await hydrateDerivedImagePayload(focusedHePayload ?? repairedMeta.heFocus?.focusedImageDataUrl ?? undefined);
@@ -798,10 +868,10 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
   if (repairedMeta.sourceAssets.images.he && !he) return undefined;
 
   const writes: Promise<void>[] = [];
-  if (eosinResult.thumbnailRegenerated && eosin) {
+  if ((eosinResult.thumbnailRegenerated || eosinResult.workingRegenerated) && eosin) {
     writes.push(syncImageStores(repairedMeta.id, eosin, 'eosin'));
   }
-  if (heResult.thumbnailRegenerated && he) {
+  if ((heResult.thumbnailRegenerated || heResult.workingRegenerated) && he) {
     writes.push(syncImageStores(repairedMeta.id, he, 'he'));
   }
 
@@ -921,6 +991,7 @@ const syncImageStores = async (projectId: string, image: PreprocessSourceImage |
   const key = assetStoreKey(projectId, kind);
   const sourcePayload = image?.sourceBlob ?? (image?.dataUrl?.startsWith('data:') ? await urlToBlob(image.dataUrl) : undefined);
   const thumbnailPayload = image?.thumbnailBlob ?? (image?.thumbnailDataUrl?.startsWith('data:') ? await urlToBlob(image.thumbnailDataUrl) : undefined);
+  const workingPayload = image?.workingBlob ?? (image?.workingDataUrl?.startsWith('data:') ? await urlToBlob(image.workingDataUrl) : undefined);
 
   if (sourcePayload) {
     await saveStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, key, sourcePayload);
@@ -932,6 +1003,12 @@ const syncImageStores = async (projectId: string, image: PreprocessSourceImage |
     await saveStoreValue(PREPROCESS_THUMBNAIL_STORE, key, thumbnailPayload);
   } else {
     await deleteStoreValue(PREPROCESS_THUMBNAIL_STORE, key);
+  }
+
+  if (workingPayload) {
+    await saveStoreValue(PREPROCESS_WORKING_IMAGE_STORE, key, workingPayload);
+  } else {
+    await deleteStoreValue(PREPROCESS_WORKING_IMAGE_STORE, key);
   }
 };
 
@@ -1064,6 +1141,7 @@ export async function deletePreprocessProject(projectId: string) {
       ...PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => [
         deleteStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(projectId, kind)),
         deleteStoreValue(PREPROCESS_THUMBNAIL_STORE, assetStoreKey(projectId, kind)),
+        deleteStoreValue(PREPROCESS_WORKING_IMAGE_STORE, assetStoreKey(projectId, kind)),
         ...PREPROCESS_CANONICAL_CROP_ASSET_LEVELS.map((level) => deleteStoreValue(
           PREPROCESS_DERIVED_IMAGE_STORE,
           cropQcDerivedImageStoreKey(projectId, kind, level),

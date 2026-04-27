@@ -30,7 +30,35 @@ vi.mock('./tissueRegions', () => ({
 
 import { exportPreprocessZip, getPreprocessZipExportReadiness } from './exportBundle';
 
-const PNG_DATA_URL = 'data:image/png;base64,AA==';
+const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution HE crop image dimensions are unavailable. Re-run Crop/QC before export.';
+
+const createPngBytes = (width: number, height: number) => {
+  const bytes = new Uint8Array(24);
+
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  bytes.set([0x00, 0x00, 0x00, 0x0d], 8);
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+
+  return bytes;
+};
+
+const createDataUrlFromBytes = (bytes: Uint8Array) => `data:image/png;base64,${Buffer.from(bytes).toString('base64')}`;
+
+const createPngDataUrl = (width: number, height: number) => createDataUrlFromBytes(createPngBytes(width, height));
+
+const readPngDimensions = (bytes: Uint8Array) => {
+  expect(Array.from(bytes.slice(0, 8))).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  expect(String.fromCharCode(...bytes.slice(12, 16))).toBe('IHDR');
+
+  return {
+    width: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(16),
+    height: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(20),
+  };
+};
 
 const createMockChipConfigData = (): ChipConfigData => ({
   manifest: {
@@ -144,7 +172,7 @@ const createSourceImage = (kind: 'eosin' | 'he') => ({
   width: 1,
   height: 1,
   lastModified: 0,
-  dataUrl: PNG_DATA_URL,
+  dataUrl: createPngDataUrl(1, 1),
 });
 
 const createMatrix = (
@@ -321,22 +349,22 @@ const createBaseProject = (): PreprocessProject => {
       issues: [],
       cropAssets: {
         eosin: {
-          fullres: { dataUrl: PNG_DATA_URL },
-          hires: { dataUrl: PNG_DATA_URL },
-          lowres: { dataUrl: PNG_DATA_URL },
+          fullres: { dataUrl: createPngDataUrl(640, 640) },
+          hires: { dataUrl: createPngDataUrl(640, 640) },
+          lowres: { dataUrl: createPngDataUrl(640, 640) },
         },
         he: {
-          fullres: { dataUrl: PNG_DATA_URL },
-          hires: { dataUrl: PNG_DATA_URL },
-          lowres: { dataUrl: PNG_DATA_URL },
+          fullres: { dataUrl: createPngDataUrl(640, 640) },
+          hires: { dataUrl: createPngDataUrl(640, 640) },
+          lowres: { dataUrl: createPngDataUrl(640, 640) },
         },
       },
       tissue_hires_scalef: 0.5,
       tissue_lowres_scalef: 0.25,
       spot_diameter_fullres: 18,
       fiducial_diameter_fullres: 27,
-      eosinPreviewDataUrl: PNG_DATA_URL,
-      previewDataUrl: PNG_DATA_URL,
+      eosinPreviewDataUrl: createPngDataUrl(640, 640),
+      previewDataUrl: createPngDataUrl(640, 640),
       checkerboardPreviewDataUrl: null,
       checkerboardPreview: {
         dataUrl: null,
@@ -524,6 +552,16 @@ const readExportedScalefactors = async (blob: Blob) => JSON.parse(
   await readZipText(blob, 'scalefactors_json.json'),
 ) as ExportedScalefactors;
 
+const readExportedPngDimensions = async (blob: Blob, fileName: string) => {
+  const archive = await JSZip.loadAsync(await blob.arrayBuffer());
+  const file = archive.file(fileName);
+  if (!file) {
+    throw new Error(`Missing file in archive: ${fileName}`);
+  }
+
+  return readPngDimensions(await file.async('uint8array'));
+};
+
 const toExportArrayRow = (rows: number, runtimeArrayRow: number) => rows + 1 - runtimeArrayRow;
 
 const createExpectedExportedTissuePositionRow = (args: {
@@ -617,7 +655,7 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows[63]?.[63]).toBe('1');
   });
 
-  it('writes 50um tissue_positions.csv in stable barcode order with bottom-left array rows and crop-relative full-resolution coordinates', async () => {
+  it('writes 50um tissue_positions.csv in stable barcode order with bottom-left array rows and emitted fullres image coordinates', async () => {
     const project = createBaseProject();
 
     const result = await exportProject(project);
@@ -629,7 +667,7 @@ describe('exportBundle canonical matrix exports', () => {
       'barcode-spot-c',
       'barcode-spot-d',
     ]);
-    // Template coordinates [75, 6375] are mapped to crop space [0, 640]
+    // Template coordinates [75, 6375] are mapped to emitted fullres frame [0, 640]
     // Formula: output = (template - 75) / 6300 * 640
     expect(rows).toEqual([
       createExpectedExportedTissuePositionRow({
@@ -677,6 +715,145 @@ describe('exportBundle canonical matrix exports', () => {
     ]);
   });
 
+  it('writes tissue_positions.csv in the emitted fullres image coordinate frame when crop metadata is stale', async () => {
+    const project = createBaseProject();
+    const staleCropWidth = 1050;
+    const emittedFullresWidth = 5705;
+    const emittedFullresHeight = 5705;
+    const emittedFullresDataUrl = createPngDataUrl(emittedFullresWidth, emittedFullresHeight);
+
+    project.cropQc.cropWidth = staleCropWidth;
+    project.cropQc.cropHeight = staleCropWidth;
+    project.cropQc.cropAssets.eosin.fullres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.eosin.hires.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.eosin.lowres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.he.fullres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.he.hires.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.he.lowres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.eosinPreviewDataUrl = emittedFullresDataUrl;
+    project.cropQc.previewDataUrl = emittedFullresDataUrl;
+
+    const result = await exportProject(project);
+    const archive = await JSZip.loadAsync(await result.blob.arrayBuffer());
+    const rows = await readExportedTissuePositions(result.blob);
+    const dimensions = await readExportedPngDimensions(result.blob, 'tissue_fullres_image.png');
+
+    expect(dimensions).toEqual({ width: emittedFullresWidth, height: emittedFullresHeight });
+    expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-a',
+      'barcode-spot-b',
+      'barcode-spot-c',
+      'barcode-spot-d',
+    ]);
+    expect(rows).toEqual([
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-a',
+        inTissue: 1,
+        rows: 64,
+        runtimeArrayRow: 1,
+        arrayCol: 1,
+        pxl_row_in_fullres: 0,
+        pxl_col_in_fullres: 0,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-b',
+        inTissue: 0,
+        rows: 64,
+        runtimeArrayRow: 1,
+        arrayCol: 2,
+        pxl_row_in_fullres: 0,
+        pxl_col_in_fullres: 91,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-c',
+        inTissue: 0,
+        rows: 64,
+        runtimeArrayRow: 2,
+        arrayCol: 1,
+        pxl_row_in_fullres: 91,
+        pxl_col_in_fullres: 0,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-d',
+        inTissue: 1,
+        rows: 64,
+        runtimeArrayRow: 64,
+        arrayCol: 64,
+        pxl_row_in_fullres: 5705,
+        pxl_col_in_fullres: 5705,
+      }),
+    ]);
+    expect(archive.file('tissue_fullres_image.png')).toBeTruthy();
+  });
+
+  it('does not swap row and column scaling for asymmetric emitted fullres images', async () => {
+    const project = createBaseProject();
+    const emittedFullresWidth = 4200;
+    const emittedFullresHeight = 5705;
+    const emittedFullresDataUrl = createPngDataUrl(emittedFullresWidth, emittedFullresHeight);
+
+    project.cropQc.cropWidth = 1050;
+    project.cropQc.cropHeight = 1050;
+    project.cropQc.cropAssets.eosin.fullres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.eosin.hires.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.eosin.lowres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.he.fullres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.he.hires.dataUrl = emittedFullresDataUrl;
+    project.cropQc.cropAssets.he.lowres.dataUrl = emittedFullresDataUrl;
+    project.cropQc.eosinPreviewDataUrl = emittedFullresDataUrl;
+    project.cropQc.previewDataUrl = emittedFullresDataUrl;
+
+    const result = await exportProject(project);
+    const rows = await readExportedTissuePositions(result.blob);
+    const dimensions = await readExportedPngDimensions(result.blob, 'tissue_fullres_image.png');
+
+    expect(dimensions).toEqual({ width: emittedFullresWidth, height: emittedFullresHeight });
+    expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-a',
+      'barcode-spot-b',
+      'barcode-spot-c',
+      'barcode-spot-d',
+    ]);
+    expect(rows).toEqual([
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-a',
+        inTissue: 1,
+        rows: 64,
+        runtimeArrayRow: 1,
+        arrayCol: 1,
+        pxl_row_in_fullres: 0,
+        pxl_col_in_fullres: 0,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-b',
+        inTissue: 0,
+        rows: 64,
+        runtimeArrayRow: 1,
+        arrayCol: 2,
+        pxl_row_in_fullres: 0,
+        pxl_col_in_fullres: 67,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-c',
+        inTissue: 0,
+        rows: 64,
+        runtimeArrayRow: 2,
+        arrayCol: 1,
+        pxl_row_in_fullres: 91,
+        pxl_col_in_fullres: 0,
+      }),
+      createExpectedExportedTissuePositionRow({
+        barcode: 'barcode-spot-d',
+        inTissue: 1,
+        rows: 64,
+        runtimeArrayRow: 64,
+        arrayCol: 64,
+        pxl_row_in_fullres: 5705,
+        pxl_col_in_fullres: 4200,
+      }),
+    ]);
+  });
+
   it('changes only matrix-derived in_tissue flags while keeping exported barcode order, array coordinates, and top-left pxl coordinates identical', async () => {
     const baselineProject = createBaseProject();
     const changedMembershipProject = createBaseProject();
@@ -708,7 +885,7 @@ describe('exportBundle canonical matrix exports', () => {
     expect(changedMembershipRowsByBarcode.get('barcode-spot-d')?.in_tissue).toBe(1);
   });
 
-  it('writes 15um tissue_positions.csv using the runtime row count for array_row inversion with crop-relative coordinates', async () => {
+  it('writes 15um tissue_positions.csv using the runtime row count for array_row inversion with emitted fullres coordinates', async () => {
     mockLoadChipConfigData.mockResolvedValue(createMock15umChipConfigData());
     const project = create15umProject();
 
@@ -721,7 +898,7 @@ describe('exportBundle canonical matrix exports', () => {
       'barcode-15um-spot-c',
       'barcode-15um-spot-d',
     ]);
-    // 15um template range [33, 3833] mapped to crop [0, 640]
+    // 15um template range [33, 3833] mapped to emitted fullres frame [0, 640]
     // Formula: output = (template - 33) / 3800 * 640
     expect(rows).toEqual([
       createExpectedExportedTissuePositionRow({
@@ -769,13 +946,13 @@ describe('exportBundle canonical matrix exports', () => {
     ]);
   });
 
-  it('preserves the persisted crop/QC spot diameter in scalefactors_json.json when it is valid', async () => {
+  it('derives spot_diameter_fullres from export geometry instead of persisted crop/QC metadata', async () => {
     const project = createBaseProject();
 
     const result = await exportProject(project);
     const scalefactors = await readExportedScalefactors(result.blob);
 
-    expect(scalefactors.spot_diameter_fullres).toBe(18);
+    expect(scalefactors.spot_diameter_fullres).toBeCloseTo(5.08, 1);
   });
 
   it('writes 64 rows with 64 columns per row for supported 50um exports', async () => {
@@ -846,7 +1023,7 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows).toHaveLength(64);
     expect(rows[63]).toHaveLength(64);
     expect(rows[63]?.[63]).toBe('1');
-    // Template coordinates [75, 6375] mapped to crop [0, 640]
+    // Template coordinates [75, 6375] mapped to emitted fullres frame [0, 640]
     expect(positionsByBarcode.get('barcode-spot-a')).toEqual(createExpectedExportedTissuePositionRow({
       barcode: 'barcode-spot-a',
       inTissue: 0,
@@ -889,13 +1066,13 @@ describe('exportBundle canonical matrix exports', () => {
       pxl_row_in_fullres: 640,
       pxl_col_in_fullres: 640,
     }));
-    expect(scalefactors.spot_diameter_fullres).toBe(18);
+    expect(scalefactors.spot_diameter_fullres).toBeCloseTo(5.08, 1);
   });
 
   it('falls back to export geometry for spot diameter after canonical package round-trip with eosin reference geometry', async () => {
     const project = createBaseProject();
     project.cropQc.spot_diameter_fullres = null;
-    // eosinReferenceGeometry maps to full crop bounds
+    // eosinReferenceGeometry maps to the emitted fullres frame bounds
     project.cropQc.eosinReferenceGeometry = {
       rect: { x: 0, y: 0, width: 1, height: 1 },
       width: 640,
@@ -928,7 +1105,7 @@ describe('exportBundle canonical matrix exports', () => {
       'tissue_matrix.csv',
       'tissue_positions.csv',
     ]);
-    // Template coordinates [75, 6375] mapped to full crop [0, 640]
+    // Template coordinates [75, 6375] mapped to emitted fullres frame [0, 640]
     expect(positionsByBarcode.get('barcode-spot-a')).toMatchObject({
       array_row: toExportArrayRow(64, 1),
       array_col: 1,
@@ -957,15 +1134,39 @@ describe('exportBundle canonical matrix exports', () => {
       pxl_row_in_fullres: 640,
       pxl_col_in_fullres: 640,
     });
-    // With eosinReferenceGeometry mapping to full crop (640px):
-    // - Template span: 6300px, Crop span: 640px
+    // With eosinReferenceGeometry mapping to the emitted fullres frame (640px):
+    // - Template span: 6300px, emitted fullres span: 640px
     // - Spot pitch: (100 / 6300) * 640 ≈ 10.16px
     // - Diameter: 10.16 * 0.5 ≈ 5.08px
     expect(scalefactors.spot_diameter_fullres).toBeCloseTo(5.08, 1);
   });
 
+  it('throws a clear error when data URL fullres PNG dimensions are unavailable', async () => {
+    const project = createBaseProject();
+    const malformedPngBytes = createPngBytes(0, 1);
+    project.cropQc.cropAssets.he.fullres.dataUrl = createDataUrlFromBytes(malformedPngBytes);
+
+    await expect(exportProject(project)).rejects.toThrow(FULLRES_DIMENSIONS_UNAVAILABLE_ERROR);
+  });
+
+  it('throws a clear error when blob URL fullres PNG dimensions are unavailable', async () => {
+    const malformedPngBytes = createPngBytes(3, 5);
+    malformedPngBytes.set([0x42, 0x41, 0x44, 0x21], 12);
+    const blob = new Blob([malformedPngBytes], { type: 'image/png' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    const project = createBaseProject();
+    project.cropQc.cropAssets.he.fullres.dataUrl = blobUrl;
+
+    try {
+      await expect(exportProject(project)).rejects.toThrow(FULLRES_DIMENSIONS_UNAVAILABLE_ERROR);
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  });
+
   it('exports successfully when crop assets use blob: URLs from IndexedDB hydration', async () => {
-    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const pngBytes = createPngBytes(3, 5);
     const blob = new Blob([pngBytes], { type: 'image/png' });
     const blobUrl = URL.createObjectURL(blob);
 
@@ -978,11 +1179,17 @@ describe('exportBundle canonical matrix exports', () => {
 
     expect(result.blob).toBeInstanceOf(Blob);
     const archive = await JSZip.loadAsync(await result.blob.arrayBuffer());
-    expect(archive.file('tissue_fullres_image.png')).toBeTruthy();
+    const fullresFile = archive.file('tissue_fullres_image.png');
+    expect(fullresFile).toBeTruthy();
     expect(archive.file('tissue_hires_image.png')).toBeTruthy();
     expect(archive.file('tissue_lowres_image.png')).toBeTruthy();
 
-    const fullresData = await archive.file('tissue_fullres_image.png')!.async('uint8array');
+    if (!fullresFile) {
+      throw new Error('Missing file in archive: tissue_fullres_image.png');
+    }
+
+    const fullresData = await fullresFile.async('uint8array');
+    expect(readPngDimensions(fullresData)).toEqual({ width: 3, height: 5 });
     expect(fullresData).toEqual(pngBytes);
 
     URL.revokeObjectURL(blobUrl);

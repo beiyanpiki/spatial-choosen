@@ -169,7 +169,7 @@ export function CanvasStage({
   const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
   const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize | null>(null);
-  const imageDataUrl = image?.thumbnailDataUrl ?? image?.dataUrl ?? null;
+  const imageDataUrl = image?.workingDataUrl ?? image?.thumbnailDataUrl ?? image?.dataUrl ?? null;
 
   useEffect(() => {
     if (!imageDataUrl) return;
@@ -217,18 +217,14 @@ export function CanvasStage({
   const baseView = useMemo(() => {
     const ratio = image?.width && image.height
       ? image.width / image.height
-      : activeImageElement?.naturalWidth && activeImageElement?.naturalHeight
-        ? activeImageElement.naturalWidth / activeImageElement.naturalHeight
-        : 4 / 3;
+      : 4 / 3;
 
     return computeBaseView(viewportSize, ratio);
-  }, [activeImageElement?.naturalHeight, activeImageElement?.naturalWidth, image?.height, image?.width, viewportSize]);
+  }, [image?.height, image?.width, viewportSize]);
 
   const imageAspectRatio = image?.width && image.height
     ? image.width / image.height
-    : activeImageElement?.naturalWidth && activeImageElement?.naturalHeight
-      ? activeImageElement.naturalWidth / activeImageElement.naturalHeight
-      : 1;
+    : 1;
 
   const displayTransform = useMemo(
     () => getTransform(baseView, imageTransform.scale, { x: 0, y: 0 }),
