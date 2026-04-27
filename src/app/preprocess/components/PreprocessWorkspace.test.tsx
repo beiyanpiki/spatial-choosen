@@ -902,6 +902,8 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
       sizeBytes: 10,
       width: 200,
       height: 150,
+      workingWidth: 100,
+      workingHeight: 75,
       lastModified: 2,
       dataUrl: 'data:image/png;base64,BB==',
     };
@@ -909,10 +911,21 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
     const coarseBounds = { x: 0.2, y: 0.2, width: 0.5, height: 0.5 };
     const refinedBounds = { x: 0.24, y: 0.26, width: 0.34, height: 0.34 };
     const acceptedTransform = {
-      affineMatrix: [1, 0, 0, 0, 1, 0],
+      affineMatrix: [1, 0, 5, 0, 1, 7],
       transform: {
-        translationX: 0,
-        translationY: 0,
+        translationX: 5,
+        translationY: 7,
+        rotationDegrees: 2.5,
+        scaleX: 1,
+        scaleY: 1,
+        isUniformScale: true,
+      },
+    };
+    const scaledAcceptedTransform = {
+      affineMatrix: [1, 0, 10, 0, 1, 14],
+      transform: {
+        translationX: 10,
+        translationY: 14,
         rotationDegrees: 2.5,
         scaleX: 1,
         scaleY: 1,
@@ -975,6 +988,7 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
       ],
       rotationDegrees: 2.5,
       eccCorrelation: 0.91,
+      acceptedTransform: scaledAcceptedTransform,
       failureReason: null,
     });
     expect(latestProject.heFocus.chipBounds).not.toEqual(coarseBounds);
@@ -995,17 +1009,18 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
         ],
         rotationDegrees: 2.5,
         eccCorrelation: 0.91,
+        acceptedTransform: scaledAcceptedTransform,
         failureReason: null,
       },
-      acceptedTransform,
+      acceptedTransform: scaledAcceptedTransform,
       hasReferenceImage: true,
       hasMovingImage: true,
     });
     expect(latestProject.alignment.source).toBe('auto');
     expect(latestProject.alignment.solveAccepted).toBe(true);
     expect(latestProject.alignment.status).toBe('complete');
-    expect(latestProject.alignment.affineMatrix).toEqual(acceptedTransform.affineMatrix);
-    expect(latestProject.alignment.transform).toEqual(acceptedTransform.transform);
+    expect(latestProject.alignment.affineMatrix).toEqual(scaledAcceptedTransform.affineMatrix);
+    expect(latestProject.alignment.transform).toEqual(scaledAcceptedTransform.transform);
   });
 
   it('seeds coarse fallback bounds, persists fallback proposal state, and stays on heFocus', async () => {
@@ -1061,6 +1076,7 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
       refinedQuad: null,
       rotationDegrees: null,
       eccCorrelation: 0.42,
+      acceptedTransform: null,
       failureReason: 'ecc-failed',
     });
     expect(latestProject.heFocus.focusedImageDataUrl).toBeNull();
@@ -1129,6 +1145,7 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
       refinedQuad: null,
       rotationDegrees: 1.25,
       eccCorrelation: 0.74,
+      acceptedTransform: null,
       failureReason: 'ecc-below-threshold',
     });
     expect(mockApplyAcceptedAutoAlignment).toHaveBeenCalledWith(
@@ -1194,6 +1211,7 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
       refinedQuad: null,
       rotationDegrees: null,
       eccCorrelation: null,
+      acceptedTransform: null,
       failureReason: 'runtime-missing-capabilities',
     });
     expect(consoleErrorSpy).not.toHaveBeenCalled();

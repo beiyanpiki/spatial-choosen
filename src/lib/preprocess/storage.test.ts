@@ -10,7 +10,34 @@ import { serializePreprocessProject } from './package';
 import { projectSpotsForCrop } from './spotProjection';
 import { getPreprocessProject, upsertPreprocessProject, upsertPreprocessProjectMetadata } from './storage';
 
-const PNG_DATA_URL = 'data:image/png;base64,AA==';
+const createPngBytes = (width: number, height: number) => {
+  const bytes = new Uint8Array(24);
+
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  bytes.set([0x00, 0x00, 0x00, 0x0d], 8);
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+
+  return bytes;
+};
+
+const createPngDataUrl = (width: number, height: number) => `data:image/png;base64,${Buffer.from(createPngBytes(width, height)).toString('base64')}`;
+
+const PNG_DATA_URL = createPngDataUrl(200, 200);
+
+const createCropAssetSet = () => ({
+  fullres: { dataUrl: PNG_DATA_URL },
+  hires: { dataUrl: PNG_DATA_URL },
+  lowres: { dataUrl: PNG_DATA_URL },
+});
+
+const createCanonicalCropAssets = () => ({
+  eosin: createCropAssetSet(),
+  he: createCropAssetSet(),
+});
 
 const createProjectedSpot = (
   id: string,
@@ -662,6 +689,124 @@ describe('preprocess storage tissue metadata', () => {
 		expect(hydrated?.cropQc.cropWidth).toBeNull();
 		expect(hydrated?.cropQc.cropHeight).toBeNull();
 	});
+
+  it('preserves emitted crop dimensions separately from eosin geometry evidence during metadata persistence', () => {
+    const project = createProject();
+    project.alignment = {
+      ...project.alignment,
+      status: 'ready',
+    };
+    const cropRect = {
+      x: 0.1,
+      y: 0.2,
+      width: 0.3,
+      height: 0.4,
+    };
+    project.cropQc = {
+      ...project.cropQc,
+      status: 'complete',
+      isStale: false,
+      cropRect,
+      cropWidth: 5705,
+      cropHeight: 5705,
+      cropAssets: createCanonicalCropAssets(),
+      tissue_hires_scalef: 0.5,
+      tissue_lowres_scalef: 0.25,
+      spot_diameter_fullres: 18,
+      fiducial_diameter_fullres: 27,
+      checkerboardPreview: {
+        dataUrl: null,
+      },
+      eosinReferenceGeometry: {
+        rect: cropRect,
+        width: 1050,
+        height: 1050,
+      },
+    };
+
+    upsertPreprocessProjectMetadata(project);
+
+    const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<{
+      cropQc?: {
+        cropWidth?: unknown;
+        cropHeight?: unknown;
+        eosinReferenceGeometry?: {
+          width?: unknown;
+          height?: unknown;
+        } | null;
+      };
+    }>;
+    const storedCropQc = stored[0]?.cropQc;
+
+    expect(storedCropQc?.cropWidth).toBe(5705);
+    expect(storedCropQc?.cropHeight).toBe(5705);
+    expect(storedCropQc?.eosinReferenceGeometry?.width).toBe(1050);
+    expect(storedCropQc?.eosinReferenceGeometry?.height).toBe(1050);
+  });
+
+  it('preserves asymmetric emitted crop dimensions separately from eosin geometry evidence during hydration', async () => {
+    const project = createProject();
+    project.alignment = {
+      ...project.alignment,
+      status: 'ready',
+    };
+    const cropRect = {
+      x: 0.05,
+      y: 0.15,
+      width: 0.7,
+      height: 0.8,
+    };
+    project.cropQc = {
+      ...project.cropQc,
+      status: 'complete',
+      isStale: false,
+      cropRect,
+      cropWidth: 4200,
+      cropHeight: 5705,
+      cropAssets: createCanonicalCropAssets(),
+      tissue_hires_scalef: 0.5,
+      tissue_lowres_scalef: 0.25,
+      spot_diameter_fullres: 18,
+      fiducial_diameter_fullres: 27,
+      checkerboardPreview: {
+        dataUrl: null,
+      },
+      eosinReferenceGeometry: {
+        rect: cropRect,
+        width: 1050,
+        height: 900,
+      },
+    };
+
+    await upsertPreprocessProject(project);
+
+    const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<Record<string, unknown>>;
+    stored[0] = {
+      ...stored[0],
+      cropQc: {
+        ...(stored[0]?.cropQc as Record<string, unknown>),
+        status: 'complete',
+        isStale: false,
+        cropRect,
+        cropWidth: 4200,
+        cropHeight: 5705,
+        eosinReferenceGeometry: {
+          rect: cropRect,
+          width: 1050,
+          height: 900,
+        },
+      },
+    };
+    localStorage.setItem('spatial-preprocess-projects', JSON.stringify(stored));
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated?.cropQc.cropRect).toEqual(cropRect);
+    expect(hydrated?.cropQc.cropWidth).toBe(4200);
+    expect(hydrated?.cropQc.cropHeight).toBe(5705);
+    expect(hydrated?.cropQc.eosinReferenceGeometry?.width).toBe(1050);
+    expect(hydrated?.cropQc.eosinReferenceGeometry?.height).toBe(900);
+  });
 
   it('preserves canonical matrix truth on storage round-trip when autoSelectedSpotIds do not imply the active cells', async () => {
     const project = createProject();

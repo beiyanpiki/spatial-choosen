@@ -29,6 +29,7 @@ import {
 	type ComponentType,
 } from "react";
 import type {
+	AlignmentAffineMatrix,
 	AlignmentSlice,
 	CropQcSlice,
 	HeFocusAutoProposalStatus,
@@ -57,7 +58,10 @@ import {
 	exportPreprocessZip,
 	getPreprocessZipExportReadiness,
 } from "../../../lib/preprocess/exportBundle";
-import { runHeAutoLocalization } from "../../../lib/preprocess/heAutoLocalization";
+import {
+	type HeAutoLocalizationResult,
+	runHeAutoLocalization,
+} from "../../../lib/preprocess/heAutoLocalization";
 import {
 	invalidateOnAlignmentChange,
 	invalidateOnCropQcChange,
@@ -135,6 +139,10 @@ type AlignmentPanelWithPaddingBoundaryProps = ComponentProps<typeof AlignmentPan
 	showMovingImagePaddingBoundary: boolean;
 };
 
+type HeAutoLocalizationAcceptedTransform = NonNullable<
+	HeAutoLocalizationResult["acceptedTransform"]
+>;
+
 const AlignmentPanelWithPaddingBoundary = AlignmentPanel as ComponentType<AlignmentPanelWithPaddingBoundaryProps>;
 
 const autosaveTone: Record<AutosaveStatus, string> = {
@@ -146,6 +154,38 @@ const autosaveTone: Record<AutosaveStatus, string> = {
 
 const clampLocalizationScale = (value: number) =>
 	Math.min(4, Math.max(0.5, value));
+
+function scaleAcceptedTransformToOriginal(
+	acceptedTransform: HeAutoLocalizationAcceptedTransform | null,
+	workingToOriginalScale: { x: number; y: number },
+): HeAutoLocalizationAcceptedTransform | null {
+	if (!acceptedTransform) return null;
+
+	const { affineMatrix, transform } = acceptedTransform;
+	const scaleX = workingToOriginalScale.x;
+	const scaleY = workingToOriginalScale.y;
+
+	// For a 2x3 affine matrix [a, b, tx, c, d, ty]:
+	// Scale components (a,b,c,d) are relative, so they stay the same
+	// Translation components (tx, ty) are absolute pixel values, so they scale
+	const scaledMatrix: AlignmentAffineMatrix = [
+		affineMatrix[0],
+		affineMatrix[1],
+		affineMatrix[2] * scaleX,
+		affineMatrix[3],
+		affineMatrix[4],
+		affineMatrix[5] * scaleY,
+	];
+
+	return {
+		affineMatrix: scaledMatrix,
+		transform: {
+			...transform,
+			translationX: transform.translationX * scaleX,
+			translationY: transform.translationY * scaleY,
+		},
+	};
+}
 
 const MAX_ACTIVATION_THRESHOLD = 0.3;
 
@@ -688,10 +728,12 @@ export function PreprocessWorkspace({
 			? focusedHeMovingImage
 			: (project.sourceAssets.images[project.alignment.movingImage] ?? null)
 		: null;
-	const localizationImageDataUrl = localizationImage?.dataUrl ?? null;
+	const localizationImageDataUrl =
+		localizationImage?.workingDataUrl ?? localizationImage?.dataUrl ?? null;
 	const localizationChipBounds = project?.localization.chipBounds ?? null;
 	const localizationImageTransform = project?.localization.imageTransform ?? null;
-	const currentHeImageDataUrl = currentHeImageSource?.dataUrl ?? null;
+	const currentHeImageDataUrl =
+		currentHeImageSource?.workingDataUrl ?? currentHeImageSource?.dataUrl ?? null;
 	const focusedHeImageDataUrl = project?.heFocus.focusedImageDataUrl ?? null;
 	const heFocusStageChipBounds =
 		heFocusDraftChipBounds ?? project?.heFocus.chipBounds ?? null;
@@ -1133,8 +1175,28 @@ export function PreprocessWorkspace({
 
 		void (async () => {
 			try {
+				// For alignment and downstream crop/QC, the focused HE moving image
+				// must be at original resolution so the affine matrix (which is in
+				// original pixel space) matches the image dimensions.
+				const originalHeImageSource = currentHeImageSource?.dataUrl;
+				const chipBounds = project?.heFocus.chipBounds;
+				const imageTransform = project?.heFocus.imageTransform;
+
+				let focusedImageDataUrlForAlignment = focusedHeImageDataUrl;
+				if (
+					originalHeImageSource &&
+					chipBounds &&
+					imageTransform
+				) {
+					focusedImageDataUrlForAlignment = await generateFocusedHeDataUrl({
+						sourceDataUrl: originalHeImageSource,
+						chipBounds,
+						imageTransform,
+					});
+				}
+
 				const focusedImage = await createFocusedHeImageRecord(
-					focusedHeImageDataUrl,
+					focusedImageDataUrlForAlignment,
 					currentHeImageSource
 						? {
 								...currentHeImageSource,
@@ -1161,7 +1223,7 @@ export function PreprocessWorkspace({
 		return () => {
 			cancelled = true;
 		};
-	}, [alignmentMovingImageKind, currentHeImageSource, focusedHeImageDataUrl]);
+	}, [alignmentMovingImageKind, currentHeImageSource, focusedHeImageDataUrl, project?.heFocus.chipBounds, project?.heFocus.imageTransform]);
 
 	useEffect(() => {
 		if (!project) return;
@@ -1290,10 +1352,22 @@ export function PreprocessWorkspace({
 						currentImage.width && currentImage.height
 							? currentImage.width / currentImage.height
 							: 1;
+					const workingToOriginalScale = {
+						x:
+							(currentImage.width ?? 1) /
+							(currentImage.workingWidth ?? currentImage.width ?? 1),
+						y:
+							(currentImage.height ?? 1) /
+							(currentImage.workingHeight ?? currentImage.height ?? 1),
+					};
+					const scaledAcceptedTransform = scaleAcceptedTransformToOriginal(
+						autoLocalizationResult.acceptedTransform,
+						workingToOriginalScale,
+					);
 					const autoClassification = classifyAutoRefinementOutcome({
 						coarseBounds: autoLocalizationResult.coarseBounds,
 						eccCorrelation: autoLocalizationResult.eccCorrelation,
-						acceptedTransform: autoLocalizationResult.acceptedTransform,
+						acceptedTransform: scaledAcceptedTransform,
 						failureReason: autoLocalizationResult.failureReason,
 					});
 
@@ -1312,6 +1386,7 @@ export function PreprocessWorkspace({
 						refinedQuad: autoLocalizationResult.refinedQuad,
 						rotationDegrees: autoLocalizationResult.rotationDegrees,
 						eccCorrelation: autoLocalizationResult.eccCorrelation,
+						acceptedTransform: scaledAcceptedTransform,
 						failureReason: autoLocalizationResult.failureReason,
 					};
 
@@ -1379,7 +1454,7 @@ export function PreprocessWorkspace({
 					const acceptedAutoAlignment = applyAcceptedAutoAlignment({
 						current: nextProject.alignment,
 						autoProposal: nextAutoProposal,
-						acceptedTransform: autoLocalizationResult.acceptedTransform,
+						acceptedTransform: scaledAcceptedTransform,
 						hasReferenceImage: Boolean(referenceImage?.dataUrl),
 						hasMovingImage: Boolean(currentImage?.dataUrl),
 					});
@@ -1494,6 +1569,7 @@ export function PreprocessWorkspace({
 
 		try {
 			const { cv } = await loadOpenCv();
+
 			const result = await runCropQc({
 				cv,
 				eosinDataUrl: alignmentReferenceImage.dataUrl,

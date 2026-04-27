@@ -56,6 +56,11 @@ export type PreprocessSourceImage = {
   thumbnailObjectUrl?: string;
   dataUrl?: string;
   thumbnailDataUrl?: string;
+  workingBlob?: Blob;
+  workingObjectUrl?: string;
+  workingDataUrl?: string;
+  workingWidth?: number | null;
+  workingHeight?: number | null;
 };
 
 export type PreprocessSourceImageSet = {
@@ -126,6 +131,10 @@ export type HeFocusAutoProposal = {
   refinedQuad: HeFocusAutoProposalQuad | null;
   rotationDegrees: number | null;
   eccCorrelation: number | null;
+  acceptedTransform?: {
+    affineMatrix: AlignmentAffineMatrix;
+    transform: AlignmentTransform;
+  } | null;
   failureReason: string | null;
 };
 
