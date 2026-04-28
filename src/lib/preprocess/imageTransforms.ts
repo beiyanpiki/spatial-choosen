@@ -16,6 +16,13 @@ const fromCentered = (point: PreprocessPoint): PreprocessPoint => ({
   y: point.y + CENTER,
 });
 
+export type ImageDisplayRect = {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+};
+
 export function degreesToRadians(value: number): number {
   return (value * Math.PI) / 180;
 }
@@ -62,6 +69,50 @@ export function invertImageDisplayTransform(
     x: rotated.x * (transform.flipHorizontal ? -1 : 1),
     y: rotated.y * (transform.flipVertical ? -1 : 1),
   });
+}
+
+export function projectSourcePointToDisplayRect(
+  point: PreprocessPoint,
+  transform: LocalizationImageTransform,
+  displayRect: ImageDisplayRect,
+): PreprocessPoint {
+  const centerX = displayRect.originX + displayRect.width / 2;
+  const centerY = displayRect.originY + displayRect.height / 2;
+  const displayDeltaX = (point.x - CENTER) * displayRect.width;
+  const displayDeltaY = (point.y - CENTER) * displayRect.height;
+  const flippedDisplayDeltaX = displayDeltaX * (transform.flipHorizontal ? -1 : 1);
+  const flippedDisplayDeltaY = displayDeltaY * (transform.flipVertical ? -1 : 1);
+  const radians = degreesToRadians(transform.rotationDegrees);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  return {
+    x: centerX + flippedDisplayDeltaX * cos - flippedDisplayDeltaY * sin,
+    y: centerY + flippedDisplayDeltaX * sin + flippedDisplayDeltaY * cos,
+  };
+}
+
+export function invertDisplayRectPointToSource(
+  point: PreprocessPoint,
+  transform: LocalizationImageTransform,
+  displayRect: ImageDisplayRect,
+): PreprocessPoint {
+  const centerX = displayRect.originX + displayRect.width / 2;
+  const centerY = displayRect.originY + displayRect.height / 2;
+  const rotatedDisplayDeltaX = point.x - centerX;
+  const rotatedDisplayDeltaY = point.y - centerY;
+  const radians = degreesToRadians(-transform.rotationDegrees);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const unrotatedDisplayDeltaX = rotatedDisplayDeltaX * cos - rotatedDisplayDeltaY * sin;
+  const unrotatedDisplayDeltaY = rotatedDisplayDeltaX * sin + rotatedDisplayDeltaY * cos;
+  const unflippedDisplayDeltaX = unrotatedDisplayDeltaX * (transform.flipHorizontal ? -1 : 1);
+  const unflippedDisplayDeltaY = unrotatedDisplayDeltaY * (transform.flipVertical ? -1 : 1);
+
+  return {
+    x: unflippedDisplayDeltaX / displayRect.width + CENTER,
+    y: unflippedDisplayDeltaY / displayRect.height + CENTER,
+  };
 }
 
 export function getTransformedRectCorners(
