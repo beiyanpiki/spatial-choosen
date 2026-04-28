@@ -2,7 +2,11 @@
 
 import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@chakra-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { computeBaseView, getTransform, relativeToImage } from '@/lib/canvasViewport';
+import { computeBaseView, getTransform } from '@/lib/canvasViewport';
+import {
+  invertDisplayRectPointToSource,
+  projectSourcePointToDisplayRect,
+} from '@/lib/preprocess/imageTransforms';
 import {
   clampNormalizedSquareRect,
   LOCALIZATION_BOX_COLOR_SWATCHS,
@@ -89,6 +93,7 @@ const ALL_HANDLE_ORDER: readonly LocalizationResizeHandle[] = [
   ...EDGE_HANDLE_ORDER,
 ];
 
+const SCREEN_POINT_EPSILON = 1e-6;
 const clampScale = (scale: number) => Math.min(4, Math.max(0.5, scale));
 const normalizeDegrees = (value: number) => {
   const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
@@ -116,24 +121,56 @@ const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve
   image.src = src;
 });
 
-const projectNormalizedImagePointToScreen = (
+const projectSourcePointToScreen = (
   point: PreprocessPoint,
   displayTransform: ReturnType<typeof getTransform>,
+  imageTransform: LocalizationImageTransform,
 ): ScreenPoint | null => {
   if (!displayTransform) return null;
 
-  return {
-    x: displayTransform.originX + point.x * displayTransform.width,
-    y: displayTransform.originY + point.y * displayTransform.height,
-  };
+  return projectSourcePointToDisplayRect(point, imageTransform, displayTransform);
 };
 
-const projectScreenPointToNormalizedImage = (
-  point: ScreenPoint | null,
+const projectScreenPointToSource = (
+  screenPoint: ScreenPoint | null,
   displayTransform: ReturnType<typeof getTransform>,
+  imageTransform: LocalizationImageTransform,
 ): PreprocessPoint | null => {
-  if (!point || !displayTransform) return null;
-  return relativeToImage(point, displayTransform);
+  if (!screenPoint || !displayTransform) return null;
+
+  return invertDisplayRectPointToSource(screenPoint, imageTransform, displayTransform);
+};
+
+const getRectSourceCorners = (
+  rect: PreprocessRect,
+): readonly [PreprocessPoint, PreprocessPoint, PreprocessPoint, PreprocessPoint] => [
+  { x: rect.x, y: rect.y },
+  { x: rect.x + rect.width, y: rect.y },
+  { x: rect.x + rect.width, y: rect.y + rect.height },
+  { x: rect.x, y: rect.y + rect.height },
+] as const;
+
+const getDistance = (start: ScreenPoint, end: ScreenPoint) => Math.hypot(end.x - start.x, end.y - start.y);
+
+const getVisualLowerLeftPoint = (points: readonly ScreenPoint[]) => points.reduce((selected, point) => {
+  const sameScreenRow = Math.abs(point.y - selected.y) <= SCREEN_POINT_EPSILON;
+  const lowerOnScreen = point.y > selected.y + SCREEN_POINT_EPSILON;
+  const sameRowAndFurtherLeft = sameScreenRow && point.x < selected.x;
+  return lowerOnScreen || sameRowAndFurtherLeft ? point : selected;
+});
+
+const getVisualLowerLeftMarkerPoints = (
+  polygonPoints: readonly ScreenPoint[],
+): readonly [ScreenPoint, ScreenPoint, ScreenPoint] => {
+  const edgeLengths = polygonPoints.map((point, index) => getDistance(point, polygonPoints[(index + 1) % polygonPoints.length]));
+  const markerSize = Math.max(16, Math.min(32, Math.min(...edgeLengths) * 0.18));
+  const lowerLeft = getVisualLowerLeftPoint(polygonPoints);
+
+  return [
+    { x: lowerLeft.x, y: lowerLeft.y - markerSize },
+    lowerLeft,
+    { x: lowerLeft.x + markerSize, y: lowerLeft.y },
+  ] as const;
 };
 
 export function CanvasStage({
@@ -215,14 +252,14 @@ export function CanvasStage({
   }, [hostElement]);
 
   const baseView = useMemo(() => {
-    const ratio = image?.width && image.height
-      ? image.width / image.height
-      : 4 / 3;
+    const ratio = image?.workingWidth && image?.workingHeight
+      ? image.workingWidth / image.workingHeight
+      : (image?.width && image?.height ? image.width / image.height : 4 / 3);
 
     return computeBaseView(viewportSize, ratio);
-  }, [image?.height, image?.width, viewportSize]);
+  }, [image?.workingWidth, image?.workingHeight, image?.height, image?.width, viewportSize]);
 
-  const imageAspectRatio = image?.width && image.height
+  const imageAspectRatio = image?.width && image?.height
     ? image.width / image.height
     : 1;
 
@@ -313,8 +350,8 @@ export function CanvasStage({
 
   const getOverlayImagePoint = useCallback((clientX: number, clientY: number) => {
     const relativePoint = getRelativePoint(clientX, clientY);
-    return projectScreenPointToNormalizedImage(relativePoint, displayTransform);
-  }, [displayTransform, getRelativePoint]);
+    return projectScreenPointToSource(relativePoint, displayTransform, imageTransform);
+  }, [displayTransform, getRelativePoint, imageTransform]);
 
   const getInteractionImagePoint = useCallback((clientX: number, clientY: number) => (
     getOverlayImagePoint(clientX, clientY)
@@ -406,34 +443,19 @@ export function CanvasStage({
   }, [hostElement, image, imageTransform.scale, onScaleChange]);
 
   const projectOverlayPointToScreen = useCallback((point: PreprocessPoint) => (
-    projectNormalizedImagePointToScreen(point, displayTransform)
-  ), [displayTransform]);
+    projectSourcePointToScreen(point, displayTransform, imageTransform)
+  ), [displayTransform, imageTransform]);
 
   const overlay = useMemo(() => {
     if (!displayTransform || !normalizedChipBounds) return null;
 
-    const overlayBounds = normalizedChipBounds;
-    const polygonPoints = [
-      { x: overlayBounds.x, y: overlayBounds.y },
-      { x: overlayBounds.x + overlayBounds.width, y: overlayBounds.y },
-      { x: overlayBounds.x + overlayBounds.width, y: overlayBounds.y + overlayBounds.height },
-      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height },
-    ]
+    const polygonPoints = getRectSourceCorners(normalizedChipBounds)
       .map((point) => projectOverlayPointToScreen(point))
       .filter((point): point is NonNullable<typeof point> => Boolean(point));
 
     if (polygonPoints.length !== 4) return null;
 
-    const markerSize = Math.max(0.04, Math.min(overlayBounds.width, overlayBounds.height) * 0.18);
-    const markerPoints = [
-      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height - markerSize },
-      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height },
-      { x: overlayBounds.x + markerSize, y: overlayBounds.y + overlayBounds.height },
-    ]
-      .map((point) => projectOverlayPointToScreen(point))
-      .filter((point): point is NonNullable<typeof point> => Boolean(point));
-
-    if (markerPoints.length !== 3) return null;
+    const markerPoints = getVisualLowerLeftMarkerPoints(polygonPoints);
 
     const cornerPoints = {
       nw: polygonPoints[0],
@@ -465,6 +487,7 @@ export function CanvasStage({
     return {
       polygonPoints,
       markerPoints,
+      labelPoint: markerPoints[1],
       handlePoints,
     };
   }, [displayTransform, normalizedChipBounds, projectOverlayPointToScreen]);
@@ -545,14 +568,16 @@ export function CanvasStage({
                     strokeWidth={3}
                     strokeLinecap='round'
                     strokeLinejoin='round'
+                    data-testid={buildTestId(controlTestIdPrefix, 'box-lower-left-marker')}
                   />
                   <text
-                    x={overlay.markerPoints[1].x + 8}
-                    y={overlay.markerPoints[1].y - 8}
+                    x={overlay.labelPoint.x + 8}
+                    y={overlay.labelPoint.y - 8}
                     fill={swatch.stroke}
                     fontSize='12'
                     fontWeight='700'
                     pointerEvents='none'
+                    data-testid={buildTestId(controlTestIdPrefix, 'box-lower-left-label')}
                   >
                     LL
                   </text>
