@@ -93,6 +93,83 @@ const fillCanvasWhite = (context: CanvasRenderingContext2D, size: Size) => {
   context.fillRect(0, 0, size.width, size.height);
 };
 
+const isIdentityImageOrientation = (transform: LocalizationImageTransform) => (
+  transform.rotationDegrees === 0 && !transform.flipHorizontal && !transform.flipVertical
+);
+
+const getOrientedCropSize = (source: Size, transform: LocalizationImageTransform): Size => {
+  const radians = (transform.rotationDegrees * Math.PI) / 180;
+  const sin = Math.abs(Math.sin(radians));
+  const cos = Math.abs(Math.cos(radians));
+
+  return {
+    width: Math.max(1, Math.round(source.width * cos + source.height * sin)),
+    height: Math.max(1, Math.round(source.width * sin + source.height * cos)),
+  };
+};
+
+const applyCropLocalImageTransform = (
+  point: PixelPoint,
+  transform: LocalizationImageTransform,
+  sourceSize: Size,
+  outputSize = getOrientedCropSize(sourceSize, transform),
+): PixelPoint => {
+  const sourceCenter = {
+    x: sourceSize.width / 2,
+    y: sourceSize.height / 2,
+  };
+  const outputCenter = {
+    x: outputSize.width / 2,
+    y: outputSize.height / 2,
+  };
+  const radians = (transform.rotationDegrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const flipped = {
+    x: (point.x - sourceCenter.x) * (transform.flipHorizontal ? -1 : 1),
+    y: (point.y - sourceCenter.y) * (transform.flipVertical ? -1 : 1),
+  };
+
+  return {
+    x: outputCenter.x + flipped.x * cos - flipped.y * sin,
+    y: outputCenter.y + flipped.x * sin + flipped.y * cos,
+  };
+};
+
+const drawCanvasWithImageOrientation = (
+  source: HTMLCanvasElement,
+  transform: LocalizationImageTransform,
+) => {
+  if (isIdentityImageOrientation(transform)) {
+    return source;
+  }
+
+  const outputSize = getOrientedCropSize(source, transform);
+  const canvas = document.createElement('canvas');
+  canvas.width = outputSize.width;
+  canvas.height = outputSize.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Oriented crop canvas context unavailable');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  fillCanvasWhite(context, outputSize);
+  // Localize scale is UI zoom; Crop/QC only needs the saved orientation.
+  context.translate(outputSize.width / 2, outputSize.height / 2);
+  context.rotate((transform.rotationDegrees * Math.PI) / 180);
+  context.scale(transform.flipHorizontal ? -1 : 1, transform.flipVertical ? -1 : 1);
+  context.drawImage(source, -source.width / 2, -source.height / 2, source.width, source.height);
+  return canvas;
+};
+
+const disposeDistinctCanvas = (
+  canvas: HTMLCanvasElement,
+  protectedCanvases: readonly HTMLCanvasElement[],
+) => {
+  if (!protectedCanvases.includes(canvas)) {
+    disposeCanvas(canvas);
+  }
+};
+
 const preserveRequestedSquareRect = (
   rect: PreprocessRect,
   imageAspectRatio = 1,
@@ -459,6 +536,22 @@ const resolveHeQcGeometry = (args: {
   });
 };
 
+const orientCropLocalGeometry = (
+  geometry: CanonicalCropQcGeometry | null,
+  transform: LocalizationImageTransform,
+  sourceSize: Size,
+  outputSize: Size,
+): CanonicalCropQcGeometry | null => {
+  if (!geometry || isIdentityImageOrientation(transform)) {
+    return geometry;
+  }
+
+  const points = toRectCornerPoints(geometry.rect, sourceSize)
+    .map((point) => applyCropLocalImageTransform(point, transform, sourceSize, outputSize));
+
+  return toCropLocalGeometry(points, outputSize);
+};
+
 const getFeatureMatchCandidates = (
   controlPoints: AlignmentControlPoint[],
   inlierMask: boolean[] | null,
@@ -496,6 +589,7 @@ const makeFeatureMatchesPreview = (args: {
   affineMatrix: AlignmentAffineMatrix;
   controlPoints: AlignmentControlPoint[];
   inlierMask: boolean[] | null;
+  imageTransform: LocalizationImageTransform;
 }) => {
   const leftCanvas = args.alignmentAccepted ? args.eosinCrop : args.eosinFull;
   const rightCanvas = args.alignmentAccepted ? args.heCrop : args.heFull;
@@ -536,16 +630,24 @@ const makeFeatureMatchesPreview = (args: {
       : movingPoint;
 
     const leftPoint = args.alignmentAccepted
-      ? {
-        x: toCropLocalPoint(referencePoint, args.pixelRect).x * acceptedScale.x,
-        y: toCropLocalPoint(referencePoint, args.pixelRect).y * acceptedScale.y,
-      }
+      ? applyCropLocalImageTransform(
+        {
+          x: toCropLocalPoint(referencePoint, args.pixelRect).x * acceptedScale.x,
+          y: toCropLocalPoint(referencePoint, args.pixelRect).y * acceptedScale.y,
+        },
+        args.imageTransform,
+        { width: leftCanvas.width, height: leftCanvas.height },
+      )
       : referencePoint;
     const rightLocalPoint = args.alignmentAccepted
-      ? {
-        x: toCropLocalPoint(warpedMovingPoint, args.pixelRect).x * acceptedScale.x,
-        y: toCropLocalPoint(warpedMovingPoint, args.pixelRect).y * acceptedScale.y,
-      }
+      ? applyCropLocalImageTransform(
+        {
+          x: toCropLocalPoint(warpedMovingPoint, args.pixelRect).x * acceptedScale.x,
+          y: toCropLocalPoint(warpedMovingPoint, args.pixelRect).y * acceptedScale.y,
+        },
+        args.imageTransform,
+        { width: rightCanvas.width, height: rightCanvas.height },
+      )
       : warpedMovingPoint;
     const rightPoint = {
       x: leftCanvas.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
@@ -672,37 +774,45 @@ export async function runCropQc(args: {
     normalized.pixelRect,
     heFullresSize,
   );
+  const orientedEosinFrame = drawCanvasWithImageOrientation(eosinFrame, args.imageTransform);
+  const orientedHeCrop = drawCanvasWithImageOrientation(heCrop, args.imageTransform);
   const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
 
   try {
     const eosinReferenceGeometry = toCanonicalCropQcGeometry(normalized);
-    const heQcGeometry = resolveHeQcGeometry({
-      acceptedChipQuad: args.acceptedChipQuad,
-      acceptedChipBounds: args.acceptedChipBounds,
-      movingSize: { width: he.width, height: he.height },
-      affineMatrix: args.affineMatrix,
-      cropPixelRect: normalized.pixelRect,
-    });
-    const eosinAssetSet = buildCanonicalAssetSet(eosinFrame);
-    const heAssetSet = buildCanonicalAssetSet(heCrop);
+    const heQcGeometry = orientCropLocalGeometry(
+      resolveHeQcGeometry({
+        acceptedChipQuad: args.acceptedChipQuad,
+        acceptedChipBounds: args.acceptedChipBounds,
+        movingSize: { width: he.width, height: he.height },
+        affineMatrix: args.affineMatrix,
+        cropPixelRect: normalized.pixelRect,
+      }),
+      args.imageTransform,
+      heFullresSize,
+      { width: orientedHeCrop.width, height: orientedHeCrop.height },
+    );
+    const eosinAssetSet = buildCanonicalAssetSet(orientedEosinFrame);
+    const heAssetSet = buildCanonicalAssetSet(orientedHeCrop);
     const cropAssets = {
       eosin: eosinAssetSet.assets,
       he: heAssetSet.assets,
     };
 
-    const checkerboardDataUrl = makeCheckerboard(eosinFrame, heCrop);
+    const checkerboardDataUrl = makeCheckerboard(orientedEosinFrame, orientedHeCrop);
     const featureMatchesDataUrl = makeFeatureMatchesPreview({
       alignmentAccepted: useAcceptedFeatureMatchesPreview,
       eosinFull: eosin.canvas,
-      eosinCrop: eosinFrame,
+      eosinCrop: orientedEosinFrame,
       heFull: he.canvas,
-      heCrop,
+      heCrop: orientedHeCrop,
       pixelRect: normalized.pixelRect,
       referenceSize: { width: eosin.width, height: eosin.height },
       movingSize: { width: he.width, height: he.height },
       affineMatrix: args.affineMatrix,
       controlPoints: args.controlPoints ?? [],
       inlierMask: args.inlierMask ?? null,
+      imageTransform: args.imageTransform,
     });
     const checkerboardPreview = {
       dataUrl: checkerboardDataUrl,
@@ -743,5 +853,7 @@ export async function runCropQc(args: {
       disposeCanvas(eosinFrame);
     }
     disposeCanvas(heCrop);
+    disposeDistinctCanvas(orientedEosinFrame, [eosinCrop, eosinFrame]);
+    disposeDistinctCanvas(orientedHeCrop, [heCrop]);
   }
 }
