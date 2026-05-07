@@ -141,9 +141,90 @@ const parsePoints = (value: string | null) => {
 
 const readOutlinePoints = () => parsePoints(screen.getByTestId('localize-box-outline').getAttribute('points'));
 
+const readLowerLeftMarkerPoints = () => parsePoints(screen.getByTestId('localize-box-lower-left-marker').getAttribute('points'));
+
 const readChipBounds = () => JSON.parse(screen.getByTestId('stage-chip-bounds').textContent ?? 'null') as PreprocessRect;
 
 const readTransform = () => JSON.parse(screen.getByTestId('stage-transform').textContent ?? 'null') as LocalizationImageTransform;
+
+const degreesToRadians = (value: number) => (value * Math.PI) / 180;
+
+const getRectSourceCorners = (rect: PreprocessRect) => [
+	{ x: rect.x, y: rect.y },
+	{ x: rect.x + rect.width, y: rect.y },
+	{ x: rect.x + rect.width, y: rect.y + rect.height },
+	{ x: rect.x, y: rect.y + rect.height },
+] as const;
+
+const sourcePointToScreen = (
+	point: { x: number; y: number },
+	transform: LocalizationImageTransform,
+) => {
+	const sourceX = (point.x - 0.5) * HOST_WIDTH;
+	const sourceY = (point.y - 0.5) * HOST_HEIGHT;
+	const flippedX = sourceX * (transform.flipHorizontal ? -1 : 1);
+	const flippedY = sourceY * (transform.flipVertical ? -1 : 1);
+	const radians = degreesToRadians(transform.rotationDegrees);
+	const cos = Math.cos(radians);
+	const sin = Math.sin(radians);
+
+	return [
+		HOST_WIDTH / 2 + flippedX * cos - flippedY * sin,
+		HOST_HEIGHT / 2 + flippedX * sin + flippedY * cos,
+	] as [number, number];
+};
+
+const screenPointToSource = (
+	point: { x: number; y: number },
+	transform: LocalizationImageTransform,
+) => {
+	const translatedX = point.x - HOST_WIDTH / 2;
+	const translatedY = point.y - HOST_HEIGHT / 2;
+	const radians = degreesToRadians(-transform.rotationDegrees);
+	const cos = Math.cos(radians);
+	const sin = Math.sin(radians);
+	const unrotatedX = translatedX * cos - translatedY * sin;
+	const unrotatedY = translatedX * sin + translatedY * cos;
+
+	return {
+		x: (unrotatedX * (transform.flipHorizontal ? -1 : 1)) / HOST_WIDTH + 0.5,
+		y: (unrotatedY * (transform.flipVertical ? -1 : 1)) / HOST_HEIGHT + 0.5,
+	};
+};
+
+const expectPointPairsCloseTo = (
+	actual: [number, number][],
+	expected: [number, number][],
+) => {
+	expect(actual).toHaveLength(expected.length);
+	for (const [index, expectedPoint] of expected.entries()) {
+		expect(actual[index][0]).toBeCloseTo(expectedPoint[0], 6);
+		expect(actual[index][1]).toBeCloseTo(expectedPoint[1], 6);
+	}
+};
+
+const expectPointCloseTo = (actual: [number, number], expected: [number, number]) => {
+	expect(actual[0]).toBeCloseTo(expected[0], 6);
+	expect(actual[1]).toBeCloseTo(expected[1], 6);
+};
+
+const expectRectCloseTo = (actual: PreprocessRect, expected: PreprocessRect) => {
+	expect(actual.x).toBeCloseTo(expected.x, 12);
+	expect(actual.y).toBeCloseTo(expected.y, 12);
+	expect(actual.width).toBeCloseTo(expected.width, 12);
+	expect(actual.height).toBeCloseTo(expected.height, 12);
+};
+
+const expectRectCallCloseTo = (
+	calls: readonly (readonly [PreprocessRect])[],
+	index: number,
+	expected: PreprocessRect,
+) => {
+	const actual = calls[index]?.[0];
+	expect(actual).toBeDefined();
+	if (!actual) throw new Error(`Missing rect call at index ${index}`);
+	expectRectCloseTo(actual, expected);
+};
 
 const readRotationHandlePoint = () => {
 	const handle = screen.getByTestId('localize-rotation-handle-visible');
@@ -194,11 +275,13 @@ function StageHarness() {
 
 function StageCommitHarness({
 	allowOutOfBoundsChipBounds = false,
+	imageTransform = createTransform(),
 	onChipBoundsChangeSpy,
 	onChipBoundsCancelSpy,
 	onChipBoundsCommitSpy,
 }: {
 	allowOutOfBoundsChipBounds?: boolean;
+	imageTransform?: LocalizationImageTransform;
 	onChipBoundsChangeSpy: (bounds: PreprocessRect) => void;
 	onChipBoundsCancelSpy?: () => void;
 	onChipBoundsCommitSpy: (bounds: PreprocessRect) => void;
@@ -214,7 +297,7 @@ function StageCommitHarness({
 				chipBounds={chipBounds}
 				controlTestIdPrefix="localize"
 				image={createImage()}
-				imageTransform={createTransform()}
+				imageTransform={imageTransform}
 				onChipBoundsCancel={onChipBoundsCancelSpy}
 				onChipBoundsChange={(nextBounds) => {
 					onChipBoundsChangeSpy(nextBounds);
@@ -236,111 +319,269 @@ function StageCommitHarness({
 }
 
 describe('CanvasStage', () => {
-	it('keeps overlay coordinates fixed across rotation and a flip state', async () => {
+	it('projects transformed overlay points while rotate and flip preserve source chip bounds', async () => {
 		render(<StageHarness />);
 
 		await waitFor(() => {
 			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
 		});
 
-		const initialPoints = readOutlinePoints();
+		const initialBounds = readChipBounds();
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const identityTransform = createTransform();
+		const initialPoints = getRectSourceCorners(initialRect).map((point) => sourcePointToScreen(point, identityTransform));
+
+		expectPointPairsCloseTo(readOutlinePoints(), initialPoints);
 
 		fireEvent.click(screen.getByTestId('localize-stage-rotate-right-90'));
 
 		await waitFor(() => {
 			expect(readTransform()).toMatchObject({ rotationDegrees: 90 });
 		});
-		expect(readOutlinePoints()).toEqual(initialPoints);
+
+		const rotatedTransform = { ...identityTransform, rotationDegrees: 90 };
+		const rotatedPoints: [number, number][] = [
+			[580, 60],
+			[580, 220],
+			[420, 220],
+			[420, 60],
+		];
+		const rotatedOutlinePoints = readOutlinePoints();
+		expectPointPairsCloseTo([rotatedOutlinePoints[0]], [[580, 60]]);
+		expectPointPairsCloseTo(rotatedOutlinePoints, rotatedPoints);
+		expectPointCloseTo(readLowerLeftMarkerPoints()[1], [420, 220]);
+		expect(readChipBounds()).toEqual(initialBounds);
 
 		fireEvent.click(screen.getByTestId('localize-stage-flip-horizontal'));
 
 		await waitFor(() => {
 			expect(readTransform()).toMatchObject({ flipHorizontal: true });
 		});
-		expect(readOutlinePoints()).toEqual(initialPoints);
+
+		const flippedRotatedTransform = { ...rotatedTransform, flipHorizontal: true };
+		const flippedRotatedPoints = getRectSourceCorners(initialRect).map((point) => sourcePointToScreen(point, flippedRotatedTransform));
+		expectPointPairsCloseTo(readOutlinePoints(), flippedRotatedPoints);
+		expectPointCloseTo(readLowerLeftMarkerPoints()[1], [420, 540]);
+		expect(readChipBounds()).toEqual(initialBounds);
 	});
 
-	it('preserves move, resize, and direct rotation control behavior after rotation', async () => {
-		render(<StageHarness />);
+	it('uses transformed pointer coordinates for body drag updates and commits', async () => {
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const rotatedTransform = { ...createTransform(), rotationDegrees: 90 };
+
+		render(
+			<StageCommitHarness
+				imageTransform={rotatedTransform}
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
 
 		await waitFor(() => {
 			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
 		});
 
 		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
-		const initialOutline = readOutlinePoints();
-		expect(initialOutline).toEqual([
-			[160, 120],
-			[320, 120],
-			[320, 280],
-			[160, 280],
-		]);
-
-		fireEvent.click(screen.getByTestId('localize-stage-rotate-right-90'));
-
-		await waitFor(() => {
-			expect(readTransform()).toMatchObject({ rotationDegrees: 90 });
-		});
-		expect(readOutlinePoints()).toEqual(initialOutline);
+		const startSourcePoint = {
+			x: initialRect.x + initialRect.width / 2,
+			y: initialRect.y + initialRect.height / 2,
+		};
+		const [startScreenX, startScreenY] = sourcePointToScreen(startSourcePoint, rotatedTransform);
+		const firstScreenPoint = { x: startScreenX + 80, y: startScreenY };
+		const finalScreenPoint = { x: startScreenX + 160, y: startScreenY + 60 };
+		const projectedSourceCorner = sourcePointToScreen({ x: 0.2, y: 0.2 }, rotatedTransform);
+		const invertedSourceCorner = screenPointToSource(
+			{ x: projectedSourceCorner[0], y: projectedSourceCorner[1] },
+			rotatedTransform,
+		);
+		expect(invertedSourceCorner.x).toBeCloseTo(0.2, 12);
+		expect(invertedSourceCorner.y).toBeCloseTo(0.2, 12);
+		const firstSourcePoint = screenPointToSource(firstScreenPoint, rotatedTransform);
+		const finalSourcePoint = screenPointToSource(finalScreenPoint, rotatedTransform);
+		const expectedFirstMove = translateChipBounds(
+			initialRect,
+			{
+				x: firstSourcePoint.x - startSourcePoint.x,
+				y: firstSourcePoint.y - startSourcePoint.y,
+			},
+			IMAGE_ASPECT_RATIO,
+		);
+		const expectedFinalMove = translateChipBounds(
+			initialRect,
+			{
+				x: finalSourcePoint.x - startSourcePoint.x,
+				y: finalSourcePoint.y - startSourcePoint.y,
+			},
+			IMAGE_ASPECT_RATIO,
+		);
 
 		const body = screen.getByTestId('localize-box-body');
 		await act(async () => {
 			dispatchPointerEvent(body, 'pointerdown', {
 				buttons: 1,
-				clientX: 240,
-				clientY: 200,
+				clientX: startScreenX,
+				clientY: startScreenY,
 				pointerId: 1,
 			});
 		});
 		await act(async () => {
 			dispatchPointerEvent(window, 'pointermove', {
 				buttons: 1,
-				clientX: 520,
-				clientY: 300,
+				clientX: firstScreenPoint.x,
+				clientY: firstScreenPoint.y,
+				pointerId: 1,
+			});
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: finalScreenPoint.x,
+				clientY: finalScreenPoint.y,
 				pointerId: 1,
 			});
 			dispatchPointerEvent(window, 'pointerup', {
-				clientX: 520,
-				clientY: 300,
+				clientX: finalScreenPoint.x,
+				clientY: finalScreenPoint.y,
 				pointerId: 1,
 			});
 		});
 
-		const movedRect = translateChipBounds(initialRect, { x: 0.35, y: 1 / 6 }, IMAGE_ASPECT_RATIO);
+		expect(onChipBoundsChangeSpy).toHaveBeenCalledTimes(2);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 0, expectedFirstMove);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 1, expectedFinalMove);
+		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
+		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedFinalMove);
 		await waitFor(() => {
-			expect(readChipBounds()).toEqual(movedRect);
+			expectRectCloseTo(readChipBounds(), expectedFinalMove);
 		});
+	});
+
+	it('inverts the literal 90-degree 800x600 canvas point back to source space for drag updates', async () => {
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const rotatedTransform = { ...createTransform(), rotationDegrees: 90 };
+
+		render(
+			<StageCommitHarness
+				imageTransform={rotatedTransform}
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const literalProjectedCorner = { x: 580, y: 60 };
+		const literalProjectedSourcePoint = { x: 520, y: 140 };
+		const expectedMove = translateChipBounds(
+			initialRect,
+			{ x: 0.1, y: 0.1 },
+			IMAGE_ASPECT_RATIO,
+		);
+
+		expectPointPairsCloseTo([readOutlinePoints()[0]], [[literalProjectedCorner.x, literalProjectedCorner.y]]);
+		expect(readOutlinePoints()[0][0]).not.toBeCloseTo(640, 6);
+		expect(readOutlinePoints()[0][1]).not.toBeCloseTo(120, 6);
+
+		const body = screen.getByTestId('localize-box-body');
+		await act(async () => {
+			dispatchPointerEvent(body, 'pointerdown', {
+				buttons: 1,
+				clientX: literalProjectedCorner.x,
+				clientY: literalProjectedCorner.y,
+				pointerId: 1,
+			});
+		});
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: literalProjectedSourcePoint.x,
+				clientY: literalProjectedSourcePoint.y,
+				pointerId: 1,
+			});
+			dispatchPointerEvent(window, 'pointerup', {
+				clientX: literalProjectedSourcePoint.x,
+				clientY: literalProjectedSourcePoint.y,
+				pointerId: 1,
+			});
+		});
+
+		expect(onChipBoundsChangeSpy).toHaveBeenCalledTimes(1);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 0, expectedMove);
+		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
+		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedMove);
+	});
+
+	it('uses transformed pointer coordinates for resize handles', async () => {
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const rotatedTransform = { ...createTransform(), rotationDegrees: 90 };
+
+		render(
+			<StageCommitHarness
+				imageTransform={rotatedTransform}
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const eastSourcePoint = {
+			x: initialRect.x + initialRect.width,
+			y: initialRect.y + initialRect.height / 2,
+		};
+		const targetSourcePoint = {
+			x: initialRect.x + initialRect.width + 0.15,
+			y: initialRect.y + initialRect.height / 2,
+		};
+		const [handleScreenX, handleScreenY] = sourcePointToScreen(eastSourcePoint, rotatedTransform);
+		const [targetScreenX, targetScreenY] = sourcePointToScreen(targetSourcePoint, rotatedTransform);
+		const expectedResizedRect = resizeChipBounds(
+			initialRect,
+			'e',
+			targetSourcePoint,
+			IMAGE_ASPECT_RATIO,
+		);
 
 		const eastHandle = screen.getByTestId('localize-box-handle-e');
 		await act(async () => {
 			dispatchPointerEvent(eastHandle, 'pointerdown', {
 				buttons: 1,
-				clientX: 400,
-				clientY: 200,
+				clientX: handleScreenX,
+				clientY: handleScreenY,
 				pointerId: 1,
 			});
 		});
 		await act(async () => {
 			dispatchPointerEvent(window, 'pointermove', {
 				buttons: 1,
-				clientX: 480,
-				clientY: 200,
+				clientX: targetScreenX,
+				clientY: targetScreenY,
 				pointerId: 1,
 			});
 			dispatchPointerEvent(window, 'pointerup', {
-				clientX: 480,
-				clientY: 200,
+				clientX: targetScreenX,
+				clientY: targetScreenY,
 				pointerId: 1,
 			});
 		});
 
-		const resizedRect = resizeChipBounds(movedRect, 'e', { x: 0.6, y: 1 / 3 }, IMAGE_ASPECT_RATIO);
+		expect(onChipBoundsChangeSpy).toHaveBeenCalledTimes(1);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 0, expectedResizedRect);
+		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
+		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedResizedRect);
 		await waitFor(() => {
-			expect(readChipBounds()).toEqual(resizedRect);
+			expectRectCloseTo(readChipBounds(), expectedResizedRect);
 		});
 	});
 
-	it('lets the real rotation handle change rotation without drifting overlay geometry or saved bounds', async () => {
+	it('lets the real rotation handle change rotation without mutating saved bounds', async () => {
 		render(<StageHarness />);
 
 		await waitFor(() => {
@@ -377,13 +618,13 @@ describe('CanvasStage', () => {
 		await waitFor(() => {
 			expect(readTransform().rotationDegrees).not.toBe(0);
 		});
-		expect(readOutlinePoints()).toEqual(initialOutline);
+		expect(readOutlinePoints()).not.toEqual(initialOutline);
 		expect(readChipBounds()).toEqual(initialBounds);
 	});
 
 	it('emits live drag updates on pointermove and a single final bounds commit on pointerup', async () => {
-		const onChipBoundsChangeSpy = vi.fn();
-		const onChipBoundsCommitSpy = vi.fn();
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
 
 		render(
 			<StageCommitHarness
@@ -426,8 +667,8 @@ describe('CanvasStage', () => {
 		});
 
 		expect(onChipBoundsChangeSpy).toHaveBeenCalledTimes(2);
-		expect(onChipBoundsChangeSpy).toHaveBeenNthCalledWith(1, expectedFirstMove);
-		expect(onChipBoundsChangeSpy).toHaveBeenNthCalledWith(2, expectedFinalMove);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 0, expectedFirstMove);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 1, expectedFinalMove);
 		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
 
 		await act(async () => {
@@ -439,7 +680,7 @@ describe('CanvasStage', () => {
 		});
 
 		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
-		expect(onChipBoundsCommitSpy).toHaveBeenCalledWith(expectedFinalMove);
+		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedFinalMove);
 	});
 
 	it('supports outward resize past the image edge when the caller opts out of image clamping', () => {
@@ -464,9 +705,9 @@ describe('CanvasStage', () => {
 	});
 
 	it('clears drag state through the cancel callback without committing bounds', async () => {
-		const onChipBoundsChangeSpy = vi.fn();
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
 		const onChipBoundsCancelSpy = vi.fn();
-		const onChipBoundsCommitSpy = vi.fn();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
 
 		render(
 			<StageCommitHarness
@@ -502,7 +743,7 @@ describe('CanvasStage', () => {
 			});
 		});
 
-		expect(onChipBoundsChangeSpy).toHaveBeenCalledWith(expectedMove);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 0, expectedMove);
 		expect(onChipBoundsCancelSpy).not.toHaveBeenCalled();
 		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
 
