@@ -144,7 +144,7 @@ const toCsv = (
     ] as const),
   );
 
-  for (const spot of projectedSpots) {
+  const rowsByArrayPosition = projectedSpots.map((spot) => {
     const coordinates = exportOnlySpotCentersByArrayPosition.get(getArrayPositionKey(spot.arrayRow, spot.arrayCol));
     if (!coordinates) {
       throw new Error(`Chip template anchor geometry is missing for array position ${spot.arrayRow}:${spot.arrayCol}. Reapply chip configuration before export.`);
@@ -153,13 +153,24 @@ const toCsv = (
     // CSV keeps bottom-left array_row while pxl_* stays in top-left image space.
     const serializedArrayRow = rows + 1 - spot.arrayRow;
 
+    return {
+      barcode: spot.barcode,
+      inTissue: selectedSpotIds.has(spot.id) ? '1' : '0',
+      arrayRow: serializedArrayRow,
+      arrayCol: spot.arrayCol,
+      pxlRowInFullres: coordinates.pxl_row_in_fullres,
+      pxlColInFullres: coordinates.pxl_col_in_fullres,
+    };
+  }).sort((left, right) => left.arrayRow - right.arrayRow || left.arrayCol - right.arrayCol);
+
+  for (const row of rowsByArrayPosition) {
     lines.push([
-      spot.barcode,
-      selectedSpotIds.has(spot.id) ? '1' : '0',
-      String(serializedArrayRow),
-      String(spot.arrayCol),
-      String(coordinates.pxl_row_in_fullres),
-      String(coordinates.pxl_col_in_fullres),
+      row.barcode,
+      row.inTissue,
+      String(row.arrayRow),
+      String(row.arrayCol),
+      String(row.pxlRowInFullres),
+      String(row.pxlColInFullres),
     ].join(','));
   }
 

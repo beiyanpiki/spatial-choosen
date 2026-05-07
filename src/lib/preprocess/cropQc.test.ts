@@ -20,7 +20,6 @@ type CanvasOperation =
   | { type: 'fillRect'; fillStyle: string; x: number; y: number; width: number; height: number }
   | { type: 'lineTo'; x: number; y: number }
   | { type: 'moveTo'; x: number; y: number }
-  | { type: 'stroke'; lineWidth: number }
   | {
     type: 'putImageData';
     allPixelsMatch: boolean;
@@ -34,7 +33,11 @@ type CanvasOperation =
       topRight: [number, number, number, number] | null;
     };
     width: number;
-  };
+  }
+  | { type: 'rotate'; angle: number }
+  | { type: 'scale'; x: number; y: number }
+  | { type: 'stroke'; lineWidth: number }
+  | { type: 'translate'; x: number; y: number };
 
 type CanvasDrawImageSummary = {
   args: number[];
@@ -64,6 +67,20 @@ type CanvasImageDataSummary = {
   width: number;
 };
 
+type CanvasRotateSummary = {
+  angle: number;
+};
+
+type CanvasScaleSummary = {
+  x: number;
+  y: number;
+};
+
+type CanvasTranslateSummary = {
+  x: number;
+  y: number;
+};
+
 type PreviewSummary = {
   arcCount: number;
   arcPoints: Array<{ x: number; y: number }>;
@@ -77,7 +94,10 @@ type PreviewSummary = {
   moveToCount: number;
   putImageData: CanvasImageDataSummary[];
   putImageDataCount: number;
+  rotateCalls: CanvasRotateSummary[];
+  scaleCalls: CanvasScaleSummary[];
   strokeLineWidths: number[];
+  translateCalls: CanvasTranslateSummary[];
 };
 
 type WarpAffineCall = {
@@ -299,6 +319,22 @@ class MockCanvasRenderingContext2D {
     this.operations.push({ type: 'fillRect', fillStyle: this.fillStyle, x, y, width, height });
   });
 
+  rotate = vi.fn((angle: number) => {
+    this.operations.push({ type: 'rotate', angle });
+  });
+
+  save = vi.fn(() => undefined);
+
+  scale = vi.fn((x: number, y: number) => {
+    this.operations.push({ type: 'scale', x, y });
+  });
+
+  restore = vi.fn(() => undefined);
+
+  translate = vi.fn((x: number, y: number) => {
+    this.operations.push({ type: 'translate', x, y });
+  });
+
   getImageData = vi.fn((x: number, y: number, width: number, height: number) => (
     (() => {
       void x;
@@ -379,9 +415,18 @@ class MockCanvasElement {
           samplePixels: operation.samplePixels,
         })),
       putImageDataCount: this.context.operations.filter((operation) => operation.type === 'putImageData').length,
+      rotateCalls: this.context.operations
+        .filter((operation): operation is Extract<CanvasOperation, { type: 'rotate' }> => operation.type === 'rotate')
+        .map((operation) => ({ angle: operation.angle })),
+      scaleCalls: this.context.operations
+        .filter((operation): operation is Extract<CanvasOperation, { type: 'scale' }> => operation.type === 'scale')
+        .map((operation) => ({ x: operation.x, y: operation.y })),
       strokeLineWidths: this.context.operations
         .filter((operation): operation is Extract<CanvasOperation, { type: 'stroke' }> => operation.type === 'stroke')
         .map((operation) => operation.lineWidth),
+      translateCalls: this.context.operations
+        .filter((operation): operation is Extract<CanvasOperation, { type: 'translate' }> => operation.type === 'translate')
+        .map((operation) => ({ x: operation.x, y: operation.y })),
     };
 
     return `mock:${JSON.stringify(summary)}`;
@@ -663,6 +708,140 @@ describe('runCropQc feature match preview', () => {
     expect(result.cropRect.height).toBeCloseTo(chipBounds.width);
     expect(result.cropWidth).toBe(result.cropHeight);
     expect(result.cropWidth).toBe(74);
+  });
+
+  it('applies localization rotation and flips to emitted crop assets and accepted preview markers', async () => {
+    installBrowserStubs();
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      chipBounds: {
+        x: 0.2,
+        y: 0.1,
+        width: 0.4,
+        height: 0.4,
+      },
+      imageTransform: {
+        rotationDegrees: 90,
+        flipHorizontal: true,
+        flipVertical: false,
+        scale: 1,
+      },
+      controlPoints: [
+        { id: 'point-a', source: { x: 0.3, y: 0.2 }, target: { x: 0.3, y: 0.2 } },
+      ],
+      inlierMask: [true],
+      solveAccepted: true,
+    });
+
+    const expectedAngle = Math.PI / 2;
+    const eosinSummary = expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, { width: 40, height: 40 });
+    const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 40, height: 40 });
+    const featureSummary = parsePreviewSummary(result.featureMatchesDataUrl);
+
+    expect(eosinSummary.translateCalls).toContainEqual({ x: 20, y: 20 });
+    expect(eosinSummary.rotateCalls[0]?.angle).toBeCloseTo(expectedAngle);
+    expect(eosinSummary.scaleCalls).toContainEqual({ x: -1, y: 1 });
+    expect(heSummary.translateCalls).toContainEqual({ x: 20, y: 20 });
+    expect(heSummary.rotateCalls[0]?.angle).toBeCloseTo(expectedAngle);
+    expect(heSummary.scaleCalls).toContainEqual({ x: -1, y: 1 });
+    expect(featureSummary.arcPoints).toEqual([
+      { x: 30, y: 30 },
+      { x: 94, y: 30 },
+    ]);
+  });
+
+  it('swaps emitted dimensions and crop-local HE geometry for non-square right-angle rotations', async () => {
+    installBrowserStubs({ width: 100, height: 100 });
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 0.5, 0],
+      chipBounds: {
+        x: 0.2,
+        y: 0.1,
+        width: 0.4,
+        height: 0.4,
+      },
+      acceptedChipBounds: {
+        x: 0.3,
+        y: 0.2,
+        width: 0.2,
+        height: 0.1,
+      },
+      imageTransform: {
+        rotationDegrees: 90,
+        flipHorizontal: false,
+        flipVertical: false,
+        scale: 1,
+      },
+      controlPoints: [],
+      inlierMask: null,
+      solveAccepted: true,
+    });
+
+    const eosinSummary = expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, { width: 80, height: 40 });
+    const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 80, height: 40 });
+
+    expect(result.cropWidth).toBe(80);
+    expect(result.cropHeight).toBe(40);
+    expect(eosinSummary.translateCalls).toContainEqual({ x: 40, y: 20 });
+    expect(heSummary.translateCalls).toContainEqual({ x: 40, y: 20 });
+    expectGeometryToBeCloseTo(result.heQcGeometry, {
+      rect: {
+        x: 0.875,
+        y: 0.25,
+        width: 0.125,
+        height: 0.5,
+      },
+      width: 10,
+      height: 20,
+    });
+  });
+
+  it('keeps Localize scale out of emitted Crop/QC dimensions and geometry', async () => {
+    installBrowserStubs({ width: 100, height: 100 });
+
+    const baseArgs = {
+      affineMatrix: [1, 0, 0, 0, 0.5, 0] as AlignmentAffineMatrix,
+      chipBounds: {
+        x: 0.2,
+        y: 0.1,
+        width: 0.4,
+        height: 0.4,
+      },
+      acceptedChipBounds: {
+        x: 0.3,
+        y: 0.2,
+        width: 0.2,
+        height: 0.1,
+      },
+      controlPoints: [],
+      inlierMask: null,
+      solveAccepted: true,
+    };
+
+    const base = await runCropQcWithArgs({
+      ...baseArgs,
+      imageTransform: {
+        rotationDegrees: 90,
+        flipHorizontal: false,
+        flipVertical: false,
+        scale: 1,
+      },
+    });
+    const zoomed = await runCropQcWithArgs({
+      ...baseArgs,
+      imageTransform: {
+        rotationDegrees: 90,
+        flipHorizontal: false,
+        flipVertical: false,
+        scale: 3,
+      },
+    });
+
+    expect(zoomed.cropWidth).toBe(base.cropWidth);
+    expect(zoomed.cropHeight).toBe(base.cropHeight);
+    expect(zoomed.heQcGeometry).toEqual(base.heQcGeometry);
   });
 
   it('white-pads partial crop overruns instead of shrinking the canonical crop canvas', async () => {
