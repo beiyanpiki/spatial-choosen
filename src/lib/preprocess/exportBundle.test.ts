@@ -581,6 +581,10 @@ const createExpectedExportedTissuePositionRow = (args: {
   pxl_col_in_fullres: args.pxl_col_in_fullres,
 } satisfies ExportedTissuePositionRow);
 
+const sortExportedTissuePositionRowsByArrayPosition = (rows: ExportedTissuePositionRow[]) => [...rows].sort((left, right) => (
+  left.array_row - right.array_row || left.array_col - right.array_col
+));
+
 const stripMembershipFromExportedTissuePositionRow = (row: ExportedTissuePositionRow) => ({
   barcode: row.barcode,
   array_row: row.array_row,
@@ -655,21 +659,22 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows[63]?.[63]).toBe('1');
   });
 
-  it('writes 50um tissue_positions.csv in stable barcode order with bottom-left array rows and emitted fullres image coordinates', async () => {
+  it('writes 50um tissue_positions.csv sorted by exported array position with bottom-left array rows and emitted fullres image coordinates', async () => {
     const project = createBaseProject();
 
     const result = await exportProject(project);
     const rows = await readExportedTissuePositions(result.blob);
 
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
       'barcode-spot-a',
       'barcode-spot-b',
-      'barcode-spot-c',
-      'barcode-spot-d',
     ]);
     // Template coordinates [75, 6375] are mapped to emitted fullres frame [0, 640]
     // Formula: output = (template - 75) / 6300 * 640
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-spot-a',
         inTissue: 1,
@@ -712,7 +717,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 640,
         pxl_col_in_fullres: 640,
       }),
-    ]);
+    ]));
   });
 
   it('writes tissue_positions.csv in the emitted fullres image coordinate frame when crop metadata is stale', async () => {
@@ -739,13 +744,14 @@ describe('exportBundle canonical matrix exports', () => {
     const dimensions = await readExportedPngDimensions(result.blob, 'tissue_fullres_image.png');
 
     expect(dimensions).toEqual({ width: emittedFullresWidth, height: emittedFullresHeight });
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
       'barcode-spot-a',
       'barcode-spot-b',
-      'barcode-spot-c',
-      'barcode-spot-d',
     ]);
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-spot-a',
         inTissue: 1,
@@ -782,7 +788,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 5705,
         pxl_col_in_fullres: 5705,
       }),
-    ]);
+    ]));
     expect(archive.file('tissue_fullres_image.png')).toBeTruthy();
   });
 
@@ -808,13 +814,14 @@ describe('exportBundle canonical matrix exports', () => {
     const dimensions = await readExportedPngDimensions(result.blob, 'tissue_fullres_image.png');
 
     expect(dimensions).toEqual({ width: emittedFullresWidth, height: emittedFullresHeight });
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
       'barcode-spot-a',
       'barcode-spot-b',
-      'barcode-spot-c',
-      'barcode-spot-d',
     ]);
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-spot-a',
         inTissue: 1,
@@ -851,7 +858,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 5705,
         pxl_col_in_fullres: 4200,
       }),
-    ]);
+    ]));
   });
 
   it('changes only matrix-derived in_tissue flags while keeping exported barcode order, array coordinates, and top-left pxl coordinates identical', async () => {
@@ -892,15 +899,16 @@ describe('exportBundle canonical matrix exports', () => {
     const result = await exportProject(project);
     const rows = await readExportedTissuePositions(result.blob);
 
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-15um-spot-d',
+      'barcode-15um-spot-c',
       'barcode-15um-spot-a',
       'barcode-15um-spot-b',
-      'barcode-15um-spot-c',
-      'barcode-15um-spot-d',
     ]);
     // 15um template range [33, 3833] mapped to emitted fullres frame [0, 640]
     // Formula: output = (template - 33) / 3800 * 640
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-15um-spot-a',
         inTissue: 1,
@@ -943,7 +951,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 640,
         pxl_col_in_fullres: 640,
       }),
-    ]);
+    ]));
   });
 
   it('derives spot_diameter_fullres from export geometry instead of persisted crop/QC metadata', async () => {
