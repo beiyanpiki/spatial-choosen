@@ -380,7 +380,6 @@ const createIndexedDbMock = () => {
         close: () => undefined,
       };
 
-      store.size;
       return tx;
     },
     close: () => undefined,
@@ -826,6 +825,150 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
     expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
     expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+  });
+
+  // ── Regression tests: matrix-vs-autoSelectedSpotIds disagreement ──────────
+  // These expose the bug where hydration reconstructs the matrix from
+  // autoSelectedSpotIds instead of persisting the canonical matrix independently.
+  // When autoSelectedSpotIds disagrees with the matrix, the matrix should win.
+
+  it('hydrates selectedSpotIds from canonical matrix when autoSelectedSpotIds is empty', async () => {
+    const project = createProject();
+    // Matrix has spot-b (index 65 = row 2, col 2) active
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.autoSelectedSpotIds = [];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    await upsertPreprocessProject(project);
+
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === '/preprocess-chip-configs/50um/manifest.json') {
+        return new Response(JSON.stringify({
+          id: '50um',
+          label: '50um',
+          gridRows: 64,
+          gridCols: 64,
+          spotDiameter: 1,
+          spotGap: 1,
+          barcodeTemplatePath: '/template.csv',
+          tissuePositionsPath: '/template.csv',
+        }), { status: 200 });
+      }
+      if (input === '/template.csv') {
+        return new Response([
+          'barcode,array_row,array_col',
+          'spot-a,1,1',
+          'spot-b,2,2',
+        ].join('\n'), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    // Matrix must survive round-trip even when autoSelectedSpotIds is empty
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    // selectedSpotIds must follow canonical matrix, not empty auto IDs
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual([]);
+  });
+
+  it('hydrates selectedSpotIds from canonical matrix when autoSelectedSpotIds disagree', async () => {
+    const project = createProject();
+    // Matrix has spot-b (index 65 = row 2, col 2) active
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    // autoSelectedSpotIds points at spot-a instead — this is stale auto-detection output
+    // that no longer matches the user-edited (or imported) matrix
+    project.tissueSelection.autoSelectedSpotIds = ['spot-a'];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    await upsertPreprocessProject(project);
+
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === '/preprocess-chip-configs/50um/manifest.json') {
+        return new Response(JSON.stringify({
+          id: '50um',
+          label: '50um',
+          gridRows: 64,
+          gridCols: 64,
+          spotDiameter: 1,
+          spotGap: 1,
+          barcodeTemplatePath: '/template.csv',
+          tissuePositionsPath: '/template.csv',
+        }), { status: 200 });
+      }
+      if (input === '/template.csv') {
+        return new Response([
+          'barcode,array_row,array_col',
+          'spot-a,1,1',
+          'spot-b,2,2',
+        ].join('\n'), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    // Matrix must be preserved exactly, overriding the conflicting auto IDs
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    // selectedSpotIds must follow the canonical matrix, NOT autoSelectedSpotIds
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+  });
+
+  it('does not fall back to stale autoSelectedSpotIds when canonical matrix is all zeros', async () => {
+    const project = createProject();
+    // Matrix is all zeros — user manually cleared the selection
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: new Array(4096).fill(0 as const),
+    };
+    // autoSelectedSpotIds still has stale data from a previous auto-detection run
+    project.tissueSelection.autoSelectedSpotIds = ['spot-a'];
+    project.tissueSelection.selectedSpotIds = [];
+
+    await upsertPreprocessProject(project);
+
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === '/preprocess-chip-configs/50um/manifest.json') {
+        return new Response(JSON.stringify({
+          id: '50um',
+          label: '50um',
+          gridRows: 64,
+          gridCols: 64,
+          spotDiameter: 1,
+          spotGap: 1,
+          barcodeTemplatePath: '/template.csv',
+          tissuePositionsPath: '/template.csv',
+        }), { status: 200 });
+      }
+      if (input === '/template.csv') {
+        return new Response([
+          'barcode,array_row,array_col',
+          'spot-a,1,1',
+          'spot-b,2,2',
+        ].join('\n'), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    // Matrix must not be resurrected by stale auto IDs
+    expect(hydrated?.tissueSelection.matrix?.values.every((v) => v === 0)).toBe(true);
+    // selectedSpotIds must be empty when the canonical matrix says no spots are active
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual([]);
   });
 
   it('strips storage-only projectedSpotIndex from hydrated runtime projects and package serialization', async () => {
