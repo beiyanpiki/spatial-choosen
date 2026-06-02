@@ -56,7 +56,7 @@ describe('tissue region helpers', () => {
     expect(deriveSelectedSpotIdsFromRegions(region ? [region] : [], PROJECTED_SPOTS)).toEqual(['left', 'right']);
   });
 
-  it('keeps manual hole regions distinct from the auto-generated fallback behavior', () => {
+  it('keeps manual hole regions distinct from detected tissue region behavior', () => {
     const manualRegion: TissueRegion = {
       id: AUTO_TISSUE_REGION_ID,
       label: 'Detected tissue',

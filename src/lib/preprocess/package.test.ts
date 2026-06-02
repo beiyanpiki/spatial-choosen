@@ -88,16 +88,6 @@ const createProject = (): PreprocessProject => ({
       flipVertical: false,
       scale: 1,
     },
-    autoProposal: {
-      status: 'idle',
-      method: null,
-      coarseBounds: null,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: null,
-      failureReason: null,
-    },
     focusedImageDataUrl: null,
   },
   alignment: {

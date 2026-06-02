@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { LegacyPreprocessProject, PreprocessProject } from '@/types/preprocess';
+import type { PreprocessProject } from '@/types/preprocess';
 
 type MockExportReadinessArgs = {
   includeAlignedImage?: boolean;
@@ -15,6 +15,16 @@ type CapturedExportPanelProps = {
   canExport: boolean;
   onToggleIncludeAlignedImage: (value: boolean) => void;
   onDownload: () => void;
+};
+
+type CapturedPersistOptions = {
+  mode?: string;
+  strategy?: 'immediate' | 'debounced';
+};
+
+type CapturedProjectMutation = {
+  project: PreprocessProject;
+  persistOptions?: CapturedPersistOptions;
 };
 
 const mockExportPreprocessZip = vi.fn();
@@ -42,44 +52,44 @@ const mockGetPreprocessZipExportReadiness = vi.fn((_: unknown, options?: MockExp
         },
       }
 ));
+const mockGetPreprocessZipExportReadinessProxy = (...args: Parameters<typeof mockGetPreprocessZipExportReadiness>) => (
+  mockGetPreprocessZipExportReadiness(...args)
+);
+const mockToast = vi.fn();
+const mockRouterPush = vi.fn();
+const mockSearchParamsState: { preprocessId: string | null } = { preprocessId: null };
+const mockDeletePreprocessProject = vi.fn();
+const mockGetPreprocessProject = vi.fn();
+const mockReadPreprocessProjectSummaries = vi.fn();
+const mockUpsertPreprocessProject = vi.fn();
+const mockUpsertPreprocessProjectMetadata = vi.fn();
 let capturedExportPanelProps: CapturedExportPanelProps | null = null;
 
+vi.mock('@chakra-ui/react', async () => {
+  const actual = await vi.importActual<typeof import('@chakra-ui/react')>('@chakra-ui/react');
+
+  return {
+    ...actual,
+    useToast: () => mockToast,
+  };
+});
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+  useSearchParams: () => ({
+    get: (key: string) => (key === 'preprocess_id' ? mockSearchParamsState.preprocessId : null),
+  }),
+}));
+
+vi.mock('../../../lib/preprocess/storage', () => ({
+  deletePreprocessProject: (...args: unknown[]) => mockDeletePreprocessProject(...args),
+  getPreprocessProject: (...args: unknown[]) => mockGetPreprocessProject(...args),
+  readPreprocessProjectSummaries: (...args: unknown[]) => mockReadPreprocessProjectSummaries(...args),
+  upsertPreprocessProject: (...args: unknown[]) => mockUpsertPreprocessProject(...args),
+  upsertPreprocessProjectMetadata: (...args: unknown[]) => mockUpsertPreprocessProjectMetadata(...args),
+}));
+
 vi.mock('../../../lib/preprocess/alignment', () => ({
-  applyAcceptedAutoAlignment: (...args: unknown[]) => mockApplyAcceptedAutoAlignment(...args),
-  classifyAutoRefinementOutcome: ({
-    coarseBounds,
-    eccCorrelation,
-    acceptedTransform,
-    failureReason,
-  }: {
-    coarseBounds: unknown;
-    eccCorrelation: number | null;
-    acceptedTransform: unknown;
-    failureReason: string | null;
-  }) => {
-    if (!coarseBounds || failureReason === 'no-coarse-match') {
-      return { accepted: false, fallbackReason: 'no-proposal' };
-    }
-
-    if (failureReason === 'ecc-failed') {
-      return { accepted: false, fallbackReason: 'ecc-failed' };
-    }
-
-    if (
-      failureReason === 'ecc-below-threshold'
-      || typeof eccCorrelation !== 'number'
-      || !Number.isFinite(eccCorrelation)
-      || eccCorrelation < 0.75
-    ) {
-      return { accepted: false, fallbackReason: 'ecc-rejected' };
-    }
-
-    if (acceptedTransform) {
-      return { accepted: true, fallbackReason: null };
-    }
-
-    return { accepted: false, fallbackReason: 'manual-required' };
-  },
   computeAlignmentStatus: () => 'ready',
   normalizeAlignmentSlice: (value: Record<string, unknown>) => value,
 }));
@@ -90,24 +100,16 @@ vi.mock('../../../lib/preprocess/cropQc', () => ({
 
 vi.mock('../../../lib/preprocess/exportBundle', () => ({
   exportPreprocessZip: (...args: unknown[]) => mockExportPreprocessZip(...args),
-  getPreprocessZipExportReadiness: (...args: unknown[]) => mockGetPreprocessZipExportReadiness(...args),
+  getPreprocessZipExportReadiness: mockGetPreprocessZipExportReadinessProxy,
 }));
 
 vi.mock('../../../lib/preprocess/invalidation', () => ({
   invalidateOnAlignmentChange: (project: unknown) => project,
   invalidateOnCropQcChange: (project: unknown) => project,
-  invalidateOnHeFocusAutoProposalChange: (project: unknown) => project,
   invalidateOnHeFocusChange: (project: unknown) => project,
   invalidateOnHeFocusChipBoundsChange: (project: unknown) => project,
   invalidateOnLocalizationChange: (project: unknown) => project,
   invalidateOnSourceAssetsChange: (project: unknown) => project,
-}));
-
-const mockRunHeAutoLocalization = vi.fn();
-const mockApplyAcceptedAutoAlignment = vi.fn();
-
-vi.mock('../../../lib/preprocess/heAutoLocalization', () => ({
-  runHeAutoLocalization: (...args: unknown[]) => mockRunHeAutoLocalization(...args),
 }));
 
 vi.mock('../../../lib/preprocess/loadOpenCv', () => ({
@@ -158,23 +160,7 @@ vi.mock('../../../lib/preprocess/chipConfigs', async () => {
 });
 
 vi.mock('./AlignmentPanel', () => ({
-  AlignmentPanel: (props: {
-    autoProposalMethod?: string | null;
-    autoProposalStatus?: string;
-    onRecomputeAutoLocalization?: () => void;
-  }) => (
-    <div data-testid="alignment-panel-mock">
-      <div data-testid="alignment-panel-auto-status">{props.autoProposalStatus ?? 'missing-status'}</div>
-      <div data-testid="alignment-panel-auto-method">{props.autoProposalMethod ?? 'missing-method'}</div>
-      <button
-        type="button"
-        data-testid="alignment-panel-recompute"
-        onClick={() => props.onRecomputeAutoLocalization?.()}
-      >
-        Recompute auto localization
-      </button>
-    </div>
-  ),
+  AlignmentPanel: () => <div data-testid="alignment-panel-mock" />,
 }));
 
 vi.mock('./CanvasStage', () => ({
@@ -193,7 +179,46 @@ vi.mock('./ExportPanel', () => ({
 }));
 
 vi.mock('./StepSidebar', () => ({
-  StepSidebar: () => null,
+	StepSidebar: (props: {
+		currentStep: PreprocessProject['currentStep'];
+		onStepSelect?: (step: PreprocessProject['currentStep']) => void;
+	}) => (
+		<div data-testid="step-sidebar-mock">
+			<div data-testid="step-sidebar-current-step">{props.currentStep}</div>
+			<button
+				type="button"
+				data-testid="step-sidebar-select-tissue"
+				onClick={() => props.onStepSelect?.('tissueSelection')}
+			>
+				Open tissue selection
+			</button>
+		</div>
+	),
+}));
+
+vi.mock('./TissueSelectionPanel', () => ({
+  TissueSelectionPanel: (props: {
+    selectedSpotIds: string[];
+    onEditCommit?: (editArea: Array<{ x: number; y: number }>) => void;
+  }) => (
+    <div data-testid="tissue-selection-panel-mock">
+      <div data-testid="tissue-panel-selected-count">
+        Selected spots: {props.selectedSpotIds.length}
+      </div>
+      <button
+        type="button"
+        data-testid="tissue-panel-commit-manual-edit"
+        onClick={() => props.onEditCommit?.([
+          { x: 0.15, y: 0.15 },
+          { x: 0.35, y: 0.15 },
+          { x: 0.35, y: 0.35 },
+          { x: 0.15, y: 0.35 },
+        ])}
+      >
+        Commit manual tissue edit
+      </button>
+    </div>
+  ),
 }));
 
 const flushPromises = async () => {
@@ -236,6 +261,21 @@ beforeAll(() => {
 
 beforeEach(() => {
   capturedExportPanelProps = null;
+  mockSearchParamsState.preprocessId = null;
+  mockToast.mockReset();
+  mockRouterPush.mockReset();
+  mockDeletePreprocessProject.mockReset();
+  mockGetPreprocessProject.mockReset();
+  mockReadPreprocessProjectSummaries.mockReset();
+  mockReadPreprocessProjectSummaries.mockResolvedValue([]);
+  mockUpsertPreprocessProject.mockReset();
+  mockUpsertPreprocessProject.mockResolvedValue(undefined);
+  mockUpsertPreprocessProjectMetadata.mockReset();
+  mockRunTissueAutoSelection.mockReset();
+  mockLoadAllChipConfigManifests.mockReset();
+  mockLoadAllChipConfigManifests.mockResolvedValue([]);
+  mockLoadChipConfigData.mockReset();
+  mockLoadChipConfigData.mockResolvedValue(null);
   mockExportPreprocessZip.mockReset();
   mockGetPreprocessZipExportReadiness.mockClear();
 });
@@ -243,10 +283,12 @@ beforeEach(() => {
 function WorkspaceHarness({
   initialProject = createProject(),
   onProjectChange,
+  onProjectMutateCapture,
   onStepChange = vi.fn(),
 }: {
   initialProject?: PreprocessProject;
   onProjectChange?: (project: PreprocessProject) => void;
+  onProjectMutateCapture?: (mutation: CapturedProjectMutation) => void;
   onStepChange?: (stepId: PreprocessProject['currentStep']) => void;
 }) {
   const [project, setProject] = useState(initialProject);
@@ -263,8 +305,12 @@ function WorkspaceHarness({
         isLoading={false}
         loadError={null}
         onBackToLanding={vi.fn()}
-        onProjectMutate={(updater: (current: PreprocessProject) => PreprocessProject) => {
-          setProject((current) => updater(current));
+        onProjectMutate={(updater: (current: PreprocessProject) => PreprocessProject, persistOptions) => {
+          setProject((current) => {
+            const nextProject = updater(current);
+            onProjectMutateCapture?.({ project: nextProject, persistOptions });
+            return nextProject;
+          });
         }}
         onProjectNameChange={vi.fn()}
         onStepChange={onStepChange}
@@ -275,11 +321,8 @@ function WorkspaceHarness({
 }
 
 const { theme } = await import('../../../theme');
-const {
-  buildEmptyPreprocessProject,
-  normalizeProjectForWorkspace,
-} = await import('../projectState');
 const { PreprocessWorkspace } = await import('./PreprocessWorkspace');
+const { default: PreprocessPage } = await import('../page.client');
 
 const createProject = (): PreprocessProject => ({
   id: 'preprocess-project',
@@ -342,16 +385,6 @@ const createProject = (): PreprocessProject => ({
       flipHorizontal: false,
       flipVertical: false,
       scale: 1,
-    },
-    autoProposal: {
-      status: 'idle',
-      method: null,
-      coarseBounds: null,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: null,
-      failureReason: null,
     },
     focusedImageDataUrl: null,
   },
@@ -519,44 +552,34 @@ const createProject = (): PreprocessProject => ({
   },
 });
 
-const createAcceptedAutoAlignmentSlice = (): PreprocessProject['alignment'] => ({
-  ...createProject().alignment,
-  status: 'complete',
-  source: 'auto',
-  controlPoints: [],
-  inlierMask: [],
-  affineMatrix: [1, 0, 0, 0, 1, 0],
-  reprojectionRmse: 0,
-  inlierRatio: 1,
-  qualityFlags: {
-    minPairs: true,
-    inlierRatio: true,
-    rmse: true,
-    finiteMatrix: true,
-    scaleRange: true,
-    accepted: true,
+const createSuccessfulTissueAutoSelectionResult = () => ({
+  selectedIds: ['spot-a'],
+  matrix: {
+    rows: 96,
+    columns: 96,
+    values: [1, 0, ...Array.from({ length: 96 * 96 - 2 }, () => 0 as 0 | 1)],
   },
-  solveAccepted: true,
-  failureReason: null,
-  transform: {
-    translationX: 0,
-    translationY: 0,
-    rotationDegrees: 2.5,
-    scaleX: 1,
-    scaleY: 1,
-    isUniformScale: true,
+  summary: {
+    selectedCount: 1,
+    selectedPercent: 50,
+    maskCoverage: 50,
   },
+  params: {
+    thresholdMode: 'raw' as const,
+    activationThreshold: 0.1,
+    blockThreshold: 120,
+    dbscanEps: 0.2,
+    dbscanMinSamples: 2,
+    minConnectedSpotCount: 2,
+  },
+  warning: null,
 });
 
 describe('PreprocessWorkspace tissue selection stale request protection', () => {
-  beforeEach(() => {
-    mockRunTissueAutoSelection.mockReset();
-    mockLoadAllChipConfigManifests.mockReset();
-    mockLoadChipConfigData.mockReset();
-    mockRunHeAutoLocalization.mockReset();
-    mockLoadAllChipConfigManifests.mockResolvedValue([]);
-    mockLoadChipConfigData.mockResolvedValue(null);
-  });
+	beforeEach(() => {
+		mockLoadAllChipConfigManifests.mockResolvedValue([]);
+		mockLoadChipConfigData.mockResolvedValue(null);
+	});
 
   it('toggles spot visibility locally without changing the selected spot count', async () => {
     const user = userEvent.setup();
@@ -578,6 +601,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
   it('uses edited activation and block thresholds for the next auto-detection run without auto-running on edit', async () => {
     mockRunTissueAutoSelection.mockResolvedValue({
+      ...createSuccessfulTissueAutoSelectionResult(),
       selectedIds: [],
       matrix: {
         rows: 96,
@@ -590,14 +614,10 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
         maskCoverage: 0,
       },
       params: {
-        thresholdMode: 'raw',
+        ...createSuccessfulTissueAutoSelectionResult().params,
         activationThreshold: 0.25,
         blockThreshold: 120,
-        dbscanEps: 0.2,
-        dbscanMinSamples: 2,
-        minConnectedSpotCount: 2,
       },
-      warning: null,
     });
 
     const user = userEvent.setup();
@@ -641,6 +661,70 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
         }),
       );
     });
+  });
+
+  it('persists manual tissue canvas edits with tissue-aware debounced options', async () => {
+    const user = userEvent.setup();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    render(
+      <WorkspaceHarness
+        onProjectMutateCapture={(mutation) => {
+          capturedMutations.push(mutation);
+        }}
+      />,
+    );
+
+    await user.click(screen.getByTestId('tissue-panel-commit-manual-edit'));
+
+    await waitFor(() => {
+      expect(capturedMutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            persistOptions: { mode: 'tissue', strategy: 'debounced' },
+          }),
+        ]),
+      );
+    });
+
+    const manualEditMutation = capturedMutations.find(
+      (mutation) => mutation.persistOptions?.mode === 'tissue'
+        && mutation.persistOptions.strategy === 'debounced',
+    );
+    expect(manualEditMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
+    expect(manualEditMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
+  });
+
+  it('persists completed auto-detection matrix writes with tissue-aware options', async () => {
+    mockRunTissueAutoSelection.mockResolvedValue(createSuccessfulTissueAutoSelectionResult());
+    const user = userEvent.setup();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    render(
+      <WorkspaceHarness
+        onProjectMutateCapture={(mutation) => {
+          capturedMutations.push(mutation);
+        }}
+      />,
+    );
+
+    await user.click(screen.getByTestId('tissue-run-auto'));
+
+    await waitFor(() => {
+      expect(mockRunTissueAutoSelection).toHaveBeenCalledTimes(1);
+      expect(capturedMutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            persistOptions: { mode: 'tissue' },
+          }),
+        ]),
+      );
+    });
+
+    const matrixWriteMutation = capturedMutations.find(
+      (mutation) => mutation.persistOptions?.mode === 'tissue',
+    );
+    expect(matrixWriteMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
+    expect(matrixWriteMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
+    expect(matrixWriteMutation?.project.exportState.status).toBe('ready');
   });
 
 	it('blocks tissue auto-detection while repaired crop or chip projection state is still stale', async () => {
@@ -882,14 +966,103 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
   });
 });
 
-describe('PreprocessWorkspace heFocus auto bootstrap', () => {
+describe('Preprocess page autosave failure handling', () => {
   beforeEach(() => {
-    mockRunHeAutoLocalization.mockReset();
-    mockApplyAcceptedAutoAlignment.mockReset();
-    mockApplyAcceptedAutoAlignment.mockReturnValue(null);
+    mockSearchParamsState.preprocessId = 'preprocess-project';
   });
 
-  it('seeds accepted refined bounds and canonical proposal data instead of a generic square', async () => {
+  it('shows metadata persistence failures without advancing the saved snapshot', async () => {
+    const storedProject = createProject();
+    storedProject.currentStep = 'tissueSelection';
+    const metadataFailure = new DOMException('Synthetic preprocess quota failure', 'QuotaExceededError');
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockGetPreprocessProject.mockResolvedValue(storedProject);
+    mockUpsertPreprocessProject
+      .mockRejectedValueOnce(metadataFailure)
+      .mockResolvedValueOnce(undefined);
+
+		const user = userEvent.setup();
+    render(
+      <ChakraProvider theme={theme}>
+        <PreprocessPage />
+      </ChakraProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
+    });
+
+    await user.click(screen.getByRole('heading', { name: 'Preprocess project' }));
+    await user.clear(screen.getByTestId('project-name-input'));
+    await user.type(screen.getByTestId('project-name-input'), 'Unsaved metadata name');
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => {
+      expect(mockUpsertPreprocessProject).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('autosave-status')).toHaveTextContent('error');
+    });
+
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Autosave failed',
+      status: 'error',
+    }));
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Failed to autosave preprocess project',
+      expect.objectContaining({ mode: 'full', projectId: storedProject.id }),
+      metadataFailure,
+    );
+    expect(mockUpsertPreprocessProject.mock.calls[1][0]).toMatchObject({
+      id: storedProject.id,
+      name: storedProject.name,
+    });
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('does not mark tissue autosave saved when the tissue payload write fails', async () => {
+    const tissueFailure = new Error('forced tissue payload failure');
+    const storedProject = createProject();
+    storedProject.currentStep = 'tissueSelection';
+    mockGetPreprocessProject.mockResolvedValue(storedProject);
+    mockUpsertPreprocessProject.mockRejectedValue(tissueFailure);
+
+		const user = userEvent.setup();
+    render(
+      <ChakraProvider theme={theme}>
+        <PreprocessPage />
+      </ChakraProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
+    });
+    await user.click(screen.getByTestId('step-sidebar-select-tissue'));
+    await waitFor(() => {
+      expect(screen.getByTestId('tissue-chip-size-select')).toBeInTheDocument();
+    });
+
+		await user.click(screen.getByTestId('tissue-panel-commit-manual-edit'));
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 350));
+		});
+
+    await waitFor(() => {
+      expect(mockUpsertPreprocessProject).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'preprocess-project' }),
+        { mode: 'tissue' },
+      );
+      expect(screen.getByTestId('autosave-status')).toHaveTextContent('error');
+    });
+
+    expect(screen.getByTestId('autosave-status')).not.toHaveTextContent('saved');
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Autosave failed',
+      status: 'error',
+    }));
+  });
+});
+
+describe('PreprocessWorkspace H&E focus bootstrap', () => {
+  it('seeds the default manual H&E focus bounds', async () => {
     const initialProject = createProject();
     initialProject.currentStep = 'heFocus';
     initialProject.localization.chipBounds = { x: 0.12, y: 0.18, width: 0.42, height: 0.4 };
@@ -908,287 +1081,6 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
       dataUrl: 'data:image/png;base64,BB==',
     };
 
-    const coarseBounds = { x: 0.2, y: 0.2, width: 0.5, height: 0.5 };
-    const refinedBounds = { x: 0.24, y: 0.26, width: 0.34, height: 0.34 };
-    const acceptedTransform = {
-      affineMatrix: [1, 0, 5, 0, 1, 7],
-      transform: {
-        translationX: 5,
-        translationY: 7,
-        rotationDegrees: 2.5,
-        scaleX: 1,
-        scaleY: 1,
-        isUniformScale: true,
-      },
-    };
-    const scaledAcceptedTransform = {
-      affineMatrix: [1, 0, 10, 0, 1, 14],
-      transform: {
-        translationX: 10,
-        translationY: 14,
-        rotationDegrees: 2.5,
-        scaleX: 1,
-        scaleY: 1,
-        isUniformScale: true,
-      },
-    };
-    mockApplyAcceptedAutoAlignment.mockImplementation(({ acceptedTransform: handedOffTransform }) => ({
-      ...createAcceptedAutoAlignmentSlice(),
-      affineMatrix: handedOffTransform?.affineMatrix ?? null,
-      transform: handedOffTransform?.transform ?? null,
-    }));
-    mockRunHeAutoLocalization.mockResolvedValue({
-      method: 'mask-ecc-v1',
-      coarseBounds,
-      refinedBounds,
-      refinedQuad: [
-        { x: 0.24, y: 0.26 },
-        { x: 0.58, y: 0.26 },
-        { x: 0.58, y: 0.6 },
-        { x: 0.24, y: 0.6 },
-      ],
-      rotationDegrees: 2.5,
-      eccCorrelation: 0.91,
-      acceptedTransform,
-      failureReason: null,
-    });
-
-    let latestProject = initialProject;
-    render(
-      <WorkspaceHarness
-        initialProject={initialProject}
-        onProjectChange={(project) => {
-          latestProject = project;
-        }}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(mockRunHeAutoLocalization).toHaveBeenCalledWith({
-        eosinSource: { dataUrl: 'data:image/png;base64,AA==' },
-        heSource: { dataUrl: 'data:image/png;base64,BB==' },
-        localizationBounds: initialProject.localization.chipBounds,
-      });
-    });
-
-    await waitFor(() => {
-      expect(latestProject.heFocus.chipBounds).toEqual(refinedBounds);
-    });
-
-    expect(latestProject.heFocus.autoProposal).toEqual({
-      status: 'accepted',
-      method: 'mask-ecc-v1',
-      coarseBounds,
-      refinedBounds,
-      refinedQuad: [
-        { x: 0.24, y: 0.26 },
-        { x: 0.58, y: 0.26 },
-        { x: 0.58, y: 0.6 },
-        { x: 0.24, y: 0.6 },
-      ],
-      rotationDegrees: 2.5,
-      eccCorrelation: 0.91,
-      acceptedTransform: scaledAcceptedTransform,
-      failureReason: null,
-    });
-    expect(latestProject.heFocus.chipBounds).not.toEqual(coarseBounds);
-    expect(latestProject.heFocus.focusedImageDataUrl).toBeNull();
-    expect(latestProject.heFocus.status).toBe('complete');
-    expect(mockApplyAcceptedAutoAlignment).toHaveBeenCalledWith({
-      current: initialProject.alignment,
-      autoProposal: {
-        status: 'accepted',
-        method: 'mask-ecc-v1',
-        coarseBounds,
-        refinedBounds,
-        refinedQuad: [
-          { x: 0.24, y: 0.26 },
-          { x: 0.58, y: 0.26 },
-          { x: 0.58, y: 0.6 },
-          { x: 0.24, y: 0.6 },
-        ],
-        rotationDegrees: 2.5,
-        eccCorrelation: 0.91,
-        acceptedTransform: scaledAcceptedTransform,
-        failureReason: null,
-      },
-      acceptedTransform: scaledAcceptedTransform,
-      hasReferenceImage: true,
-      hasMovingImage: true,
-    });
-    expect(latestProject.alignment.source).toBe('auto');
-    expect(latestProject.alignment.solveAccepted).toBe(true);
-    expect(latestProject.alignment.status).toBe('complete');
-    expect(latestProject.alignment.affineMatrix).toEqual(scaledAcceptedTransform.affineMatrix);
-    expect(latestProject.alignment.transform).toEqual(scaledAcceptedTransform.transform);
-  });
-
-  it('seeds coarse fallback bounds, persists fallback proposal state, and stays on heFocus', async () => {
-    const initialProject = createProject();
-    initialProject.currentStep = 'heFocus';
-    initialProject.localization.chipBounds = { x: 0.1, y: 0.14, width: 0.44, height: 0.38 };
-    initialProject.heFocus.status = 'ready';
-    initialProject.sourceAssets.images.he = {
-      id: 'he-source',
-      kind: 'he',
-      fileName: 'he.png',
-      mimeType: 'image/png',
-      sizeBytes: 10,
-      width: 200,
-      height: 150,
-      lastModified: 2,
-      dataUrl: 'data:image/png;base64,BB==',
-    };
-
-    const coarseBounds = { x: 0.19, y: 0.21, width: 0.46, height: 0.46 };
-    mockRunHeAutoLocalization.mockResolvedValue({
-      method: 'mask-ecc-v1',
-      coarseBounds,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: 0.42,
-      acceptedTransform: null,
-      failureReason: 'ecc-failed',
-    });
-
-    let latestProject = initialProject;
-    const onStepChange = vi.fn();
-    render(
-      <WorkspaceHarness
-        initialProject={initialProject}
-        onProjectChange={(project) => {
-          latestProject = project;
-        }}
-        onStepChange={onStepChange}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(latestProject.heFocus.chipBounds).toEqual(coarseBounds);
-    });
-
-    expect(latestProject.heFocus.autoProposal).toEqual({
-      status: 'fallback',
-      method: 'mask-ecc-v1',
-      coarseBounds,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: 0.42,
-      acceptedTransform: null,
-      failureReason: 'ecc-failed',
-    });
-    expect(latestProject.heFocus.focusedImageDataUrl).toBeNull();
-    expect(latestProject.currentStep).toBe('heFocus');
-    expect(onStepChange).not.toHaveBeenCalled();
-    expect(mockApplyAcceptedAutoAlignment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        autoProposal: expect.objectContaining({
-          status: 'fallback',
-          failureReason: 'ecc-failed',
-        }),
-        acceptedTransform: null,
-      }),
-    );
-    expect(latestProject.alignment.source).toBeNull();
-  });
-
-  it('keeps a coarse proposal as fallback when ECC is rejected below the acceptance threshold', async () => {
-    const initialProject = createProject();
-    initialProject.currentStep = 'heFocus';
-    initialProject.localization.chipBounds = { x: 0.08, y: 0.12, width: 0.46, height: 0.4 };
-    initialProject.heFocus.status = 'ready';
-    initialProject.sourceAssets.images.he = {
-      id: 'he-source',
-      kind: 'he',
-      fileName: 'he.png',
-      mimeType: 'image/png',
-      sizeBytes: 10,
-      width: 200,
-      height: 150,
-      lastModified: 2,
-      dataUrl: 'data:image/png;base64,BB==',
-    };
-
-    const coarseBounds = { x: 0.16, y: 0.22, width: 0.48, height: 0.44 };
-    mockRunHeAutoLocalization.mockResolvedValue({
-      method: 'mask-ecc-v1',
-      coarseBounds,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: 1.25,
-      eccCorrelation: 0.74,
-      acceptedTransform: null,
-      failureReason: 'ecc-below-threshold',
-    });
-
-    let latestProject = initialProject;
-    render(
-      <WorkspaceHarness
-        initialProject={initialProject}
-        onProjectChange={(project) => {
-          latestProject = project;
-        }}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(latestProject.heFocus.chipBounds).toEqual(coarseBounds);
-    });
-
-    expect(latestProject.heFocus.autoProposal).toEqual({
-      status: 'fallback',
-      method: 'mask-ecc-v1',
-      coarseBounds,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: 1.25,
-      eccCorrelation: 0.74,
-      acceptedTransform: null,
-      failureReason: 'ecc-below-threshold',
-    });
-    expect(mockApplyAcceptedAutoAlignment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        autoProposal: expect.objectContaining({
-          status: 'fallback',
-          failureReason: 'ecc-below-threshold',
-        }),
-        acceptedTransform: null,
-      }),
-    );
-    expect(latestProject.alignment.source).toBeNull();
-  });
-
-  it('falls back cleanly to the generic square when auto localization reports missing runtime capabilities', async () => {
-    const initialProject = createProject();
-    initialProject.currentStep = 'heFocus';
-    initialProject.localization.chipBounds = { x: 0.1, y: 0.14, width: 0.44, height: 0.38 };
-    initialProject.heFocus.status = 'ready';
-    initialProject.sourceAssets.images.he = {
-      id: 'he-source',
-      kind: 'he',
-      fileName: 'he.png',
-      mimeType: 'image/png',
-      sizeBytes: 10,
-      width: 200,
-      height: 150,
-      lastModified: 2,
-      dataUrl: 'data:image/png;base64,BB==',
-    };
-
-    mockRunHeAutoLocalization.mockResolvedValue({
-      method: 'mask-ecc-v1',
-      coarseBounds: null,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: null,
-      acceptedTransform: null,
-      failureReason: 'runtime-missing-capabilities',
-    });
-
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let latestProject = initialProject;
     render(
       <WorkspaceHarness
@@ -1202,112 +1094,10 @@ describe('PreprocessWorkspace heFocus auto bootstrap', () => {
     await waitFor(() => {
       expect(latestProject.heFocus.chipBounds).toEqual({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
     });
-
-    expect(latestProject.heFocus.autoProposal).toEqual({
-      status: 'failed',
-      method: 'mask-ecc-v1',
-      coarseBounds: null,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: null,
-      acceptedTransform: null,
-      failureReason: 'runtime-missing-capabilities',
-    });
-    expect(consoleErrorSpy).not.toHaveBeenCalled();
-    consoleErrorSpy.mockRestore();
-  });
-  it('routes fallback alignment recovery back through heFocus so auto-localization can rerun after edits', async () => {
-    const initialProject = createProject();
-    initialProject.currentStep = 'alignment';
-    initialProject.heFocus.chipBounds = { x: 0.19, y: 0.21, width: 0.46, height: 0.46 };
-    initialProject.heFocus.status = 'complete';
-    initialProject.heFocus.autoProposal = {
-      status: 'fallback',
-      method: 'mask-ecc-v1',
-      coarseBounds: { x: 0.19, y: 0.21, width: 0.46, height: 0.46 },
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: 0.42,
-      failureReason: 'ecc-failed',
-    };
-    initialProject.localization.chipBounds = { x: 0.1, y: 0.14, width: 0.44, height: 0.38 };
-    initialProject.sourceAssets.images.he = {
-      id: 'he-source',
-      kind: 'he',
-      fileName: 'he.png',
-      mimeType: 'image/png',
-      sizeBytes: 10,
-      width: 200,
-      height: 150,
-      lastModified: 2,
-      dataUrl: 'data:image/png;base64,BB==',
-    };
-
-    mockRunHeAutoLocalization.mockResolvedValue({
-      method: 'mask-ecc-v1',
-      coarseBounds: { x: 0.22, y: 0.24, width: 0.4, height: 0.4 },
-      refinedBounds: { x: 0.24, y: 0.26, width: 0.34, height: 0.34 },
-      refinedQuad: [
-        { x: 0.24, y: 0.26 },
-        { x: 0.58, y: 0.26 },
-        { x: 0.58, y: 0.6 },
-        { x: 0.24, y: 0.6 },
-      ],
-      rotationDegrees: 2.5,
-      eccCorrelation: 0.91,
-      acceptedTransform: {
-        affineMatrix: [1, 0, 0, 0, 1, 0],
-        transform: {
-          translationX: 0,
-          translationY: 0,
-          rotationDegrees: 2.5,
-          scaleX: 1,
-          scaleY: 1,
-          isUniformScale: true,
-        },
-      },
-      failureReason: null,
-    });
-
-    let latestProject = initialProject;
-    const onStepChange = vi.fn();
-    render(
-      <WorkspaceHarness
-        initialProject={initialProject}
-        onProjectChange={(project) => {
-          latestProject = project;
-        }}
-        onStepChange={onStepChange}
-      />,
-    );
-
-    expect(screen.getByTestId('alignment-panel-auto-status')).toHaveTextContent('fallback');
-    expect(screen.getByTestId('alignment-panel-auto-method')).toHaveTextContent('mask-ecc-v1');
-
-    const user = userEvent.setup();
-    await user.click(screen.getByTestId('alignment-panel-recompute'));
-
-    await waitFor(() => {
-      expect(onStepChange).toHaveBeenCalledWith('heFocus');
-    });
+    expect(latestProject.alignment.source).toBeNull();
     expect(latestProject.currentStep).toBe('heFocus');
-    await waitFor(() => {
-      expect(mockRunHeAutoLocalization).toHaveBeenCalled();
-    });
-    expect(latestProject.heFocus.focusedImageDataUrl).toBeNull();
-    expect(latestProject.heFocus.autoProposal.status).toBe('accepted');
-    expect(latestProject.heFocus.chipBounds).toEqual({
-      x: 0.24,
-      y: 0.26,
-      width: 0.34,
-      height: 0.34,
-    });
-    expect(latestProject.heFocus.status).toBe('complete');
   });
 });
-
 describe('PreprocessWorkspace export readiness gating', () => {
   it('threads includeAlignedImage through export readiness and blocks download before export when checkerboard data is missing', async () => {
     const exportProject = {
@@ -1406,131 +1196,5 @@ describe('PreprocessWorkspace chip projection auto-run guards', () => {
     expect(latestProject.cropQc.cropHeight).toBe(96);
     expect(latestProject.cropQc.eosinReferenceGeometry?.width).toBe(30);
     expect(latestProject.cropQc.eosinReferenceGeometry?.height).toBe(40);
-  });
-});
-
-describe('preprocess workspace state normalization helpers', () => {
-  beforeEach(() => {
-    mockRunHeAutoLocalization.mockReset();
-    mockApplyAcceptedAutoAlignment.mockReset();
-    mockApplyAcceptedAutoAlignment.mockReturnValue(null);
-  });
-
-  it('hydrates legacy project without auto localization fields', () => {
-    const legacyProject = buildEmptyPreprocessProject('Legacy project') as unknown as LegacyPreprocessProject;
-    const heFocusRecord = legacyProject.heFocus as unknown as Record<string, unknown>;
-    const alignmentRecord = legacyProject.alignment as unknown as Record<string, unknown>;
-
-    if (!legacyProject.heFocus) {
-      throw new Error('Expected buildEmptyPreprocessProject to include heFocus state.');
-    }
-
-    legacyProject.heFocus.focusedImageDataUrl = 'blob:he-focus-preview';
-    legacyProject.alignment.previewDataUrl = 'blob:alignment-preview';
-
-    delete heFocusRecord.autoProposal;
-    delete alignmentRecord.source;
-
-    const normalized = normalizeProjectForWorkspace(legacyProject);
-
-    expect(normalized.heFocus.autoProposal).toEqual({
-      status: 'idle',
-      method: null,
-      coarseBounds: null,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: null,
-      failureReason: null,
-    });
-    expect(normalized.alignment.source).toBeNull();
-    expect(normalized.heFocus.focusedImageDataUrl).toBe('blob:he-focus-preview');
-    expect(normalized.alignment.previewDataUrl).toBe('blob:alignment-preview');
-  });
-
-  it('round-trips legacy auto-localization defaults through autosave serialization', () => {
-    const legacyProject = buildEmptyPreprocessProject('Round-trip project') as unknown as LegacyPreprocessProject;
-    const heFocusRecord = legacyProject.heFocus as unknown as Record<string, unknown>;
-    const alignmentRecord = legacyProject.alignment as unknown as Record<string, unknown>;
-
-    if (!legacyProject.heFocus) {
-      throw new Error('Expected buildEmptyPreprocessProject to include heFocus state.');
-    }
-
-    legacyProject.heFocus.focusedImageDataUrl = 'blob:he-focus-preview';
-    legacyProject.alignment.previewDataUrl = 'blob:alignment-preview';
-
-    delete heFocusRecord.autoProposal;
-    delete alignmentRecord.source;
-
-    const normalized = normalizeProjectForWorkspace(legacyProject);
-    const roundTripped = normalizeProjectForWorkspace(
-      JSON.parse(JSON.stringify(normalized)) as LegacyPreprocessProject,
-    );
-
-    expect(roundTripped.heFocus.focusedImageDataUrl).toBe('blob:he-focus-preview');
-    expect(roundTripped.alignment.previewDataUrl).toBe('blob:alignment-preview');
-    expect(roundTripped.heFocus.autoProposal).toEqual(normalized.heFocus.autoProposal);
-    expect(roundTripped.alignment.source).toBeNull();
-    expect(Object.values(roundTripped.heFocus.autoProposal)).not.toContain(undefined);
-  });
-
-  it('reloads a saved project with accepted auto state without recomputing localization', async () => {
-    const savedProject = createProject();
-    savedProject.currentStep = 'alignment';
-    savedProject.sourceAssets.images.he = {
-      id: 'he-source',
-      kind: 'he',
-      fileName: 'he.png',
-      mimeType: 'image/png',
-      sizeBytes: 10,
-      width: 200,
-      height: 150,
-      lastModified: 2,
-      dataUrl: 'data:image/png;base64,BB==',
-    };
-    savedProject.localization.chipBounds = { x: 0.12, y: 0.18, width: 0.42, height: 0.4 };
-    savedProject.heFocus.status = 'complete';
-    savedProject.heFocus.chipBounds = { x: 0.24, y: 0.26, width: 0.34, height: 0.34 };
-    savedProject.heFocus.autoProposal = {
-      status: 'accepted',
-      method: 'mask-ecc-v1',
-      coarseBounds: { x: 0.2, y: 0.2, width: 0.5, height: 0.5 },
-      refinedBounds: { x: 0.24, y: 0.26, width: 0.34, height: 0.34 },
-      refinedQuad: [
-        { x: 0.24, y: 0.26 },
-        { x: 0.58, y: 0.26 },
-        { x: 0.58, y: 0.6 },
-        { x: 0.24, y: 0.6 },
-      ],
-      rotationDegrees: 2.5,
-      eccCorrelation: 0.91,
-      failureReason: null,
-    };
-    savedProject.alignment = createAcceptedAutoAlignmentSlice();
-
-    const reloadedProject = normalizeProjectForWorkspace(
-      JSON.parse(JSON.stringify(savedProject)) as LegacyPreprocessProject,
-    );
-
-    let latestProject = reloadedProject;
-    render(
-      <WorkspaceHarness
-        initialProject={reloadedProject}
-        onProjectChange={(project) => {
-          latestProject = project;
-        }}
-      />,
-    );
-
-    await flushPromises();
-
-    expect(mockRunHeAutoLocalization).not.toHaveBeenCalled();
-    expect(screen.getByTestId('alignment-panel-auto-status')).toHaveTextContent('accepted');
-    expect(screen.getByTestId('alignment-panel-auto-method')).toHaveTextContent('mask-ecc-v1');
-    expect(latestProject.heFocus.autoProposal.status).toBe('accepted');
-    expect(latestProject.alignment.source).toBe('auto');
-    expect(latestProject.alignment.solveAccepted).toBe(true);
-    expect(latestProject.heFocus.chipBounds).toEqual(savedProject.heFocus.chipBounds);
   });
 });

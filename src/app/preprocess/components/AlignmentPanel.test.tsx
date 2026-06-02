@@ -150,35 +150,6 @@ const createAlignmentSlice = (): AlignmentSlice => ({
   previewDataUrl: null,
 });
 
-const createAcceptedAutoAlignmentSlice = (): AlignmentSlice => ({
-	...createAlignmentSlice(),
-	status: 'complete',
-  source: 'auto',
-  controlPoints: [],
-  inlierMask: [],
-  affineMatrix: [1, 0, 10, 0, 1, 12],
-  reprojectionRmse: 0,
-	inlierRatio: 1,
-	qualityFlags: {
-		minPairs: true,
-		inlierRatio: true,
-		rmse: true,
-		finiteMatrix: true,
-		scaleRange: true,
-		accepted: true,
-	},
-	solveAccepted: true,
-	failureReason: null,
-	transform: {
-		translationX: 10,
-		translationY: 12,
-		rotationDegrees: 0,
-		scaleX: 1,
-		scaleY: 1,
-		isUniformScale: true,
-	},
-});
-
 describe('AlignmentPanel', () => {
   it('renders the moving-image padding boundary only for the target pane and keeps it coupled to the shared transform layer', async () => {
     const alignment = createAlignmentSlice();
@@ -271,67 +242,14 @@ describe('AlignmentPanel', () => {
     });
   });
 
-	it('clears an accepted auto solution so manual override can start cleanly', async () => {
-		const onAlignmentChange = vi.fn();
-
-		render(
-			<ChakraProvider theme={theme}>
-				<AlignmentPanel
-					alignment={createAcceptedAutoAlignmentSlice()}
-					autoProposalMethod="mask-ecc-v1"
-					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
-					movingImage={createSourceImage('he')}
-					onSolveAccepted={vi.fn()}
-					referenceImage={createSourceImage('eosin')}
-					referenceImageTransform={createReferenceImageTransform()}
-					showMovingImagePaddingBoundary={false}
-					onAlignmentChange={onAlignmentChange}
-				/>
-			</ChakraProvider>,
-		);
-
-		const user = userEvent.setup();
-		const statusBlock = await screen.findByTestId('alignment-auto-status');
-		expect(statusBlock).toHaveTextContent('Automatic alignment accepted (mask-ecc-v1)');
-		expect(statusBlock).toHaveTextContent(
-			'Keep this result or clear it to return to manual landmarks.',
-		);
-		await waitFor(() => {
-			expect(screen.getByTestId('alignment-reset')).toBeEnabled();
-		});
-
-		await user.click(within(statusBlock).getByTestId('alignment-auto-clear'));
-
-		expect(onAlignmentChange).toHaveBeenCalledTimes(1);
-		const updater = onAlignmentChange.mock.calls[0]?.[0] as
-			| ((current: AlignmentSlice) => AlignmentSlice)
-			| undefined;
-		expect(updater).toBeTypeOf('function');
-
-		const cleared = updater?.(createAcceptedAutoAlignmentSlice());
-		expect(cleared?.source).toBeNull();
-		expect(cleared?.solveAccepted).toBe(false);
-		expect(cleared?.qualityFlags.accepted).toBe(false);
-		expect(cleared?.affineMatrix).toBeNull();
-		expect(cleared?.status).toBe('ready');
-		await waitFor(() => {
-			expect(screen.getByTestId('alignment-run-solve')).toBeDisabled();
-		});
-	});
-
-	it('shows fallback recovery guidance while keeping manual controls available', async () => {
-		const onRecomputeAutoLocalization = vi.fn();
-
+	it('keeps manual alignment controls available', async () => {
 		render(
 			<ChakraProvider theme={theme}>
 				<AlignmentPanel
 					alignment={createAlignmentSlice()}
-					autoProposalMethod="mask-ecc-v1"
-					autoProposalStatus="fallback"
 					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
 					movingImage={createSourceImage('he')}
 					onSolveAccepted={vi.fn()}
-					onRecomputeAutoLocalization={onRecomputeAutoLocalization}
 					referenceImage={createSourceImage('eosin')}
 					referenceImageTransform={createReferenceImageTransform()}
 					showMovingImagePaddingBoundary={false}
@@ -340,18 +258,9 @@ describe('AlignmentPanel', () => {
 			</ChakraProvider>,
 		);
 
-		const user = userEvent.setup();
-		const recoveryBlock = await screen.findByTestId('alignment-auto-recovery');
-		expect(recoveryBlock).toHaveTextContent(
-			'Automatic refinement unavailable; add manual points or adjust HE focus',
-		);
-		expect(recoveryBlock).toHaveTextContent(
-			'After editing HE focus, rerun auto-localization from the existing focus step.',
-		);
-		expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
-		expect(screen.getByTestId('alignment-reset')).toBeEnabled();
-
-		await user.click(within(recoveryBlock).getByTestId('alignment-auto-recompute'));
-		expect(onRecomputeAutoLocalization).toHaveBeenCalledTimes(1);
+		await waitFor(() => {
+			expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
+		});
 	});
+
 });
