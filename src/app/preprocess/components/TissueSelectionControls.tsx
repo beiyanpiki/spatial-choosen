@@ -44,10 +44,6 @@ function parseActivationThresholdInput(value: string) {
     return null;
   }
 
-  if (value.startsWith('.') && value.length < 3) {
-    return null;
-  }
-
   const parsedValue = Number(value);
   if (parsedValue < 0 || parsedValue > 1) {
     return null;
