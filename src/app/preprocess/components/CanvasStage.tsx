@@ -4,10 +4,6 @@ import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@ch
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { computeBaseView, getTransform } from '@/lib/canvasViewport';
 import {
-  invertDisplayRectPointToSource,
-  projectSourcePointToDisplayRect,
-} from '@/lib/preprocess/imageTransforms';
-import {
   clampNormalizedSquareRect,
   LOCALIZATION_BOX_COLOR_SWATCHS,
   resizeChipBounds,
@@ -124,21 +120,25 @@ const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve
 const projectSourcePointToScreen = (
   point: PreprocessPoint,
   displayTransform: ReturnType<typeof getTransform>,
-  imageTransform: LocalizationImageTransform,
 ): ScreenPoint | null => {
   if (!displayTransform) return null;
 
-  return projectSourcePointToDisplayRect(point, imageTransform, displayTransform);
+  return {
+    x: displayTransform.originX + point.x * displayTransform.width,
+    y: displayTransform.originY + point.y * displayTransform.height,
+  };
 };
 
 const projectScreenPointToSource = (
   screenPoint: ScreenPoint | null,
   displayTransform: ReturnType<typeof getTransform>,
-  imageTransform: LocalizationImageTransform,
 ): PreprocessPoint | null => {
   if (!screenPoint || !displayTransform) return null;
 
-  return invertDisplayRectPointToSource(screenPoint, imageTransform, displayTransform);
+  return {
+    x: (screenPoint.x - displayTransform.originX) / displayTransform.width,
+    y: (screenPoint.y - displayTransform.originY) / displayTransform.height,
+  };
 };
 
 const getRectSourceCorners = (
@@ -350,8 +350,8 @@ export function CanvasStage({
 
   const getOverlayImagePoint = useCallback((clientX: number, clientY: number) => {
     const relativePoint = getRelativePoint(clientX, clientY);
-    return projectScreenPointToSource(relativePoint, displayTransform, imageTransform);
-  }, [displayTransform, getRelativePoint, imageTransform]);
+    return projectScreenPointToSource(relativePoint, displayTransform);
+  }, [displayTransform, getRelativePoint]);
 
   const getInteractionImagePoint = useCallback((clientX: number, clientY: number) => (
     getOverlayImagePoint(clientX, clientY)
@@ -443,8 +443,8 @@ export function CanvasStage({
   }, [hostElement, image, imageTransform.scale, onScaleChange]);
 
   const projectOverlayPointToScreen = useCallback((point: PreprocessPoint) => (
-    projectSourcePointToScreen(point, displayTransform, imageTransform)
-  ), [displayTransform, imageTransform]);
+    projectSourcePointToScreen(point, displayTransform)
+  ), [displayTransform]);
 
   const overlay = useMemo(() => {
     if (!displayTransform || !normalizedChipBounds) return null;

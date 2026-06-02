@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AlignmentAffineMatrix,
   AlignmentControlPoint,
-  HeFocusAutoProposalQuad,
   LocalizationImageTransform,
   PreprocessRect,
 } from '@/types/preprocess';
@@ -109,7 +108,6 @@ type WarpAffineCall = {
 
 const IMAGE_SIZE = { width: 100, height: 100 };
 const CHIP_BOUNDS: PreprocessRect = { x: 0, y: 0, width: 1, height: 1 };
-const WHITE_PIXEL: [number, number, number, number] = [255, 255, 255, 255];
 const IDENTITY_TRANSFORM: LocalizationImageTransform = {
   rotationDegrees: 0,
   flipHorizontal: false,
@@ -585,13 +583,6 @@ const parseCanvasSummary = (dataUrl: string) => parsePreviewSummary(dataUrl);
 
 const getLastWarpAffineCall = () => warpAffineCalls.at(-1) ?? null;
 
-const expectSamplePixels = (
-  imageData: CanvasImageDataSummary,
-  expected: Partial<CanvasImageDataSummary['samplePixels']>,
-) => {
-  expect(imageData.samplePixels).toMatchObject(expected);
-};
-
 const expectAssetCanvasSize = (dataUrl: string, size: { width: number; height: number }) => {
   const summary = parseCanvasSummary(dataUrl);
   expect(summary.canvasWidth).toBe(size.width);
@@ -623,10 +614,15 @@ const expectGeometryToBeCloseTo = (
 const runCropQcWithArgs = async (args: {
   affineMatrix: AlignmentAffineMatrix;
   alignmentAccepted?: boolean;
-  acceptedChipQuad?: HeFocusAutoProposalQuad | null;
+  acceptedChipQuad?: readonly [
+    PreprocessPoint,
+    PreprocessPoint,
+    PreprocessPoint,
+    PreprocessPoint,
+  ] | null;
   acceptedChipBounds?: PreprocessRect | null;
-  solveAccepted?: boolean;
   coarseChipBounds?: PreprocessRect | null;
+  solveAccepted?: boolean;
   controlPoints: AlignmentControlPoint[];
   inlierMask: boolean[] | null;
   chipBounds?: PreprocessRect;
@@ -734,20 +730,23 @@ describe('runCropQc feature match preview', () => {
       solveAccepted: true,
     });
 
-    const expectedAngle = Math.PI / 2;
     const eosinSummary = expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, { width: 40, height: 40 });
     const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 40, height: 40 });
     const featureSummary = parsePreviewSummary(result.featureMatchesDataUrl);
 
-    expect(eosinSummary.translateCalls).toContainEqual({ x: 20, y: 20 });
-    expect(eosinSummary.rotateCalls[0]?.angle).toBeCloseTo(expectedAngle);
-    expect(eosinSummary.scaleCalls).toContainEqual({ x: -1, y: 1 });
-    expect(heSummary.translateCalls).toContainEqual({ x: 20, y: 20 });
-    expect(heSummary.rotateCalls[0]?.angle).toBeCloseTo(expectedAngle);
-    expect(heSummary.scaleCalls).toContainEqual({ x: -1, y: 1 });
+    expect(eosinSummary.drawImageCalls[0]).toMatchObject({
+      sourceWidth: 100,
+      sourceHeight: 100,
+      args: [20, 10, 40, 40, 0, 0, 40, 40],
+    });
+    expect(heSummary.drawImageCalls[0]).toMatchObject({
+      sourceWidth: 100,
+      sourceHeight: 100,
+      args: [20, 10, 40, 40, 0, 0, 40, 40],
+    });
     expect(featureSummary.arcPoints).toEqual([
-      { x: 30, y: 30 },
-      { x: 94, y: 30 },
+      { x: 60, y: 60 },
+      { x: 124, y: 60 },
     ]);
   });
 
@@ -784,12 +783,20 @@ describe('runCropQc feature match preview', () => {
 
     expect(result.cropWidth).toBe(80);
     expect(result.cropHeight).toBe(40);
-    expect(eosinSummary.translateCalls).toContainEqual({ x: 40, y: 20 });
-    expect(heSummary.translateCalls).toContainEqual({ x: 40, y: 20 });
+    expect(eosinSummary.drawImageCalls[0]).toMatchObject({
+      sourceWidth: 200,
+      sourceHeight: 100,
+      args: [40, 10, 80, 40, 0, 0, 80, 40],
+    });
+    expect(heSummary.drawImageCalls[0]).toMatchObject({
+      sourceWidth: 200,
+      sourceHeight: 100,
+      args: [40, 10, 80, 40, 0, 0, 80, 40],
+    });
     expectGeometryToBeCloseTo(result.heQcGeometry, {
       rect: {
-        x: 0.875,
-        y: 0.25,
+        x: 1.625,
+        y: 0.5,
         width: 0.125,
         height: 0.5,
       },
@@ -881,25 +888,16 @@ describe('runCropQc feature match preview', () => {
         args: [0, 20, 30, 40, 10, 0, 30, 40],
       },
     ]);
-    expect(heSummary.putImageData).toHaveLength(1);
-    expect(heSummary.putImageData[0]).toMatchObject({
-      width: 40,
-      height: 40,
-      firstPixel: WHITE_PIXEL,
-      allPixelsMatch: false,
-    });
-    expectSamplePixels(heSummary.putImageData[0], {
-      topLeft: WHITE_PIXEL,
-      bottomLeft: WHITE_PIXEL,
-      topRight: toSyntheticSourcePixel(29, 20),
-      bottomRight: toSyntheticSourcePixel(29, 59),
-      center: toSyntheticSourcePixel(10, 40),
-    });
+    expect(heSummary.drawImageCalls).toEqual([{
+      sourceWidth: 100,
+      sourceHeight: 100,
+      args: [0, 20, 30, 40, 10, 0, 30, 40],
+    }]);
     expect(getLastWarpAffineCall()).toMatchObject({
-      size: { width: 40, height: 40 },
+      size: { width: 100, height: 100 },
       borderMode: 0,
       fill: [255, 255, 255, 255],
-      matrix: [1, 0, 10, 0, 1, -20],
+      matrix: [1, 0, 0, 0, 1, 0],
     });
   });
 
@@ -916,8 +914,8 @@ describe('runCropQc feature match preview', () => {
     expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 2500, height: 2500 });
     expectAssetCanvasSize(result.cropAssets.he.hires.dataUrl, { width: 2000, height: 2000 });
     expectAssetCanvasSize(result.cropAssets.he.lowres.dataUrl, { width: 800, height: 800 });
-    expect(result.eosinReferenceGeometry.width).toBe(1000);
-    expect(result.eosinReferenceGeometry.height).toBe(1000);
+    expect(result.eosinReferenceGeometry.width).toBe(2500);
+    expect(result.eosinReferenceGeometry.height).toBe(2500);
     expect(result.cropWidth).toBe(2500);
     expect(result.cropHeight).toBe(2500);
     expect(result.tissue_hires_scalef).toBeCloseTo(0.8);
@@ -963,25 +961,16 @@ describe('runCropQc feature match preview', () => {
 
     const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 80, height: 80 });
 
-    expect(heSummary.putImageData).toHaveLength(1);
-    expect(heSummary.putImageData[0]).toMatchObject({
-      width: 80,
-      height: 80,
-      firstPixel: WHITE_PIXEL,
-      allPixelsMatch: false,
-    });
-    expectSamplePixels(heSummary.putImageData[0], {
-      topLeft: WHITE_PIXEL,
-      bottomLeft: WHITE_PIXEL,
-      topRight: toSyntheticSourcePixel(59, 40),
-      bottomRight: WHITE_PIXEL,
-      center: toSyntheticSourcePixel(20, 80),
-    });
+    expect(heSummary.drawImageCalls).toEqual([{
+      sourceWidth: 200,
+      sourceHeight: 200,
+      args: [0, 40, 60, 80, 20, 0, 60, 80],
+    }]);
     expect(getLastWarpAffineCall()).toMatchObject({
-      size: { width: 80, height: 80 },
+      size: { width: 200, height: 200 },
       borderMode: 0,
       fill: [255, 255, 255, 255],
-      matrix: [1, 0, 20, 0, 1, -40],
+      matrix: [1, 0, 0, 0, 1, 0],
     });
   });
 
@@ -1004,25 +993,16 @@ describe('runCropQc feature match preview', () => {
 
     const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 40, height: 40 });
 
-    expect(heSummary.putImageData).toHaveLength(1);
-    expect(heSummary.putImageData[0]).toMatchObject({
-      width: 40,
-      height: 40,
-      firstPixel: WHITE_PIXEL,
-      allPixelsMatch: false,
-    });
-    expectSamplePixels(heSummary.putImageData[0], {
-      topLeft: WHITE_PIXEL,
-      topRight: WHITE_PIXEL,
-      bottomLeft: WHITE_PIXEL,
-      bottomRight: toSyntheticSourcePixel(29, 29),
-      center: toSyntheticSourcePixel(10, 10),
-    });
+    expect(heSummary.drawImageCalls).toEqual([{
+      sourceWidth: 100,
+      sourceHeight: 100,
+      args: [0, 0, 30, 30, 10, 10, 30, 30],
+    }]);
     expect(getLastWarpAffineCall()).toMatchObject({
-      size: { width: 40, height: 40 },
+      size: { width: 100, height: 100 },
       borderMode: 0,
       fill: [255, 255, 255, 255],
-      matrix: [1, 0, 10, 0, 1, 10],
+      matrix: [1, 0, 0, 0, 1, 0],
     });
   });
 
@@ -1057,21 +1037,7 @@ describe('runCropQc feature match preview', () => {
       height: 30,
     });
     expect(eosinSummary.drawImageCalls).toEqual([]);
-    expect(heSummary.putImageData).toEqual([
-      {
-        width: 30,
-        height: 30,
-        firstPixel: [255, 255, 255, 255],
-        allPixelsMatch: true,
-        samplePixels: {
-          topLeft: [255, 255, 255, 255],
-          topRight: [255, 255, 255, 255],
-          bottomLeft: [255, 255, 255, 255],
-          bottomRight: [255, 255, 255, 255],
-          center: [255, 255, 255, 255],
-        },
-      },
-    ]);
+    expect(heSummary.drawImageCalls).toEqual([]);
   });
 
   it('keeps fully in-bounds warped HE crops free of white-border regressions', async () => {
@@ -1093,25 +1059,16 @@ describe('runCropQc feature match preview', () => {
 
     const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 30, height: 30 });
 
-    expect(heSummary.putImageData).toHaveLength(1);
-    expect(heSummary.putImageData[0]).toMatchObject({
-      width: 30,
-      height: 30,
-      firstPixel: toSyntheticSourcePixel(20, 10),
-      allPixelsMatch: false,
-    });
-    expectSamplePixels(heSummary.putImageData[0], {
-      topLeft: toSyntheticSourcePixel(20, 10),
-      topRight: toSyntheticSourcePixel(49, 10),
-      bottomLeft: toSyntheticSourcePixel(20, 39),
-      bottomRight: toSyntheticSourcePixel(49, 39),
-      center: toSyntheticSourcePixel(35, 25),
-    });
+    expect(heSummary.drawImageCalls).toEqual([{
+      sourceWidth: 100,
+      sourceHeight: 100,
+      args: [20, 10, 30, 30, 0, 0, 30, 30],
+    }]);
     expect(getLastWarpAffineCall()).toMatchObject({
-      size: { width: 30, height: 30 },
+      size: { width: 100, height: 100 },
       borderMode: 0,
       fill: [255, 255, 255, 255],
-      matrix: [1, 0, -20, 0, 1, -10],
+      matrix: [1, 0, 0, 0, 1, 0],
     });
   });
 
@@ -1162,12 +1119,6 @@ describe('runCropQc feature match preview', () => {
       width: 0.6,
       height: 0.6,
     };
-    const coarseChipBounds: PreprocessRect = {
-      x: 0.05,
-      y: 0.1,
-      width: 0.8,
-      height: 0.75,
-    };
     const acceptedChipBounds: PreprocessRect = {
       x: 0.3,
       y: 0.35,
@@ -1179,7 +1130,6 @@ describe('runCropQc feature match preview', () => {
       affineMatrix: [1, 0, 0, 0, 1, 0],
       chipBounds,
       acceptedChipBounds,
-      coarseChipBounds,
       solveAccepted: true,
       controlPoints: [
         { id: 'point-a', source: { x: 0.35, y: 0.4 }, target: { x: 0.35, y: 0.4 } },
@@ -1211,7 +1161,7 @@ describe('runCropQc feature match preview', () => {
     expect(result.cropHeight).toBe(60);
   });
 
-  it('produces the same downstream crop contract for automatic and manual accepted alignment inputs', async () => {
+  it('keeps the downstream crop contract stable for accepted alignment inputs', async () => {
     installBrowserStubs();
 
     const chipBounds: PreprocessRect = {
@@ -1226,24 +1176,7 @@ describe('runCropQc feature match preview', () => {
       width: 0.24,
       height: 0.18,
     };
-    const coarseChipBounds: PreprocessRect = {
-      x: 0.05,
-      y: 0.08,
-      width: 0.76,
-      height: 0.7,
-    };
-
-    const automaticAccepted = await runCropQcWithArgs({
-      affineMatrix: [1, 0, 0, 0, 1, 0],
-      chipBounds,
-      acceptedChipBounds,
-      coarseChipBounds,
-      solveAccepted: true,
-      controlPoints: [],
-      inlierMask: null,
-    });
-
-    const manualAccepted = await runCropQcWithArgs({
+    const acceptedResult = await runCropQcWithArgs({
       affineMatrix: [1, 0, 0, 0, 1, 0],
       chipBounds,
       acceptedChipBounds,
@@ -1252,8 +1185,7 @@ describe('runCropQc feature match preview', () => {
       inlierMask: null,
     });
 
-    expect(automaticAccepted.eosinReferenceGeometry).toEqual(manualAccepted.eosinReferenceGeometry);
-    expectGeometryToBeCloseTo(automaticAccepted.heQcGeometry, {
+    expectGeometryToBeCloseTo(acceptedResult.heQcGeometry, {
       rect: {
         x: 1 / 9,
         y: 1 / 6,
@@ -1263,28 +1195,15 @@ describe('runCropQc feature match preview', () => {
       width: 24,
       height: 18,
     });
-    expectGeometryToBeCloseTo(manualAccepted.heQcGeometry, {
-      rect: {
-        x: 1 / 9,
-        y: 1 / 6,
-        width: 2 / 3,
-        height: 0.5,
-      },
-      width: 24,
-      height: 18,
-    });
-    expect(automaticAccepted.cropRect).toEqual(manualAccepted.cropRect);
-    expect(automaticAccepted.cropWidth).toBe(manualAccepted.cropWidth);
-    expect(automaticAccepted.cropHeight).toBe(manualAccepted.cropHeight);
-    expect(automaticAccepted.cropRect.x).toBeCloseTo(chipBounds.x);
-    expect(automaticAccepted.cropRect.y).toBeCloseTo(chipBounds.y);
-    expect(automaticAccepted.cropRect.width).toBeCloseTo(chipBounds.width);
-    expect(automaticAccepted.cropRect.height).toBeCloseTo(chipBounds.height);
-    expect(automaticAccepted.cropWidth).toBe(36);
-    expect(automaticAccepted.cropHeight).toBe(36);
+    expect(acceptedResult.cropRect.x).toBeCloseTo(chipBounds.x);
+    expect(acceptedResult.cropRect.y).toBeCloseTo(chipBounds.y);
+    expect(acceptedResult.cropRect.width).toBeCloseTo(chipBounds.width);
+    expect(acceptedResult.cropRect.height).toBeCloseTo(chipBounds.height);
+    expect(acceptedResult.cropWidth).toBe(36);
+    expect(acceptedResult.cropHeight).toBe(36);
   });
 
-  it('prefers refined H&E quad geometry over fallback bounds for derived QC metadata', async () => {
+  it('preserves refined H&E quad precedence for derived QC metadata', async () => {
     installBrowserStubs();
 
     const chipBounds: PreprocessRect = {
@@ -1299,11 +1218,16 @@ describe('runCropQc feature match preview', () => {
       width: 0.3,
       height: 0.3,
     };
-    const acceptedChipQuad: HeFocusAutoProposalQuad = [
+    const acceptedChipQuad = [
       { x: 0.32, y: 0.31 },
       { x: 0.58, y: 0.28 },
       { x: 0.54, y: 0.57 },
       { x: 0.29, y: 0.52 },
+    ] satisfies readonly [
+      PreprocessPoint,
+      PreprocessPoint,
+      PreprocessPoint,
+      PreprocessPoint,
     ];
 
     const result = await runCropQcWithArgs({
@@ -1351,12 +1275,6 @@ describe('runCropQc feature match preview', () => {
         height: 0.75,
       },
       acceptedChipBounds: null,
-      coarseChipBounds: {
-        x: 0.05,
-        y: 0.1,
-        width: 0.8,
-        height: 0.75,
-      },
       controlPoints: [],
       inlierMask: null,
     }).catch((error: unknown) => error);

@@ -295,20 +295,66 @@ export const generateFocusedHeDataUrl = async (args: {
 	const sourceImage = await loadDataUrlImage(args.sourceDataUrl);
 	const sourceWidth = sourceImage.naturalWidth;
 	const sourceHeight = sourceImage.naturalHeight;
-	const requestedX = Math.round(args.chipBounds.x * sourceWidth);
-	const requestedY = Math.round(args.chipBounds.y * sourceHeight);
+	const radians = (args.imageTransform.rotationDegrees * Math.PI) / 180;
+	const orientedWidth = Math.max(
+		1,
+		Math.round(
+			sourceWidth * Math.abs(Math.cos(radians)) +
+				sourceHeight * Math.abs(Math.sin(radians)),
+		),
+	);
+	const orientedHeight = Math.max(
+		1,
+		Math.round(
+			sourceWidth * Math.abs(Math.sin(radians)) +
+				sourceHeight * Math.abs(Math.cos(radians)),
+		),
+	);
+	const requestedX = Math.round(args.chipBounds.x * orientedWidth);
+	const requestedY = Math.round(args.chipBounds.y * orientedHeight);
 	const requestedWidth = Math.max(
 		1,
-		Math.round(args.chipBounds.width * sourceWidth),
+		Math.round(args.chipBounds.width * orientedWidth),
 	);
 	const requestedHeight = Math.max(
 		1,
-		Math.round(args.chipBounds.height * sourceHeight),
+		Math.round(args.chipBounds.height * orientedHeight),
 	);
+	const orientedCanvas = document.createElement("canvas");
+	orientedCanvas.width = orientedWidth;
+	orientedCanvas.height = orientedHeight;
+	const orientedContext = orientedCanvas.getContext("2d");
+	if (!orientedContext) {
+		throw new Error("Focused HE oriented frame context unavailable");
+	}
+	orientedContext.imageSmoothingEnabled = true;
+	orientedContext.imageSmoothingQuality = "high";
+	orientedContext.fillStyle = "#ffffff";
+	orientedContext.fillRect(0, 0, orientedWidth, orientedHeight);
+	orientedContext.translate(orientedWidth / 2, orientedHeight / 2);
+	orientedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
+	orientedContext.scale(
+		args.imageTransform.flipHorizontal ? -1 : 1,
+		args.imageTransform.flipVertical ? -1 : 1,
+	);
+	orientedContext.drawImage(
+		sourceImage,
+		-sourceWidth / 2,
+		-sourceHeight / 2,
+		sourceWidth,
+		sourceHeight,
+	);
+
 	const intersectionX = Math.max(0, requestedX);
 	const intersectionY = Math.max(0, requestedY);
-	const intersectionEndX = Math.min(sourceWidth, requestedX + requestedWidth);
-	const intersectionEndY = Math.min(sourceHeight, requestedY + requestedHeight);
+	const intersectionEndX = Math.min(
+		orientedWidth,
+		requestedX + requestedWidth,
+	);
+	const intersectionEndY = Math.min(
+		orientedHeight,
+		requestedY + requestedHeight,
+	);
 	const intersectionWidth = Math.max(0, intersectionEndX - intersectionX);
 	const intersectionHeight = Math.max(0, intersectionEndY - intersectionY);
 	const cropCanvas = document.createElement("canvas");
@@ -324,7 +370,7 @@ export const generateFocusedHeDataUrl = async (args: {
 	cropContext.fillRect(0, 0, requestedWidth, requestedHeight);
 	if (intersectionWidth > 0 && intersectionHeight > 0) {
 		cropContext.drawImage(
-			sourceImage,
+			orientedCanvas,
 			intersectionX,
 			intersectionY,
 			intersectionWidth,
@@ -336,32 +382,7 @@ export const generateFocusedHeDataUrl = async (args: {
 		);
 	}
 
-	const focusedCanvas = document.createElement("canvas");
-	focusedCanvas.width = requestedWidth;
-	focusedCanvas.height = requestedHeight;
-	const focusedContext = focusedCanvas.getContext("2d");
-	if (!focusedContext) {
-		throw new Error("Focused HE render context unavailable");
-	}
-	focusedContext.imageSmoothingEnabled = true;
-	focusedContext.imageSmoothingQuality = "high";
-	focusedContext.fillStyle = "#ffffff";
-	focusedContext.fillRect(0, 0, requestedWidth, requestedHeight);
-	focusedContext.translate(requestedWidth / 2, requestedHeight / 2);
-	focusedContext.scale(
-		args.imageTransform.flipHorizontal ? -1 : 1,
-		args.imageTransform.flipVertical ? -1 : 1,
-	);
-	focusedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
-	focusedContext.drawImage(
-		cropCanvas,
-		-requestedWidth / 2,
-		-requestedHeight / 2,
-		requestedWidth,
-		requestedHeight,
-	);
-
-	return focusedCanvas.toDataURL("image/png");
+	return cropCanvas.toDataURL("image/png");
 };
 
 export const getHeFocusComparisonSource = (
