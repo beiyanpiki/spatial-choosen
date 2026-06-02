@@ -525,7 +525,7 @@ function LandmarkCanvas({
 									data-testid={`${testIdPrefix}-image-transform-layer`}
 									style={{
 										transformOrigin: "center center",
-										transform: `rotate(${imageTransform.rotationDegrees}deg) scale(${imageTransform.flipHorizontal ? -1 : 1}, ${imageTransform.flipVertical ? -1 : 1})`,
+										transform: `scale(${imageTransform.flipHorizontal ? -1 : 1}, ${imageTransform.flipVertical ? -1 : 1}) rotate(${imageTransform.rotationDegrees}deg)`,
 									}}
 								>
 									<img

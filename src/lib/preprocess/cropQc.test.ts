@@ -117,6 +117,15 @@ const IDENTITY_TRANSFORM: LocalizationImageTransform = {
 const warpAffineCalls: WarpAffineCall[] = [];
 let mockImageSize = { ...IMAGE_SIZE };
 
+const expectPreviewPointCloseTo = (
+  actual: { x: number; y: number } | undefined,
+  expected: { x: number; y: number },
+) => {
+  expect(actual).toBeDefined();
+  expect(actual?.x).toBeCloseTo(expected.x, 6);
+  expect(actual?.y).toBeCloseTo(expected.y, 6);
+};
+
 const getCanvasSourceDimensions = (source: unknown) => {
   if (!source || typeof source !== 'object') {
     return { height: null, width: null };
@@ -744,10 +753,9 @@ describe('runCropQc feature match preview', () => {
       sourceHeight: 100,
       args: [20, 10, 40, 40, 0, 0, 40, 40],
     });
-    expect(featureSummary.arcPoints).toEqual([
-      { x: 60, y: 60 },
-      { x: 124, y: 60 },
-    ]);
+    expect(featureSummary.arcPoints).toHaveLength(2);
+    expectPreviewPointCloseTo(featureSummary.arcPoints[0], { x: 0, y: 20 });
+    expectPreviewPointCloseTo(featureSummary.arcPoints[1], { x: 64, y: 20 });
   });
 
   it('swaps emitted dimensions and crop-local HE geometry for non-square right-angle rotations', async () => {

@@ -180,7 +180,7 @@ describe('AlignmentPanel', () => {
 
     const transformLayer = screen.getByTestId('alignment-target-image-transform-layer');
     expect(transformLayer).toHaveStyle({
-      transform: 'rotate(90deg) scale(-1, 1)',
+      transform: 'scale(-1, 1) rotate(90deg)',
       transformOrigin: 'center center',
     });
     expect(within(transformLayer).getByTestId('alignment-target-image-boundary')).toBeInTheDocument();

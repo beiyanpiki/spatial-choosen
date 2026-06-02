@@ -48,10 +48,10 @@ const transforms: Array<{ name: string; transform: LocalizationImageTransform; e
 		expected: { x: 0.2, y: 0.2 },
 	},
 	{
-		name: 'combined flip + rotation',
+		name: 'combined rotation + view-horizontal flip',
 		transform: { rotationDegrees: 90, flipHorizontal: true, flipVertical: false, scale: 1 },
 		point: { x: 0.12, y: 0.73 },
-		expected: { x: 0.27, y: 0.88 },
+		expected: { x: 0.73, y: 0.12 },
 	},
 ];
 
@@ -82,6 +82,30 @@ describe('imageTransforms', () => {
 		const displayPoint = projectSourcePointToDisplayRect(sourcePoint, transform, displayRect);
 
 		expectPointCloseTo(displayPoint, { x: 580, y: 60 });
+		expectPointCloseTo(
+			invertDisplayRectPointToSource(displayPoint, transform, displayRect),
+			sourcePoint,
+		);
+	});
+
+	it('applies horizontal flips in the rotated display coordinate system', () => {
+		const transform: LocalizationImageTransform = {
+			rotationDegrees: 90,
+			flipHorizontal: true,
+			flipVertical: false,
+			scale: 1,
+		};
+		const displayRect = {
+			originX: 0,
+			originY: 0,
+			width: 800,
+			height: 600,
+		};
+		const sourcePoint = { x: 0.2, y: 0.2 };
+
+		const displayPoint = projectSourcePointToDisplayRect(sourcePoint, transform, displayRect);
+
+		expectPointCloseTo(displayPoint, { x: 220, y: 60 });
 		expectPointCloseTo(
 			invertDisplayRectPointToSource(displayPoint, transform, displayRect),
 			sourcePoint,

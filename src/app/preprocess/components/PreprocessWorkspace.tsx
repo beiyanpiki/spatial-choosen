@@ -291,11 +291,11 @@ export const generateFocusedHeDataUrl = async (args: {
 	orientedContext.fillStyle = "#ffffff";
 	orientedContext.fillRect(0, 0, orientedWidth, orientedHeight);
 	orientedContext.translate(orientedWidth / 2, orientedHeight / 2);
-	orientedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
 	orientedContext.scale(
 		args.imageTransform.flipHorizontal ? -1 : 1,
 		args.imageTransform.flipVertical ? -1 : 1,
 	);
+	orientedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
 	orientedContext.drawImage(
 		sourceImage,
 		-sourceWidth / 2,

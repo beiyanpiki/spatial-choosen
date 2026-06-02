@@ -131,14 +131,14 @@ const applyCropLocalImageTransform = (
   const radians = (transform.rotationDegrees * Math.PI) / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const flipped = {
-    x: (point.x - sourceCenter.x) * (transform.flipHorizontal ? -1 : 1),
-    y: (point.y - sourceCenter.y) * (transform.flipVertical ? -1 : 1),
-  };
+  const sourceDeltaX = point.x - sourceCenter.x;
+  const sourceDeltaY = point.y - sourceCenter.y;
+  const rotatedDeltaX = sourceDeltaX * cos - sourceDeltaY * sin;
+  const rotatedDeltaY = sourceDeltaX * sin + sourceDeltaY * cos;
 
   return {
-    x: outputCenter.x + flipped.x * cos - flipped.y * sin,
-    y: outputCenter.y + flipped.x * sin + flipped.y * cos,
+    x: outputCenter.x + rotatedDeltaX * (transform.flipHorizontal ? -1 : 1),
+    y: outputCenter.y + rotatedDeltaY * (transform.flipVertical ? -1 : 1),
   };
 };
 
@@ -161,8 +161,8 @@ const drawCanvasWithImageOrientation = (
   fillCanvasWhite(context, outputSize);
   // Localize scale is UI zoom; Crop/QC only needs the saved orientation.
   context.translate(outputSize.width / 2, outputSize.height / 2);
-  context.rotate((transform.rotationDegrees * Math.PI) / 180);
   context.scale(transform.flipHorizontal ? -1 : 1, transform.flipVertical ? -1 : 1);
+  context.rotate((transform.rotationDegrees * Math.PI) / 180);
   context.drawImage(source, -source.width / 2, -source.height / 2, source.width, source.height);
   return canvas;
 };
