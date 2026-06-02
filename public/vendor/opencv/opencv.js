@@ -14,7 +14,7 @@
         root.cv = factory();
     } else if (typeof importScripts === 'function') {
         // Web worker
-        root.cv = factory;
+        root.cv = factory();
     } else {
         // Other shells, e.g. d8
         root.cv = factory();
