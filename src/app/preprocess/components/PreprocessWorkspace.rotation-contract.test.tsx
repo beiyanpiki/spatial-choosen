@@ -6,14 +6,17 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import type {
   LegacyPreprocessProject,
+  PreprocessPoint,
   LocalizationImageTransform,
   PreprocessProject,
   PreprocessRect,
+  PreprocessStepId,
 } from '@/types/preprocess';
 import {
   clampNormalizedSquareRect,
   translateChipBounds,
-} from '../../../lib/preprocess/localization';
+} from '@/lib/preprocess/localization';
+import { projectSourcePointToDisplayRect } from '@/lib/preprocess/imageTransforms';
 
 const mockRunCropQc = vi.fn();
 const mockLoadOpenCv = vi.fn(async () => ({ cv: {} }));
@@ -33,8 +36,8 @@ const ROTATED_LOCALIZE_WORKING_IMAGE_SIZE = {
 	height: 1862,
 };
 const EXPECTED_ROTATED_LOCALIZE_DRAG_BOUNDS: PreprocessRect = {
-	x: 0.322059326171875,
-	y: 0.2851041666666667,
+	x: 0.23919138590494793,
+	y: 0.06374999999999995,
 	width: 0.34,
 	height: 0.37386718750000003,
 };
@@ -63,6 +66,16 @@ type MockCanvasContextRecord = {
   rotate: ReturnType<typeof vi.fn>;
   scale: ReturnType<typeof vi.fn>;
   setTransform: ReturnType<typeof vi.fn>;
+};
+
+type PixelSize = {
+	width: number;
+	height: number;
+};
+
+type PixelPoint = {
+	x: number;
+	y: number;
 };
 
 const getOrCreateCanvasContextRecord = (canvas: HTMLCanvasElement) => {
@@ -423,9 +436,11 @@ const createBaseProject = (): PreprocessProject => {
 function WorkspaceHarness({
   initialProject,
   onProjectChange,
+  onStepChange,
 }: {
   initialProject: PreprocessProject;
   onProjectChange?: (project: PreprocessProject) => void;
+  onStepChange?: (step: PreprocessStepId) => void;
 }) {
   const [project, setProject] = useState(initialProject);
 
@@ -445,7 +460,7 @@ function WorkspaceHarness({
           setProject((current) => updater(current));
         }}
         onProjectNameChange={vi.fn()}
-        onStepChange={vi.fn()}
+        onStepChange={onStepChange ?? vi.fn()}
         project={project}
       />
     </ChakraProvider>
@@ -505,16 +520,71 @@ const getWorkspaceDisplayTransform = (imageAspectRatio: number, scale = 1) => {
 };
 
 const sourcePointToWorkspaceScreen = (
-	point: { x: number; y: number },
+	point: PreprocessPoint,
 	imageAspectRatio: number,
 	imageTransform: LocalizationImageTransform,
 ) => {
 	const displayTransform = getWorkspaceDisplayTransform(imageAspectRatio, imageTransform.scale);
+	const projected = projectSourcePointToDisplayRect(point, imageTransform, displayTransform);
 
-	return [
-		displayTransform.originX + point.x * displayTransform.width,
-		displayTransform.originY + point.y * displayTransform.height,
-	] as [number, number];
+	return [projected.x, projected.y] as [number, number];
+};
+
+const transformImagePixelPoint = (
+	point: PixelPoint,
+	transform: LocalizationImageTransform,
+	sourceSize: PixelSize,
+	outputSize: PixelSize,
+): PixelPoint => {
+	const sourceCenter = {
+		x: sourceSize.width / 2,
+		y: sourceSize.height / 2,
+	};
+	const outputCenter = {
+		x: outputSize.width / 2,
+		y: outputSize.height / 2,
+	};
+	const radians = (transform.rotationDegrees * Math.PI) / 180;
+	const cos = Math.cos(radians);
+	const sin = Math.sin(radians);
+	const sourceDeltaX = point.x - sourceCenter.x;
+	const sourceDeltaY = point.y - sourceCenter.y;
+	const rotatedDeltaX = sourceDeltaX * cos - sourceDeltaY * sin;
+	const rotatedDeltaY = sourceDeltaX * sin + sourceDeltaY * cos;
+
+	return {
+		x: outputCenter.x + rotatedDeltaX * (transform.flipHorizontal ? -1 : 1),
+		y: outputCenter.y + rotatedDeltaY * (transform.flipVertical ? -1 : 1),
+	};
+};
+
+const getOrientedPixelRect = (
+	rect: PreprocessRect,
+	transform: LocalizationImageTransform,
+	sourceSize: PixelSize,
+	outputSize: PixelSize,
+) => {
+	const sourceX = rect.x * sourceSize.width;
+	const sourceY = rect.y * sourceSize.height;
+	const sourceWidth = rect.width * sourceSize.width;
+	const sourceHeight = rect.height * sourceSize.height;
+	const points = [
+		{ x: sourceX, y: sourceY },
+		{ x: sourceX + sourceWidth, y: sourceY },
+		{ x: sourceX + sourceWidth, y: sourceY + sourceHeight },
+		{ x: sourceX, y: sourceY + sourceHeight },
+	].map((point) => transformImagePixelPoint(point, transform, sourceSize, outputSize));
+	const minX = Math.min(...points.map((point) => point.x));
+	const minY = Math.min(...points.map((point) => point.y));
+	const maxX = Math.max(...points.map((point) => point.x));
+	const maxY = Math.max(...points.map((point) => point.y));
+
+	return {
+		x: Math.round(minX),
+		y: Math.round(minY),
+		width: Math.max(1, Math.round(maxX - minX)),
+		height: Math.max(1, Math.round(maxY - minY)),
+	};
 };
 
 const getRectSourceCorners = (rect: PreprocessRect) => [
@@ -672,14 +742,14 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 		const { cropCanvas, cropContext } = getLastFocusedPreviewRender();
 
-		expect(cropCanvas.width).toBe(54);
-		expect(cropCanvas.height).toBe(96);
-		expect(cropContext.fillStyle).toBe('#ffffff');
-		expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 54, 96);
-		expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
-		const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
-		expect(drawSource).toMatchObject({ width: 180, height: 240 });
-		expect(drawArgs).toEqual([0, 0, 36, 84, 18, 12, 36, 84]);
+			expect(cropCanvas.width).toBe(72);
+			expect(cropCanvas.height).toBe(72);
+			expect(cropContext.fillStyle).toBe('#ffffff');
+			expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+			expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
+			const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
+			expect(drawSource).toMatchObject({ width: 180, height: 240 });
+			expect(drawArgs).toEqual([0, 0, 63, 48, 9, 24, 63, 48]);
 	});
 
 	it('renders fully out-of-bounds HEFocus crops as all-white outputs at the requested size', async () => {
@@ -696,11 +766,11 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 		const { cropCanvas, cropContext } = getLastFocusedPreviewRender();
 
-		expect(cropCanvas.width).toBe(54);
-		expect(cropCanvas.height).toBe(96);
-		expect(cropContext.fillStyle).toBe('#ffffff');
-		expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 54, 96);
-		expect(cropContext.drawImage).not.toHaveBeenCalled();
+			expect(cropCanvas.width).toBe(72);
+			expect(cropCanvas.height).toBe(72);
+			expect(cropContext.fillStyle).toBe('#ffffff');
+			expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+			expect(cropContext.drawImage).not.toHaveBeenCalled();
 	});
 
 	it('preserves in-bounds placement for bottom-right corner overruns', async () => {
@@ -852,25 +922,21 @@ describe('PreprocessWorkspace rotation contract', () => {
 			initialChipBounds = JSON.parse(JSON.stringify(latestProject.localization.chipBounds)) as PreprocessRect;
 		});
 
-		const beforePoints = parsePoints(getPolygonPoints('localize-box-outline'));
-		expect(beforePoints).toHaveLength(4);
-
-		await user.click(screen.getByTestId('localize-stage-rotate-right-90'));
+			await user.click(screen.getByTestId('localize-stage-rotate-right-90'));
 
 		await waitFor(() => {
 			expect(screen.getByTestId('localize-stage-rotation-value')).toHaveTextContent('90.0°');
 		});
 
-		const afterPoints = parsePoints(getPolygonPoints('localize-box-outline'));
-		expect(afterPoints).toEqual(beforePoints);
-		expectPointPairsCloseTo(
-			afterPoints,
-			expectedOutlinePoints(
-					initialChipBounds,
-				{ ...latestProject.localization.imageTransform, rotationDegrees: 0 },
-				200 / 150,
-			),
-		);
+			const afterPoints = parsePoints(getPolygonPoints('localize-box-outline'));
+			expectPointPairsCloseTo(
+				afterPoints,
+				expectedOutlinePoints(
+						initialChipBounds,
+					latestProject.localization.imageTransform,
+					200 / 150,
+				),
+			);
 		expect(latestProject.localization.imageTransform.rotationDegrees).toBe(90);
 		expect(latestProject.localization.chipBounds).toEqual(initialChipBounds);
 	});
@@ -900,27 +966,23 @@ describe('PreprocessWorkspace rotation contract', () => {
 			expect(chipBounds.height).toBeCloseTo(0.4);
 		});
 
-		const beforePoints = parsePoints(getPolygonPoints('he-focus-box-outline'));
-		expect(beforePoints).toHaveLength(4);
-
-		await user.click(screen.getByTestId('he-focus-stage-rotate-right-90'));
+			await user.click(screen.getByTestId('he-focus-stage-rotate-right-90'));
 
 		await waitFor(() => {
 			expect(screen.getByTestId('he-focus-stage-rotation-value')).toHaveTextContent('90.0°');
 		});
 
-		const afterPoints = parsePoints(getPolygonPoints('he-focus-box-outline'));
-		expect(afterPoints).toEqual(beforePoints);
-		expect(latestProject.heFocus.imageTransform.rotationDegrees).toBe(90);
-		const chipBounds = latestProject.heFocus.chipBounds as PreprocessRect;
-		expectPointPairsCloseTo(
-			afterPoints,
-			expectedOutlinePoints(
-				chipBounds,
-				{ ...latestProject.heFocus.imageTransform, rotationDegrees: 0 },
-				HEFOCUS_IMAGE_ASPECT_RATIO,
-			),
-		);
+			const afterPoints = parsePoints(getPolygonPoints('he-focus-box-outline'));
+			expect(latestProject.heFocus.imageTransform.rotationDegrees).toBe(90);
+			const chipBounds = latestProject.heFocus.chipBounds as PreprocessRect;
+			expectPointPairsCloseTo(
+				afterPoints,
+				expectedOutlinePoints(
+					chipBounds,
+					latestProject.heFocus.imageTransform,
+					HEFOCUS_IMAGE_ASPECT_RATIO,
+				),
+			);
 		expect(chipBounds).toMatchObject({ x: 0.24, y: 0.28, height: 0.4 });
 		expect(chipBounds.width).toBeCloseTo(0.3);
 	});
@@ -945,11 +1007,11 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 		expectPointPairsCloseTo(
 			parsePoints(getPolygonPoints('localize-box-outline')),
-			expectedOutlinePoints(
-				localizationProject.localization.chipBounds as PreprocessRect,
-				{ ...localizationProject.localization.imageTransform, rotationDegrees: 0, flipHorizontal: false },
-				200 / 150,
-			),
+				expectedOutlinePoints(
+					localizationProject.localization.chipBounds as PreprocessRect,
+					localizationProject.localization.imageTransform,
+					200 / 150,
+				),
 		);
 		expect(screen.getByTestId('localize-stage-rotation-value')).toHaveTextContent('90.0°');
 	});
@@ -975,11 +1037,11 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 		expectPointPairsCloseTo(
 			parsePoints(getPolygonPoints('he-focus-box-outline')),
-			expectedOutlinePoints(
-				heFocusProject.heFocus.chipBounds as PreprocessRect,
-				{ ...heFocusProject.heFocus.imageTransform, rotationDegrees: 0, flipVertical: false },
-				HEFOCUS_IMAGE_ASPECT_RATIO,
-			),
+				expectedOutlinePoints(
+					heFocusProject.heFocus.chipBounds as PreprocessRect,
+					heFocusProject.heFocus.imageTransform,
+					HEFOCUS_IMAGE_ASPECT_RATIO,
+				),
 		);
 		expect(screen.getByTestId('he-focus-stage-rotation-value')).toHaveTextContent('-90.0°');
 	});
@@ -1071,14 +1133,14 @@ describe('PreprocessWorkspace rotation contract', () => {
 				expect(screen.getByTestId('localize-stage-rotation-value')).toHaveTextContent('90.0°');
 			});
 			const localizeOutlinePoints = parsePoints(getPolygonPoints('localize-box-outline'));
-			expectPointPairsCloseTo(
-				localizeOutlinePoints,
-				expectedOutlinePoints(
-					initialChipBounds,
-					{ ...latestProject.localization.imageTransform, rotationDegrees: 0 },
-					ROTATED_LOCALIZE_IMAGE_ASPECT_RATIO,
-					ROTATED_LOCALIZE_WORKING_IMAGE_ASPECT_RATIO,
-				),
+				expectPointPairsCloseTo(
+					localizeOutlinePoints,
+					expectedOutlinePoints(
+						initialChipBounds,
+						latestProject.localization.imageTransform,
+						ROTATED_LOCALIZE_IMAGE_ASPECT_RATIO,
+						ROTATED_LOCALIZE_WORKING_IMAGE_ASPECT_RATIO,
+					),
 			);
 
 			const expectedCommittedBounds = EXPECTED_ROTATED_LOCALIZE_DRAG_BOUNDS;
@@ -1132,34 +1194,33 @@ describe('PreprocessWorkspace rotation contract', () => {
 				expect(screen.getByTestId('he-focus-localize-reference-preview')).toBeInTheDocument();
 			});
 
-			const requestedX = Math.round(expectedCommittedBounds.x * ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height);
-			const requestedY = Math.round(expectedCommittedBounds.y * ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.width);
-			const requestedWidth = Math.max(
-				1,
-				Math.round(expectedCommittedBounds.width * ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height),
-			);
-			const requestedHeight = Math.max(
-				1,
-				Math.round(expectedCommittedBounds.height * ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.width),
-			);
-			const { cropCanvas, cropContext } = getFocusedPreviewRenderByCropSize(
-				requestedWidth,
-				requestedHeight,
-			);
+				const requestedBounds = getOrientedPixelRect(
+					expectedCommittedBounds,
+					latestProject.localization.imageTransform,
+					ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE,
+					{
+						width: ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height,
+						height: ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.width,
+					},
+				);
+				const { cropCanvas, cropContext } = getFocusedPreviewRenderByCropSize(
+					requestedBounds.width,
+					requestedBounds.height,
+				);
 
-			expect(cropCanvas.width).toBe(requestedWidth);
-			expect(cropCanvas.height).toBe(requestedHeight);
-			expect(cropContext.drawImage).toHaveBeenCalledWith(
-				expect.objectContaining({ width: 4096, height: 4504 }),
-				requestedX,
-				requestedY,
-				requestedWidth,
-				requestedHeight,
-				0,
-				0,
-				requestedWidth,
-				requestedHeight,
-			);
+				expect(cropCanvas.width).toBe(requestedBounds.width);
+				expect(cropCanvas.height).toBe(requestedBounds.height);
+				expect(cropContext.drawImage).toHaveBeenCalledWith(
+					expect.objectContaining({ width: 4096, height: 4504 }),
+					requestedBounds.x,
+					requestedBounds.y,
+					requestedBounds.width,
+					requestedBounds.height,
+					0,
+					0,
+					requestedBounds.width,
+					requestedBounds.height,
+				);
 		} finally {
 			vi.stubGlobal('Image', defaultImageCtor);
 		}
@@ -1357,14 +1418,10 @@ describe('PreprocessWorkspace rotation contract', () => {
 			expect(latestProject.heFocus.chipBounds).toEqual(expectedFinalMove);
 		});
 
-		await waitFor(() => {
-			expect(latestProject.heFocus.focusedImageDataUrl).toBe(
-				'data:image/png;base64,regenerated-he-focus-preview',
-			);
-			expect(screen.getByTestId('he-focus-localize-reference-preview').getAttribute('src')).toContain(
-				'data:image/png;base64,regenerated-he-focus-preview',
-			);
-		});
+		expect(latestProject.heFocus.focusedImageDataUrl).toBeNull();
+		expect(screen.getByTestId('he-focus-localize-reference-preview').getAttribute('src')).toContain(
+			'data:image/png;base64,regenerated-he-focus-preview',
+		);
 	});
 
 	it('commits true out-of-bounds HEFocus bounds when the stage emits permissive geometry', async () => {
@@ -1460,6 +1517,48 @@ describe('PreprocessWorkspace rotation contract', () => {
 		expect(latestProject.heFocus.handles[0]?.point.y).toBeLessThan(0);
 		expect(committedBounds.x).toBeLessThan(0);
 		expect(committedBounds.y).toBeLessThan(0);
+		expect(latestProject.heFocus.focusedImageDataUrl).toBeNull();
+	});
+
+	it('generates the focused H&E image only after entering Align', async () => {
+		let latestProject = createBaseProject();
+		latestProject.currentStep = 'heFocus';
+		latestProject.heFocus.focusedImageDataUrl = null;
+
+		const heFocusRender = render(
+			<WorkspaceHarness
+				initialProject={latestProject}
+				onProjectChange={(project) => {
+					latestProject = project;
+				}}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('he-focus-box-outline')).toBeInTheDocument();
+		});
+		await act(async () => {
+			await Promise.resolve();
+		});
+
+		expect(latestProject.heFocus.focusedImageDataUrl).toBeNull();
+
+		heFocusRender.unmount();
+
+		const alignmentProject = {
+			...latestProject,
+			currentStep: 'alignment' as const,
+		};
+
+		render(
+			<WorkspaceHarness
+				initialProject={alignmentProject}
+				onProjectChange={(project) => {
+					latestProject = project;
+				}}
+			/>,
+		);
+
 		await waitFor(() => {
 			expect(latestProject.heFocus.focusedImageDataUrl).toBe(
 				'data:image/png;base64,regenerated-he-focus-preview',

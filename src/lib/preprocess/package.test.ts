@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -6,7 +7,7 @@ import {
 } from '@/app/preprocess/projectState';
 import type { PreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
-import { deserializePreprocessProject, PACKAGE_VERSION } from './package';
+import { deserializePreprocessImport, deserializePreprocessProject, PACKAGE_VERSION } from './package';
 
 const createProjectedSpot = (
   id: string,
@@ -219,6 +220,45 @@ const createPackageBlob = (payload: Record<string, unknown>) => new Blob([
   type: 'application/x-spatial-preprocess+json',
 });
 
+const installImageProxyMocks = () => {
+  class MockImage {
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    naturalWidth = 4096;
+    naturalHeight = 2048;
+
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+
+  vi.stubGlobal('window', {
+    Image: MockImage,
+  });
+  vi.stubGlobal('document', {
+    createElement: (tagName: string) => {
+      if (tagName !== 'canvas') {
+        throw new Error(`Unexpected element requested: ${tagName}`);
+      }
+
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          drawImage: vi.fn(),
+        }),
+        toBlob: (
+          callback: BlobCallback,
+          mimeType?: string,
+        ) => {
+          callback(new Blob([new Uint8Array(1024)], { type: mimeType ?? 'image/png' }));
+        },
+      };
+    },
+  });
+  vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => `blob:${blob.type}:${blob.size}`);
+};
+
 const toCanonicalProjectPayload = (project: PreprocessProject) => {
   const {
     forcedInSpotIds,
@@ -280,6 +320,36 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.tissueSelection.mode).toBe('matrix');
     expect(result.tissueSelection.thresholdMode).toBe('raw');
     expect(result.tissueSelection.matrix?.values).toHaveLength(4096);
+  });
+
+  it('regenerates missing package working previews as JPEG proxies while retaining source blobs', async () => {
+    installImageProxyMocks();
+    const project = createProject();
+    project.sourceAssets.images.eosin = {
+      ...createSourceImage('eosin'),
+      width: 4096,
+      height: 2048,
+    };
+
+    const zip = new JSZip();
+    zip.file('project.json', JSON.stringify({
+      version: PACKAGE_VERSION,
+      project: toCanonicalProjectPayload(project),
+    }));
+    zip.file('source-assets/eosin', new Uint8Array(4096));
+    const file = new File([await zip.generateAsync({ type: 'blob' })], 'project.zip', {
+      type: 'application/zip',
+    });
+
+    const result = await deserializePreprocessImport(file);
+    const image = result.sourceAssets.images.eosin;
+
+    expect(image?.sourceBlob?.type).toBe('image/png');
+    expect(image?.dataUrl).toBe('blob:image/png:4096');
+    expect(image?.workingBlob?.type).toBe('image/jpeg');
+    expect(image?.workingDataUrl).toBe('blob:image/jpeg:1024');
+    expect(image?.workingWidth).toBe(2048);
+    expect(image?.workingHeight).toBe(1024);
   });
 
   it('preserves canonical matrix truth on v4 round-trip even when autoSelectedSpotIds do not imply the active cells', async () => {

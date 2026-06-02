@@ -151,6 +151,42 @@ const createAlignmentSlice = (): AlignmentSlice => ({
 });
 
 describe('AlignmentPanel', () => {
+  it('renders working preview URLs in alignment image panes while canonical data URLs remain available', async () => {
+    const referenceImage = {
+      ...createSourceImage('eosin'),
+      dataUrl: 'blob:eosin-canonical',
+      workingDataUrl: 'blob:eosin-working',
+    };
+    const movingImage = {
+      ...createSourceImage('he'),
+      dataUrl: 'blob:he-canonical',
+      workingDataUrl: 'blob:he-working',
+    };
+
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={movingImage}
+          onSolveAccepted={vi.fn()}
+          referenceImage={referenceImage}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    const sourceLayer = await screen.findByTestId('alignment-source-image-transform-layer');
+    const targetLayer = await screen.findByTestId('alignment-target-image-transform-layer');
+
+    expect(within(sourceLayer).getByRole('img')).toHaveAttribute('src', 'blob:eosin-working');
+    expect(within(targetLayer).getByRole('img')).toHaveAttribute('src', 'blob:he-working');
+    expect(referenceImage.dataUrl).toBe('blob:eosin-canonical');
+    expect(movingImage.dataUrl).toBe('blob:he-canonical');
+  });
+
   it('renders the moving-image padding boundary only for the target pane and keeps it coupled to the shared transform layer', async () => {
     const alignment = createAlignmentSlice();
     alignment.movingImageTransform = {

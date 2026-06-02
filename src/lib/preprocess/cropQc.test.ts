@@ -126,6 +126,20 @@ const expectPreviewPointCloseTo = (
   expect(actual?.y).toBeCloseTo(expected.y, 6);
 };
 
+const expectDrawImageCallCloseTo = (
+  actual: CanvasDrawImageSummary | undefined,
+  expected: CanvasDrawImageSummary,
+) => {
+  expect(actual).toBeDefined();
+  expect(actual?.sourceWidth).toBe(expected.sourceWidth);
+  expect(actual?.sourceHeight).toBe(expected.sourceHeight);
+  expect(actual?.args).toHaveLength(expected.args.length);
+
+  for (const [index, value] of expected.args.entries()) {
+    expect(actual?.args[index]).toBeCloseTo(value, 6);
+  }
+};
+
 const getCanvasSourceDimensions = (source: unknown) => {
   if (!source || typeof source !== 'object') {
     return { height: null, width: null };
@@ -707,8 +721,8 @@ describe('runCropQc feature match preview', () => {
       inlierMask: [true],
     });
 
-    expect(result.cropRect.x).toBeCloseTo(chipBounds.x);
-    expect(result.cropRect.y).toBeCloseTo(chipBounds.y);
+    expect(result.cropRect.x).toBeCloseTo(chipBounds.y);
+    expect(result.cropRect.y).toBeCloseTo(chipBounds.x);
     expect(result.cropRect.width).toBeCloseTo(chipBounds.width);
     expect(result.cropRect.height).toBeCloseTo(chipBounds.width);
     expect(result.cropWidth).toBe(result.cropHeight);
@@ -743,19 +757,19 @@ describe('runCropQc feature match preview', () => {
     const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 40, height: 40 });
     const featureSummary = parsePreviewSummary(result.featureMatchesDataUrl);
 
-    expect(eosinSummary.drawImageCalls[0]).toMatchObject({
+    expectDrawImageCallCloseTo(eosinSummary.drawImageCalls[0], {
       sourceWidth: 100,
       sourceHeight: 100,
-      args: [20, 10, 40, 40, 0, 0, 40, 40],
+      args: [10, 20, 40, 40, 0, 0, 40, 40],
     });
-    expect(heSummary.drawImageCalls[0]).toMatchObject({
+    expectDrawImageCallCloseTo(heSummary.drawImageCalls[0], {
       sourceWidth: 100,
       sourceHeight: 100,
-      args: [20, 10, 40, 40, 0, 0, 40, 40],
+      args: [10, 20, 40, 40, 0, 0, 40, 40],
     });
     expect(featureSummary.arcPoints).toHaveLength(2);
-    expectPreviewPointCloseTo(featureSummary.arcPoints[0], { x: 0, y: 20 });
-    expectPreviewPointCloseTo(featureSummary.arcPoints[1], { x: 64, y: 20 });
+    expectPreviewPointCloseTo(featureSummary.arcPoints[0], { x: 10, y: 10 });
+    expectPreviewPointCloseTo(featureSummary.arcPoints[1], { x: 74, y: 10 });
   });
 
   it('swaps emitted dimensions and crop-local HE geometry for non-square right-angle rotations', async () => {
@@ -791,20 +805,20 @@ describe('runCropQc feature match preview', () => {
 
     expect(result.cropWidth).toBe(80);
     expect(result.cropHeight).toBe(40);
-    expect(eosinSummary.drawImageCalls[0]).toMatchObject({
+    expectDrawImageCallCloseTo(eosinSummary.drawImageCalls[0], {
       sourceWidth: 200,
       sourceHeight: 100,
-      args: [40, 10, 80, 40, 0, 0, 80, 40],
+      args: [100, 20, 80, 40, 0, 0, 80, 40],
     });
-    expect(heSummary.drawImageCalls[0]).toMatchObject({
+    expectDrawImageCallCloseTo(heSummary.drawImageCalls[0], {
       sourceWidth: 200,
       sourceHeight: 100,
-      args: [40, 10, 80, 40, 0, 0, 80, 40],
+      args: [100, 20, 80, 40, 0, 0, 80, 40],
     });
     expectGeometryToBeCloseTo(result.heQcGeometry, {
       rect: {
-        x: 1.625,
-        y: 0.5,
+        x: 0.875,
+        y: 0.25,
         width: 0.125,
         height: 0.5,
       },

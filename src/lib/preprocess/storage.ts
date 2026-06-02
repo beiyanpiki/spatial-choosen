@@ -17,7 +17,6 @@ import {
   PREPROCESS_DB_NAME,
   PREPROCESS_DB_VERSION,
   PREPROCESS_DERIVED_IMAGE_STORE,
-  PREPROCESS_NUMERIC_DEFAULTS,
   PREPROCESS_SOURCE_IMAGE_KINDS,
   PREPROCESS_SOURCE_IMAGE_STORE,
   PREPROCESS_STORAGE_KEY,
@@ -27,7 +26,7 @@ import {
   PREPROCESS_WORKING_IMAGE_STORE,
 } from './constants';
 import { migratePreprocessProject } from './migrations';
-import { createDownsampledBlobFromSource, createThumbnailBlob, loadImageElement } from './sourceImage';
+import { createThumbnailBlob, createWorkingProxyBlobFromSource, loadImageElement } from './sourceImage';
 import { matrixFromSelectedSpotIds, validateTissueActivationMatrix } from './tissueMatrix';
 
 declare global {
@@ -905,6 +904,8 @@ const hydrateSourceImage = async (
   let workingBlob = working?.blob;
   let workingObjectUrl = working?.objectUrl;
   let workingDataUrl = working?.displayUrl;
+  let workingWidth = meta.workingWidth;
+  let workingHeight = meta.workingHeight;
   let workingRegenerated = false;
 
   if (!thumbnailDataUrl && source.displayUrl) {
@@ -922,15 +923,16 @@ const hydrateSourceImage = async (
   if (!workingDataUrl && source.displayUrl) {
     try {
       const sourceImage = await loadImageElement(source.displayUrl);
-      const generatedBlob = await createDownsampledBlobFromSource(
+      const generatedProxy = await createWorkingProxyBlobFromSource(
         sourceImage,
         sourceImage.naturalWidth,
         sourceImage.naturalHeight,
-        PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
       );
-      workingBlob = generatedBlob;
-      workingObjectUrl = URL.createObjectURL(generatedBlob);
+      workingBlob = generatedProxy.blob;
+      workingObjectUrl = URL.createObjectURL(generatedProxy.blob);
       workingDataUrl = workingObjectUrl;
+      workingWidth = generatedProxy.width;
+      workingHeight = generatedProxy.height;
       workingRegenerated = true;
     } catch (error) {
       void error;
@@ -949,6 +951,8 @@ const hydrateSourceImage = async (
       dataUrl: source.displayUrl,
       thumbnailDataUrl,
       workingDataUrl,
+      workingWidth,
+      workingHeight,
     },
     thumbnailRegenerated,
     workingRegenerated,

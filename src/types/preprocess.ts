@@ -169,7 +169,7 @@ export type AlignmentSlice = PreprocessSliceBase & {
 };
 
 export type LegacyAlignmentSlice = Omit<AlignmentSlice, "source"> & {
-  source?: AlignmentSlice["source"];
+  source?: AlignmentSlice["source"] | "auto";
 };
 
 export type CropQcIssue = {

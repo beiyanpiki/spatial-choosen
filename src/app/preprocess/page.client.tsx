@@ -368,7 +368,7 @@ function PreprocessContent() {
 			const normalizedSnapshot =
 				normalizeProjectForPersistence(pendingSnapshot);
 
-			if (synchronousMetadata && mode === "metadata") {
+			if (synchronousMetadata) {
 				latestSaveAttemptRef.current += 1;
 				lastSavedProjectRef.current = normalizedSnapshot;
 				upsertPreprocessProjectMetadata(normalizedSnapshot);

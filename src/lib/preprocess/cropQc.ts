@@ -446,6 +446,24 @@ const toPixelBounds = (points: readonly PixelPoint[]): PixelRect => {
   };
 };
 
+const transformPixelRect = (
+  pixelRect: PixelRect,
+  transform: LocalizationImageTransform,
+  sourceSize: Size,
+  outputSize = getOrientedCropSize(sourceSize, transform),
+): PixelRect => {
+  if (isIdentityImageOrientation(transform)) {
+    return pixelRect;
+  }
+
+  return toPixelBounds([
+    { x: pixelRect.x, y: pixelRect.y },
+    { x: pixelRect.x + pixelRect.width, y: pixelRect.y },
+    { x: pixelRect.x + pixelRect.width, y: pixelRect.y + pixelRect.height },
+    { x: pixelRect.x, y: pixelRect.y + pixelRect.height },
+  ].map((point) => applyCropLocalImageTransform(point, transform, sourceSize, outputSize)));
+};
+
 const applyAffineToPoint = (
   point: PixelPoint,
   affineMatrix: AlignmentAffineMatrix,
@@ -814,10 +832,25 @@ export async function runCropQc(args: {
   );
   const orientedEosinFullFrame = drawCanvasWithImageOrientation(referenceFullresFrame, args.imageTransform);
   const orientedHeFullFrame = drawCanvasWithImageOrientation(heCrop, args.imageTransform);
-  const orientedCropBounds = normalizeRectForSize(
+  const sourceCropBounds = normalizeRectForSize(
     normalized.rect,
+    { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
+  );
+  const orientedCropPixelRect = transformPixelRect(
+    sourceCropBounds.pixelRect,
+    args.imageTransform,
+    { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
     { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },
   );
+  const orientedCropBounds = {
+    rect: {
+      x: orientedCropPixelRect.x / orientedEosinFullFrame.width,
+      y: orientedCropPixelRect.y / orientedEosinFullFrame.height,
+      width: orientedCropPixelRect.width / orientedEosinFullFrame.width,
+      height: orientedCropPixelRect.height / orientedEosinFullFrame.height,
+    },
+    pixelRect: orientedCropPixelRect,
+  };
   const orientedEosinFrame = cropCanvas(
     orientedEosinFullFrame,
     { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },

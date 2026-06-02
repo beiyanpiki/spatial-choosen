@@ -34,6 +34,7 @@ const createPngBytes = (width: number, height: number) => {
 const createPngDataUrl = (width: number, height: number) => `data:image/png;base64,${Buffer.from(createPngBytes(width, height)).toString('base64')}`;
 
 const PNG_DATA_URL = createPngDataUrl(200, 200);
+const JPEG_DATA_URL = 'data:image/jpeg;base64,/9j/2Q==';
 
 const createCropAssetSet = () => ({
   fullres: { dataUrl: PNG_DATA_URL },
@@ -44,6 +45,17 @@ const createCropAssetSet = () => ({
 const createCanonicalCropAssets = () => ({
   eosin: createCropAssetSet(),
   he: createCropAssetSet(),
+});
+
+const createSourceImage = (kind: 'eosin' | 'he') => ({
+  id: `${kind}-source`,
+  kind,
+  fileName: `${kind}.png`,
+  mimeType: 'image/png',
+  sizeBytes: 1024,
+  width: 4096,
+  height: 2048,
+  lastModified: 0,
 });
 
 const createProjectedSpot = (
@@ -416,6 +428,106 @@ describe('preprocess storage tissue metadata', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  const installImageProxyMocks = () => {
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 4096;
+      naturalHeight = 2048;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    const currentWindow = window as typeof window & {
+      Image?: typeof MockImage;
+    };
+    currentWindow.Image = MockImage;
+
+    vi.stubGlobal('document', {
+      createElement: (tagName: string) => {
+        if (tagName !== 'canvas') {
+          throw new Error(`Unexpected element requested: ${tagName}`);
+        }
+
+        return {
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            drawImage: vi.fn(),
+          }),
+          toBlob: (
+            callback: BlobCallback,
+            mimeType?: string,
+          ) => {
+            callback(new Blob([new Uint8Array(1024)], { type: mimeType ?? 'image/png' }));
+          },
+        };
+      },
+    });
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => `blob:${blob.type}:${blob.size}`);
+  };
+
+  it('hydrates legacy PNG working previews without regenerating them', async () => {
+    const project = createProject();
+    project.sourceAssets.images.eosin = createSourceImage('eosin');
+    upsertPreprocessProjectMetadata(project);
+
+    const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<{
+      sourceAssets: {
+        images: {
+          eosin: Record<string, unknown>;
+        };
+      };
+    }>;
+    stored[0].sourceAssets.images.eosin = {
+      ...stored[0].sourceAssets.images.eosin,
+      dataUrl: PNG_DATA_URL,
+      workingDataUrl: PNG_DATA_URL,
+      workingWidth: 1000,
+      workingHeight: 1000,
+    };
+    localStorage.setItem('spatial-preprocess-projects', JSON.stringify(stored));
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated?.sourceAssets.images.eosin?.dataUrl).toBe(PNG_DATA_URL);
+    expect(hydrated?.sourceAssets.images.eosin?.workingDataUrl).toBe(PNG_DATA_URL);
+    expect(hydrated?.sourceAssets.images.eosin?.workingWidth).toBe(1000);
+    expect(hydrated?.sourceAssets.images.eosin?.workingHeight).toBe(1000);
+  });
+
+  it('regenerates missing working previews as JPEG proxies during hydration', async () => {
+    installImageProxyMocks();
+    const project = createProject();
+    project.sourceAssets.images.eosin = createSourceImage('eosin');
+    upsertPreprocessProjectMetadata(project);
+
+    const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<{
+      sourceAssets: {
+        images: {
+          eosin: Record<string, unknown>;
+        };
+      };
+    }>;
+    stored[0].sourceAssets.images.eosin = {
+      ...stored[0].sourceAssets.images.eosin,
+      dataUrl: PNG_DATA_URL,
+      thumbnailDataUrl: JPEG_DATA_URL,
+    };
+    localStorage.setItem('spatial-preprocess-projects', JSON.stringify(stored));
+
+    const hydrated = await getPreprocessProject(project.id);
+    const image = hydrated?.sourceAssets.images.eosin;
+
+    expect(image?.dataUrl).toBe(PNG_DATA_URL);
+    expect(image?.workingBlob?.type).toBe('image/jpeg');
+    expect(image?.workingDataUrl).toBe('blob:image/jpeg:1024');
+    expect(image?.workingWidth).toBe(2048);
+    expect(image?.workingHeight).toBe(1024);
   });
 
   it('parses valid versioned canonical tissue selection payloads', () => {

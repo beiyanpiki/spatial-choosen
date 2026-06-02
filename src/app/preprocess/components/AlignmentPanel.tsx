@@ -893,6 +893,7 @@ export function AlignmentPanel({
 							: { ...pair, target: point }
 						: pair,
 				),
+				{ preserveSelection: true },
 			);
 		},
 		[

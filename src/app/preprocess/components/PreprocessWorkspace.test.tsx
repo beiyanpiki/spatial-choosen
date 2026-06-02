@@ -720,11 +720,44 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     });
 
     const matrixWriteMutation = capturedMutations.find(
-      (mutation) => mutation.persistOptions?.mode === 'tissue',
+      (mutation) => mutation.project.tissueSelection.status === 'complete',
     );
     expect(matrixWriteMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
     expect(matrixWriteMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
     expect(matrixWriteMutation?.project.exportState.status).toBe('ready');
+  });
+
+  it('persists failed auto-detection status with tissue-aware options', async () => {
+    mockRunTissueAutoSelection.mockRejectedValue(new Error('forced auto-detection failure'));
+    const user = userEvent.setup();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    render(
+      <WorkspaceHarness
+        onProjectMutateCapture={(mutation) => {
+          capturedMutations.push(mutation);
+        }}
+      />,
+    );
+
+    await user.click(screen.getByTestId('tissue-run-auto'));
+
+    await waitFor(() => {
+      expect(mockRunTissueAutoSelection).toHaveBeenCalledTimes(1);
+      expect(capturedMutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            persistOptions: { mode: 'tissue' },
+          }),
+        ]),
+      );
+    });
+
+    const failureMutation = capturedMutations.find(
+      (mutation) => mutation.project.tissueSelection.error === 'forced auto-detection failure',
+    );
+    expect(failureMutation?.persistOptions).toEqual({ mode: 'tissue' });
+    expect(failureMutation?.project.tissueSelection.status).toBe('error');
+    expect(failureMutation?.project.exportState.status).toBe('stale');
   });
 
 	it('blocks tissue auto-detection while repaired crop or chip projection state is still stale', async () => {
