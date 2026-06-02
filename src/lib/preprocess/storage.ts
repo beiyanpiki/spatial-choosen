@@ -192,7 +192,7 @@ export type PreprocessProjectSummary = Pick<
   'id' | 'name' | 'createdAt' | 'updatedAt' | 'currentStep' | 'sourceAssets'
 >;
 
-export type PreprocessPersistMode = 'full' | 'metadata';
+export type PreprocessPersistMode = 'full' | 'metadata' | 'tissue';
 
 const isBrowser = () => typeof window !== 'undefined';
 
@@ -1205,6 +1205,18 @@ const syncTissueSelectionStore = async (
 ) => {
   const key = tissueSelectionStoreKey(projectId);
   const payload = toStoredTissueSelectionPayload(tissueSelection);
+  const existing = await readTissueSelectionStore(projectId);
+
+  if (
+    existing
+    && 'canonical' in existing
+    && existing.canonical.tissueUpdatedAt !== null
+    && payload.tissueUpdatedAt !== null
+    && existing.canonical.tissueUpdatedAt > payload.tissueUpdatedAt
+  ) {
+    return;
+  }
+
   await saveStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key, JSON.stringify(payload));
 };
 
@@ -1252,7 +1264,14 @@ export async function upsertPreprocessProject(
 
   const migratedProject = upsertPreprocessProjectMetadata(project);
 
-  if ((options?.mode ?? 'full') === 'metadata') {
+  const mode = options?.mode ?? 'full';
+
+  if (mode === 'metadata') {
+    return;
+  }
+
+  if (mode === 'tissue') {
+    await syncTissueSelectionStore(migratedProject.id, project.tissueSelection);
     return;
   }
 

@@ -2,7 +2,7 @@ import type {
   LocalizationImageTransform,
   PreprocessPoint,
   PreprocessRect,
-} from "../../types/preprocess";
+} from '@/types/preprocess';
 
 const CENTER = 0.5;
 
@@ -82,7 +82,7 @@ export function projectSourcePointToDisplayRect(
   const displayDeltaY = (point.y - CENTER) * displayRect.height;
   const flippedDisplayDeltaX = displayDeltaX * (transform.flipHorizontal ? -1 : 1);
   const flippedDisplayDeltaY = displayDeltaY * (transform.flipVertical ? -1 : 1);
-  const radians = degreesToRadians(transform.rotationDegrees);
+  const radians = degreesToRadians(normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
 
@@ -101,7 +101,7 @@ export function invertDisplayRectPointToSource(
   const centerY = displayRect.originY + displayRect.height / 2;
   const rotatedDisplayDeltaX = point.x - centerX;
   const rotatedDisplayDeltaY = point.y - centerY;
-  const radians = degreesToRadians(-transform.rotationDegrees);
+  const radians = degreesToRadians(-normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   const unrotatedDisplayDeltaX = rotatedDisplayDeltaX * cos - rotatedDisplayDeltaY * sin;

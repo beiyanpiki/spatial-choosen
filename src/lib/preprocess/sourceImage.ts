@@ -83,12 +83,16 @@ const createThumbnailBlob = async (src: string, maxEdge: number = PREPROCESS_NUM
   canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
 
   const context = canvas.getContext('2d');
-  if (!context) {
-    return fetch(src).then((response) => response.blob());
-  }
+  try {
+    if (!context) {
+      throw new Error('Canvas 2D context unavailable for image thumbnail creation');
+    }
 
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return canvasToBlob(canvas, 'image/png');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return await canvasToBlob(canvas, 'image/png');
+  } finally {
+    disposeCanvas(canvas);
+  }
 };
 
 const isTiffFile = (file: File) => TIFF_MIME_TYPES.has(file.type.toLowerCase()) || TIFF_FILE_NAME.test(file.name);
@@ -201,7 +205,9 @@ export async function buildSourceImage(file: File, kind: PreprocessImageKind): P
   );
 
   return {
-    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${kind}-${Date.now()}`,
+    id: typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     kind,
     fileName: file.name,
     mimeType: decoded.mimeType,
