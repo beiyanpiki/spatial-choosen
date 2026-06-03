@@ -30,7 +30,7 @@ vi.mock('./tissueRegions', () => ({
 
 import { exportPreprocessZip, getPreprocessZipExportReadiness } from './exportBundle';
 
-const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution HE crop image dimensions are unavailable. Re-run Crop/QC before export.';
+const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution H&E crop image dimensions are unavailable. Regenerate crop QC before export.';
 
 const createPngBytes = (width: number, height: number) => {
   const bytes = new Uint8Array(24);
@@ -1004,9 +1004,9 @@ describe('exportBundle canonical matrix exports', () => {
 
     expect(readiness).toEqual({
       canExport: false,
-      reason: 'Aligned tissue image export requires checkerboard Crop/QC data.',
+      reason: 'Registered H&E image export requires checkerboard crop QC data.',
     });
-    await expect(exportProjectWithAlignedImage(project)).rejects.toThrow('Aligned tissue image export requires checkerboard Crop/QC data.');
+    await expect(exportProjectWithAlignedImage(project)).rejects.toThrow('Registered H&E image export requires checkerboard crop QC data.');
   });
 
   it('blocks export when tissue support state is unsupported', async () => {

@@ -93,25 +93,25 @@ export function CropQcPanel({
     <Stack spacing={5}>
       <HStack spacing={3}>
         <Button onClick={onRunCrop} data-testid='cropqc-run' colorScheme='brand' isDisabled={!canRun}>
-          Generate crop + QC
+          Generate registered crop
         </Button>
         <Button onClick={onAccept} data-testid='cropqc-accept' colorScheme='green' isDisabled={!canAccept}>
-          Accept QC
+          Accept crop QC
         </Button>
         <Button onClick={onRejectToAlign} data-testid='cropqc-reject-to-align' variant='outline' isDisabled={!canAccept}>
-          Reject and return to alignment
+          Return to registration
         </Button>
       </HStack>
 
       <HStack justify='space-between'>
-        <Text color='gray.600'>Crop dimensions</Text>
+        <Text color='gray.600'>Output crop size</Text>
         <Text fontWeight='semibold' data-testid='cropqc-dimensions'>{dimensionsText}</Text>
       </HStack>
 
       <Tabs size='sm' variant='enclosed' isLazy>
         <TabList>
-          <Tab>Tissue align</Tab>
-          <Tab>Feature matches</Tab>
+          <Tab>Checkerboard QC</Tab>
+          <Tab>Landmark matches</Tab>
           <Tab>Overlay opacity</Tab>
         </TabList>
 
@@ -144,7 +144,7 @@ export function CropQcPanel({
                 {checkerboardDataUrl ? (
                   <img
                     src={checkerboardDataUrl}
-                    alt='QC checkerboard preview'
+                    alt='Registered crop checkerboard QC preview'
                     data-testid='cropqc-spatial-align-canvas'
                     style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
                   />
@@ -181,7 +181,7 @@ export function CropQcPanel({
                 {featureMatchesDataUrl ? (
                   <img
                     src={featureMatchesDataUrl}
-                    alt='QC feature matches preview'
+                    alt='Landmark match QC preview'
                     data-testid='cropqc-feature-matches-canvas'
                     style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
                   />
@@ -195,7 +195,7 @@ export function CropQcPanel({
           <TabPanel px={0} pt={4}>
             <Stack spacing={4}>
               <Stack spacing={2}>
-                <Text fontSize='sm' color='gray.600'>Overlay opacity: {displayedOverlayOpacity.toFixed(2)}</Text>
+                <Text fontSize='sm' color='gray.600'>H&E overlay opacity: {displayedOverlayOpacity.toFixed(2)}</Text>
                 <Slider
                   min={0}
                   max={1}
@@ -228,20 +228,20 @@ export function CropQcPanel({
                     {eosinCropDataUrl ? (
                       <img
                         src={eosinCropDataUrl}
-                        alt='Eosin crop preview'
+                        alt='Eosin reference crop preview'
                         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }}
                       />
                     ) : null}
                     {heCropDataUrl ? (
                       <img
                         src={heCropDataUrl}
-                        alt='Warped HE crop preview'
+                        alt='Registered H&E crop preview'
                         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: displayedOverlayOpacity }}
                       />
                     ) : null}
                   </>
                 ) : (
-                  <Box p={4}><Text fontSize='sm' color='gray.500'>Overlay preview appears after crop generation.</Text></Box>
+                  <Box p={4}><Text fontSize='sm' color='gray.500'>Overlay preview appears after registered crop generation.</Text></Box>
                 )}
               </Box>
             </Stack>

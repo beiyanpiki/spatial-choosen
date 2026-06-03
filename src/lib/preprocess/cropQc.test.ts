@@ -1304,7 +1304,7 @@ describe('runCropQc feature match preview', () => {
     expect(blockedError).toBeInstanceOf(CropQcBlockedError);
     expect(blockedError).toMatchObject({
       code: 'missing-accepted-transform',
-      message: 'Crop/QC is blocked until an accepted alignment transform is available.',
+      message: 'Crop QC is blocked until an accepted registration transform is available.',
     });
   });
 

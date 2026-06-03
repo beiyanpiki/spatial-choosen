@@ -15,6 +15,7 @@ import {
 } from '@chakra-ui/react';
 import { useRef } from 'react';
 import type { PreprocessProjectSummary } from '@/lib/preprocess/storage';
+import type { PreprocessStepId } from '@/types/preprocess';
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
   year: 'numeric',
@@ -38,9 +39,20 @@ type PreprocessLandingProps = {
 const describeSources = (project: PreprocessProjectSummary) => {
   const labels = [project.sourceAssets.images.eosin, project.sourceAssets.images.he]
     .filter((image): image is NonNullable<typeof image> => Boolean(image))
-    .map((image) => image.kind.toUpperCase());
+    .map((image) => (image.kind === 'he' ? 'H&E' : 'Eosin reference'));
 
   return labels.length > 0 ? labels.join(' + ') : 'No source images yet';
+};
+
+const STEP_LABELS: Record<PreprocessStepId, string> = {
+  sourceAssets: 'Source images',
+  localization: 'Chip localization',
+  heFocus: 'H&E focus',
+  alignment: 'Image registration',
+  cropQc: 'Crop QC',
+  chipConfig: 'Chip projection',
+  tissueSelection: 'Tissue spot selection',
+  exportState: 'Export package',
 };
 
 export function PreprocessLanding({
@@ -63,10 +75,10 @@ export function PreprocessLanding({
         <Box width='100%' maxW='1200px'>
           <Stack spacing={4} mb={6} align='flex-start' textAlign='left'>
             <Badge colorScheme='brand' variant='subtle'>Local only</Badge>
-            <Heading size='lg'>Preprocess Workspace</Heading>
+            <Heading size='lg'>Preprocessing Workspace</Heading>
             <Text color='gray.600' maxW='760px'>
-              Create a preprocess project to organize source images, move through the step-by-step shell,
-              and keep every saved snapshot in this browser only.
+              Prepare eosin and H&E source images for registration, crop QC, spot projection,
+              tissue selection, and local export. All project data stays in this browser.
             </Text>
           </Stack>
 
@@ -75,16 +87,16 @@ export function PreprocessLanding({
               <Box bg='white' boxShadow='md' borderRadius='lg' p={6} border='1px solid' borderColor='gray.100'>
                 <Stack spacing={4} align='stretch'>
                   <Stack spacing={1}>
-                    <Heading size='md'>New preprocess project</Heading>
+                    <Heading size='md'>New preprocessing project</Heading>
                     <Text fontSize='sm' color='gray.500'>
-                      Start with an empty shell. Source image upload arrives inside the workflow.
+                      Start a local workflow for one slide or tissue section.
                     </Text>
                   </Stack>
 
                   <Stack spacing={2}>
                     <Text fontWeight='semibold' fontSize='sm'>Project name</Text>
                     <Input
-                      placeholder='Tumor preprocess set A'
+                      placeholder='Tumor section A preprocessing'
                       value={projectName}
                       onChange={(event) => setProjectName(event.target.value)}
                     />
@@ -98,7 +110,7 @@ export function PreprocessLanding({
                     isLoading={isCreating}
                     data-testid='preprocess-create-project'
                   >
-                    Create preprocess project
+                    Create preprocessing project
                   </Button>
                 </Stack>
               </Box>
@@ -106,9 +118,9 @@ export function PreprocessLanding({
               <Box bg='white' boxShadow='md' borderRadius='lg' p={6} border='1px solid' borderColor='gray.100'>
                 <Stack spacing={4} align='stretch'>
                   <Stack spacing={1}>
-                    <Heading size='md'>Import preprocess project</Heading>
+                    <Heading size='md'>Import preprocessing project</Heading>
                     <Text color='gray.600'>
-                      Restore a saved preprocess package without mixing it into annotation projects.
+                      Restore a saved preprocessing package without changing annotation projects.
                     </Text>
                   </Stack>
                   <Button
@@ -132,7 +144,7 @@ export function PreprocessLanding({
                     }}
                   />
                   <Text fontSize='sm' color='gray.500'>
-                    Malformed imports are rejected before anything in local storage is replaced.
+                    Invalid packages are rejected before any local project data is replaced.
                   </Text>
                 </Stack>
               </Box>
@@ -149,16 +161,16 @@ export function PreprocessLanding({
               data-testid='preprocess-project-list'
             >
               <Flex justify='space-between' align='center' mb={3} gap={4} wrap='wrap'>
-                <Heading size='md'>Saved preprocess projects</Heading>
+                <Heading size='md'>Saved preprocessing projects</Heading>
                 <Badge colorScheme='gray'>Stored locally</Badge>
               </Flex>
               <Text fontSize='sm' color='gray.600' mb={4}>
-                Open an existing shell, delete old drafts, or continue from an imported package.
+                Open a local preprocessing project, remove old work, or continue from an imported package.
               </Text>
 
               {projects.length === 0 ? (
                 <Box bg='white' border='1px dashed' borderColor='gray.200' p={8} borderRadius='lg' textAlign='center'>
-                  <Text color='gray.600'>No preprocess projects yet. Create one to get started.</Text>
+                  <Text color='gray.600'>No preprocessing projects yet. Create one to get started.</Text>
                 </Box>
               ) : (
                 <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4}>
@@ -193,7 +205,7 @@ export function PreprocessLanding({
                         </Stack>
 
                         <Stack spacing={1} fontSize='sm' color='gray.600'>
-                          <Text>Current step: {project.currentStep}</Text>
+                          <Text>Current step: {STEP_LABELS[project.currentStep]}</Text>
                           <Text>{describeSources(project)}</Text>
                           <Text>ID: {project.id}</Text>
                         </Stack>

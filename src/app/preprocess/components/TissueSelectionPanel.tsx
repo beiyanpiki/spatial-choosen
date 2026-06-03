@@ -437,14 +437,14 @@ export function TissueSelectionPanel({
             direction={{ base: 'column', md: 'row' }}
           >
             <Stack spacing={1}>
-              <Text fontSize='lg' fontWeight='semibold'>Tissue workspace</Text>
+              <Text fontSize='lg' fontWeight='semibold'>Tissue spot selection</Text>
               <Text fontSize='sm' color='gray.500'>
-                Review the tissue canvas, run auto detection, then refine the matrix with activate and deactivate freehand edits.
+                Review the eosin crop, auto-select tissue-covered spots, then refine the spot matrix with freehand edits.
               </Text>
             </Stack>
             <HStack spacing={3} wrap='wrap' justify={{ base: 'flex-start', md: 'flex-end' }}>
               <Text data-testid='tissue-panel-selected-count' fontSize='sm' color='gray.600'>
-                Selected spots: {selectedSpotIds.length}
+                Tissue spots: {selectedSpotIds.length}
               </Text>
             </HStack>
           </Flex>
@@ -482,7 +482,7 @@ export function TissueSelectionPanel({
                 isDisabled={disabled}
                 onClick={() => handleToolChange('activate')}
               >
-                Activate
+                Mark as tissue
               </Button>
               <Button
                 data-testid='tissue-tool-deactivate'
@@ -490,7 +490,7 @@ export function TissueSelectionPanel({
                 isDisabled={disabled}
                 onClick={() => handleToolChange('deactivate')}
               >
-                Deactivate
+                Mark as background
               </Button>
             </ButtonGroup>
           ) : null}

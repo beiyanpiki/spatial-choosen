@@ -101,15 +101,15 @@ const normalizeDegrees = (value: number) => {
 };
 
 const DEFAULT_CANVAS_STAGE_LABELS: CanvasStageLabels = {
-  badgeReady: 'Preview ready',
-  badgeWaiting: 'Awaiting eosin image',
-  description: 'Directly manipulate the view and chip footprint with minimal framing around the stage.',
-  emptyDescription: 'Upload the eosin source to preview and localize the chip footprint here.',
-  emptyTitle: 'No eosin image loaded',
-  heading: 'Localization canvas',
-  overlayAriaLabel: 'Chip localization overlay',
+  badgeReady: 'Eosin reference ready',
+  badgeWaiting: 'Awaiting eosin reference',
+  description: 'Orient the eosin reference image and place the capture area over the chip region.',
+  emptyDescription: 'Upload the eosin reference image in Source images before placing the capture area.',
+  emptyTitle: 'No eosin reference loaded',
+  heading: 'Chip localization canvas',
+  overlayAriaLabel: 'Chip capture area overlay',
   resetAriaLabel: 'Reset localization transform',
-  savedHint: 'Saved chip coordinates stay axis-aligned in image space.',
+  savedHint: 'Saved chip coordinates remain normalized in the eosin source image.',
 };
 
 const buildTestId = (prefix: string, suffix: string) => `${prefix}-${suffix}`;

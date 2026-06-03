@@ -1283,7 +1283,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 			const preview = screen.getByTestId('he-focus-localize-reference-preview');
 			expect(preview).toBeInTheDocument();
 			expect(screen.getByTestId('he-focus-localize-reference-card')).toHaveTextContent(
-				'Localize inner-chip reference',
+				'Eosin chip-localized reference',
 			);
 			expect(preview.getAttribute('src')).toContain(
 				'data:image/png;base64,regenerated-he-focus-preview',
@@ -1561,7 +1561,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		expect(invalidateOnHeFocusChangeSpy).not.toHaveBeenCalled();
 	});
 
-	it('shows preparing and missing-prerequisite Localize reference fallback states in HEFocus', async () => {
+	it('shows preparing and missing-prerequisite eosin reference fallback states in HEFocus', async () => {
 		const preparingProject = createBaseProject();
 		preparingProject.currentStep = 'heFocus';
 
@@ -1570,7 +1570,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		);
 
 		expect(screen.getByTestId('he-focus-localize-reference-card')).toHaveTextContent(
-			'Preparing the Localize inner-chip reference preview.',
+			'Preparing the eosin chip-localized reference preview.',
 		);
 
 		await waitFor(() => {
@@ -1586,7 +1586,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		render(<WorkspaceHarness initialProject={missingLocalizationProject} />);
 
 		expect(screen.getByTestId('he-focus-localize-reference-card')).toHaveTextContent(
-			'Complete Localize with a committed inner-chip box to enable this comparison reference.',
+			'Complete chip localization with a committed capture area to enable this comparison reference.',
 		);
 		expect(screen.queryByTestId('he-focus-localize-reference-preview')).not.toBeInTheDocument();
 	});

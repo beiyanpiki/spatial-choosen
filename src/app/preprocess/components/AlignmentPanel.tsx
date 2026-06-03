@@ -114,7 +114,7 @@ type PanSession = {
 type HelpOverlayState = "expanded" | "collapsed" | "hidden";
 
 const HELP_COPY = {
-	expanded: "Drag to pan. Wheel to zoom. Add or adjust landmarks in order.",
+	expanded: "Drag to pan. Wheel to zoom. Add or adjust landmark pairs in order.",
 	collapsed: "Pan, zoom, and place landmarks.",
 	reopen: "Show canvas help",
 	minimize: "Minimize canvas help",
@@ -922,23 +922,23 @@ export function AlignmentPanel({
 
 	const workflowInstruction = useMemo(() => {
 		if (alignment.solveAccepted) {
-			return "Alignment accepted. Continue to crop QC or keep adjusting landmarks if something looks off.";
+			return "Registration accepted. Continue to crop QC or adjust landmarks if the overlay looks off.";
 		}
 		if (interactionMode === "awaiting-source") {
-			return "Use wheel zoom and drag pan on the eosin canvas, then click it to place the reference landmark for a new pair.";
+			return "Use wheel zoom and drag pan on the eosin reference, then click to place the next reference landmark.";
 		}
 		if (interactionMode === "awaiting-target") {
-			return "Pan or zoom as needed, then click the H&E canvas to complete the landmark pair.";
+			return "Pan or zoom the H&E image as needed, then click the matching landmark to complete the pair.";
 		}
 		if (interactionMode === "reposition-source") {
-			return "Use the eosin canvas to choose the new reference landmark position for the selected pair.";
+			return "Click the eosin reference to move the selected pair's reference landmark.";
 		}
 		if (interactionMode === "reposition-target") {
-			return "Use the H&E canvas to choose the new moving-image landmark position for the selected pair.";
+			return "Click the H&E image to move the selected pair's matching landmark.";
 		}
 		return selectedPair
-			? "Selected pair ready. Reposition either point, delete the pair, or continue solving while using pan and zoom directly on the canvases."
-			: "Start on the eosin canvas, using wheel zoom and drag pan as needed before placing the next reference point.";
+			? "Selected pair ready. Move either landmark, delete the pair, or solve registration."
+			: "Start on the eosin reference, then place the matching landmark on the H&E image.";
 	}, [alignment.solveAccepted, interactionMode, selectedPair]);
 
 	const sourcePoints = useMemo<EditorPoint[]>(
@@ -1093,14 +1093,14 @@ export function AlignmentPanel({
 				bg="orange.50"
 			>
 				<Stack spacing={2}>
-					<Heading size="sm">Alignment needs both source images</Heading>
+					<Heading size="sm">Registration needs both source images</Heading>
 					<Text color="orange.800" fontSize="sm">
 						Eosin and H&E images must be present before landmark pairing and
-						alignment solving can run.
+						registration solving can run.
 					</Text>
 					<Text color="orange.700" fontSize="sm">
-						Return to Source Assets to upload or replace the missing image, then
-						re-check localization before continuing.
+						Return to Source images to upload or replace the missing image, then
+						recheck chip localization before continuing.
 					</Text>
 				</Stack>
 			</Box>
@@ -1140,7 +1140,7 @@ export function AlignmentPanel({
 								letterSpacing="0.12em"
 								color="gray.500"
 							>
-								Guided alignment workflow
+								Guided registration workflow
 							</Text>
 							<Badge
 								colorScheme={
@@ -1354,7 +1354,7 @@ export function AlignmentPanel({
 						isDisabled={!canSolve}
 						data-testid="alignment-run-solve"
 					>
-						Solve alignment
+						Solve registration
 					</Button>
 				</Flex>
 			</Stack>

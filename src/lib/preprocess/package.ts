@@ -1063,7 +1063,7 @@ const assertPreprocessProjectShape = (
 
 export async function serializePreprocessProject(project: PreprocessProject): Promise<Blob> {
   if (!isBrowser()) {
-    throw new Error("Preprocess project export is available in-browser only");
+    throw new Error("Preprocessing project export is available in-browser only");
   }
 
   const payload: PreprocessPackageV4 = {
@@ -1078,7 +1078,7 @@ export async function serializePreprocessProject(project: PreprocessProject): Pr
 
 export async function deserializePreprocessProject(file: File | Blob): Promise<PreprocessProject> {
   if (!isBrowser()) {
-    throw new Error("Preprocess project import is available in-browser only");
+    throw new Error("Preprocessing project import is available in-browser only");
   }
 
   const text = await file.text();
@@ -1117,7 +1117,7 @@ const toZipLoadInput = async (file: File | Blob) => (
 
 export async function deserializePreprocessImport(file: File | Blob): Promise<PreprocessProject> {
   if (!isBrowser()) {
-    throw new Error("Preprocess project import is available in-browser only");
+    throw new Error("Preprocessing project import is available in-browser only");
   }
 
   const fileName = typeof File !== 'undefined' && file instanceof File
