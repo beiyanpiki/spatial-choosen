@@ -1196,6 +1196,8 @@ describe('preprocess storage tissue metadata', () => {
 
   it('keeps newer canonical tissue payload when an older timestamp save arrives later', async () => {
     const project = createProject();
+    project.name = 'Fresh metadata';
+    project.updatedAt = '2026-04-15T00:00:00.000Z';
     project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
     project.tissueSelection.matrix = {
       rows: 64,
@@ -1205,9 +1207,12 @@ describe('preprocess storage tissue metadata', () => {
     project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
     project.tissueSelection.selectedSpotIds = ['spot-b'];
 
+    upsertPreprocessProjectMetadata(project);
     await upsertPreprocessProject(project, { mode: 'tissue' });
 
     const olderProject = createProject();
+    olderProject.name = 'Stale metadata';
+    olderProject.updatedAt = '2026-04-14T00:00:00.000Z';
     olderProject.tissueSelection.updatedAt = '2026-04-14T00:00:00.000Z';
     olderProject.tissueSelection.matrix = {
       rows: 64,
@@ -1221,6 +1226,8 @@ describe('preprocess storage tissue metadata', () => {
 
     const hydrated = await getPreprocessProject(project.id);
 
+    expect(hydrated?.name).toBe('Fresh metadata');
+    expect(hydrated?.updatedAt).toBe('2026-04-15T00:00:00.000Z');
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
     expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
     expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);

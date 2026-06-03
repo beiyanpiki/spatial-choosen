@@ -7,7 +7,7 @@ import {
 } from '@/app/preprocess/projectState';
 import type { PreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
-import { deserializePreprocessImport, deserializePreprocessProject, PACKAGE_VERSION } from './package';
+import { deserializePreprocessImport, deserializePreprocessProject, PACKAGE_VERSION } from '@/lib/preprocess/package';
 
 const createProjectedSpot = (
   id: string,
@@ -306,6 +306,7 @@ describe('preprocess package matrix-first validation', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 

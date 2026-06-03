@@ -7,7 +7,7 @@ import { clampNormalizedSquareRect, resizeChipBounds, translateChipBounds } from
 import {
 	invertDisplayRectPointToSource,
 	projectSourcePointToDisplayRect,
-} from '../../../lib/preprocess/imageTransforms';
+} from '@/lib/preprocess/imageTransforms';
 import { theme } from '../../../theme';
 import type {
 	LocalizationImageTransform,

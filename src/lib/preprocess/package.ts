@@ -6,15 +6,15 @@ import type {
   PreprocessSourceImage,
   PreprocessStepId,
   TissueActivationMatrix,
-} from '../../types/preprocess';
+} from '@/types/preprocess';
 import {
   PREPROCESS_DB_NAME,
   PREPROCESS_DERIVED_IMAGE_STORE,
   PREPROCESS_NUMERIC_DEFAULTS,
   PREPROCESS_STORAGE_KEY,
-} from './constants';
+} from '@/lib/preprocess/constants';
 import { migratePreprocessProject } from './migrations';
-import { createWorkingProxyBlobFromSource, loadImageElement } from './sourceImage';
+import { createWorkingProxyBlobFromSource, loadImageElement } from '@/lib/preprocess/sourceImage';
 import { validateTissueActivationMatrix } from './tissueMatrix';
 import { resolveTissueSelectionSupport } from './tissueSupport';
 
@@ -364,7 +364,7 @@ const getWorkingDimensions = (sourceWidth: number, sourceHeight: number) => {
 const hydratePackagedSourceBlob = async (image: PreprocessSourceImage, blob: Blob): Promise<PreprocessSourceImage> => {
   const sourceBlob = blob.type || !image.mimeType
     ? blob
-    : new Blob([await blob.arrayBuffer()], { type: image.mimeType });
+    : new Blob([blob], { type: image.mimeType });
   const objectUrl = URL.createObjectURL(sourceBlob);
   const hydratedImage: PreprocessSourceImage = {
     ...image,
@@ -1109,10 +1109,16 @@ function deserializePreprocessProjectText(text: string): PreprocessProject {
   );
 }
 
+const toZipLoadInput = async (file: File | Blob) => (
+  typeof FileReader !== 'undefined'
+    ? file
+    : await file.arrayBuffer()
+);
+
 export async function deserializePreprocessImport(file: File | Blob): Promise<PreprocessProject> {
   const fileName = file instanceof File ? file.name.toLowerCase() : '';
   if (fileName.endsWith('.zip')) {
-    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const zip = await JSZip.loadAsync(await toZipLoadInput(file));
     const projectEntry = zip.file('project.json');
     if (!projectEntry) {
       throw new Error('ZIP does not contain project.json');

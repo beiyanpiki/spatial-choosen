@@ -16,7 +16,10 @@ import {
   clampNormalizedSquareRect,
   translateChipBounds,
 } from '@/lib/preprocess/localization';
-import { projectSourcePointToDisplayRect } from '@/lib/preprocess/imageTransforms';
+import {
+	getOrientedChipBoundsPixelRect,
+	projectSourcePointToDisplayRect,
+} from '@/lib/preprocess/imageTransforms';
 
 const mockRunCropQc = vi.fn();
 const mockLoadOpenCv = vi.fn(async () => ({ cv: {} }));
@@ -66,16 +69,6 @@ type MockCanvasContextRecord = {
   rotate: ReturnType<typeof vi.fn>;
   scale: ReturnType<typeof vi.fn>;
   setTransform: ReturnType<typeof vi.fn>;
-};
-
-type PixelSize = {
-	width: number;
-	height: number;
-};
-
-type PixelPoint = {
-	x: number;
-	y: number;
 };
 
 const getOrCreateCanvasContextRecord = (canvas: HTMLCanvasElement) => {
@@ -528,63 +521,6 @@ const sourcePointToWorkspaceScreen = (
 	const projected = projectSourcePointToDisplayRect(point, imageTransform, displayTransform);
 
 	return [projected.x, projected.y] as [number, number];
-};
-
-const transformImagePixelPoint = (
-	point: PixelPoint,
-	transform: LocalizationImageTransform,
-	sourceSize: PixelSize,
-	outputSize: PixelSize,
-): PixelPoint => {
-	const sourceCenter = {
-		x: sourceSize.width / 2,
-		y: sourceSize.height / 2,
-	};
-	const outputCenter = {
-		x: outputSize.width / 2,
-		y: outputSize.height / 2,
-	};
-	const radians = (transform.rotationDegrees * Math.PI) / 180;
-	const cos = Math.cos(radians);
-	const sin = Math.sin(radians);
-	const sourceDeltaX = point.x - sourceCenter.x;
-	const sourceDeltaY = point.y - sourceCenter.y;
-	const rotatedDeltaX = sourceDeltaX * cos - sourceDeltaY * sin;
-	const rotatedDeltaY = sourceDeltaX * sin + sourceDeltaY * cos;
-
-	return {
-		x: outputCenter.x + rotatedDeltaX * (transform.flipHorizontal ? -1 : 1),
-		y: outputCenter.y + rotatedDeltaY * (transform.flipVertical ? -1 : 1),
-	};
-};
-
-const getOrientedPixelRect = (
-	rect: PreprocessRect,
-	transform: LocalizationImageTransform,
-	sourceSize: PixelSize,
-	outputSize: PixelSize,
-) => {
-	const sourceX = rect.x * sourceSize.width;
-	const sourceY = rect.y * sourceSize.height;
-	const sourceWidth = rect.width * sourceSize.width;
-	const sourceHeight = rect.height * sourceSize.height;
-	const points = [
-		{ x: sourceX, y: sourceY },
-		{ x: sourceX + sourceWidth, y: sourceY },
-		{ x: sourceX + sourceWidth, y: sourceY + sourceHeight },
-		{ x: sourceX, y: sourceY + sourceHeight },
-	].map((point) => transformImagePixelPoint(point, transform, sourceSize, outputSize));
-	const minX = Math.min(...points.map((point) => point.x));
-	const minY = Math.min(...points.map((point) => point.y));
-	const maxX = Math.max(...points.map((point) => point.x));
-	const maxY = Math.max(...points.map((point) => point.y));
-
-	return {
-		x: Math.round(minX),
-		y: Math.round(minY),
-		width: Math.max(1, Math.round(maxX - minX)),
-		height: Math.max(1, Math.round(maxY - minY)),
-	};
 };
 
 const getRectSourceCorners = (rect: PreprocessRect) => [
@@ -1194,7 +1130,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 				expect(screen.getByTestId('he-focus-localize-reference-preview')).toBeInTheDocument();
 			});
 
-				const requestedBounds = getOrientedPixelRect(
+				const requestedBounds = getOrientedChipBoundsPixelRect(
 					expectedCommittedBounds,
 					latestProject.localization.imageTransform,
 					ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE,

@@ -10,7 +10,7 @@ import type {
   SourceAssetsSlice,
   TissueActivationMatrix,
   TissueSelectionSlice,
-} from '../../types/preprocess';
+} from '@/types/preprocess';
 import { loadChipConfigData } from './chipConfigs';
 import {
   PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
@@ -24,9 +24,9 @@ import {
   PREPROCESS_THUMBNAIL_STORE,
   PREPROCESS_TISSUE_SELECTION_STORE,
   PREPROCESS_WORKING_IMAGE_STORE,
-} from './constants';
+} from '@/lib/preprocess/constants';
 import { migratePreprocessProject } from './migrations';
-import { createThumbnailBlob, createWorkingProxyBlobFromSource, loadImageElement } from './sourceImage';
+import { createThumbnailBlob, createWorkingProxyBlobFromSource, loadImageElement } from '@/lib/preprocess/sourceImage';
 import { matrixFromSelectedSpotIds, validateTissueActivationMatrix } from './tissueMatrix';
 
 declare global {
@@ -1266,16 +1266,16 @@ export async function upsertPreprocessProject(
     throw new DOMException('Synthetic preprocess quota failure', 'QuotaExceededError');
   }
 
-  const migratedProject = upsertPreprocessProjectMetadata(project);
-
   const mode = options?.mode ?? 'full';
 
-  if (mode === 'metadata') {
+  if (mode === 'tissue') {
+    await syncTissueSelectionStore(project.id, project.tissueSelection);
     return;
   }
 
-  if (mode === 'tissue') {
-    await syncTissueSelectionStore(migratedProject.id, project.tissueSelection);
+  const migratedProject = upsertPreprocessProjectMetadata(project);
+
+  if (mode === 'metadata') {
     return;
   }
 

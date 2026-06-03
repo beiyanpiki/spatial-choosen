@@ -2,7 +2,7 @@
 
 import * as UTIF from 'utif';
 import type { PreprocessImageKind, PreprocessSourceImage } from '@/types/preprocess';
-import { PREPROCESS_NUMERIC_DEFAULTS, PREPROCESS_WORKING_PROXY_MAX_BYTES } from './constants';
+import { PREPROCESS_NUMERIC_DEFAULTS, PREPROCESS_WORKING_PROXY_MAX_BYTES } from '@/lib/preprocess/constants';
 import { checkSourceImageFileSize } from './safety';
 
 type DecodedSourceImage = {
