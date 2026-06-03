@@ -28,8 +28,8 @@ export class CropQcBlockedError extends Error {
 
   constructor(code: CropQcBlockedReason, message?: string) {
     super(message ?? (code === 'missing-accepted-transform'
-      ? 'Crop/QC is blocked until an accepted alignment transform is available.'
-      : 'Crop/QC is blocked until canonical accepted chip geometry is available.'));
+      ? 'Crop QC is blocked until an accepted registration transform is available.'
+      : 'Crop QC is blocked until accepted chip geometry is available.'));
     this.name = 'CropQcBlockedError';
     this.code = code;
   }

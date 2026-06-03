@@ -11,44 +11,44 @@ type StepItem = {
 export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
   {
     id: 'sourceAssets',
-    label: 'Source',
-    description: 'Upload Eosin + H&E inputs',
+    label: 'Source images',
+    description: 'Upload eosin and H&E images',
     testId: 'preprocess-step-source-assets',
   },
   {
     id: 'localization',
-    label: 'Localize',
-    description: 'Place the chip footprint',
+    label: 'Chip localization',
+    description: 'Place the capture area',
     testId: 'preprocess-step-localize',
   },
   {
     id: 'heFocus',
-    label: 'HE Focus',
-    description: 'Focus the working H&E area',
+    label: 'H&E focus',
+    description: 'Crop the H&E registration region',
     testId: 'preprocess-step-he-focus',
   },
   {
     id: 'alignment',
-    label: 'Align',
-    description: 'Register both source images',
+    label: 'Registration',
+    description: 'Pair landmarks and solve transform',
     testId: 'preprocess-step-align',
   },
   {
     id: 'cropQc',
-    label: 'Crop',
-    description: 'Inspect crop + QC bounds',
+    label: 'Crop QC',
+    description: 'Review registered crop outputs',
     testId: 'preprocess-step-crop',
   },
   {
     id: 'tissueSelection',
-    label: 'Tissue',
-    description: 'Select capture regions',
+    label: 'Tissue spots',
+    description: 'Select tissue-covered spots',
     testId: 'preprocess-step-tissue',
   },
   {
     id: 'exportState',
-    label: 'Export',
-    description: 'Package outputs for handoff',
+    label: 'Export package',
+    description: 'Download processed outputs',
     testId: 'preprocess-step-export',
   },
 ] as const;
@@ -135,11 +135,11 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
         py={4}
       >
         <Stack spacing={1}>
-          <Heading size='sm'>Workflow</Heading>
-          <Text fontSize='sm' color='gray.500'>Move step-by-step and keep downstream stages valid.</Text>
+          <Heading size='sm'>Preprocessing Workflow</Heading>
+          <Text fontSize='sm' color='gray.500'>Complete each stage in order to keep derived outputs valid.</Text>
         </Stack>
       </Box>
-      {PREPROCESS_STEP_ITEMS.map((step) => {
+      {PREPROCESS_STEP_ITEMS.map((step, index) => {
         const stepState = stepStateFor(project, step.id);
         const isActive = step.id === visibleCurrentStep;
         const enabled = isStepEnabled(project, step.id);
@@ -173,7 +173,7 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
           >
             <Stack spacing={1} textAlign='left' flex='1'>
               <Text fontSize='xs' fontWeight='semibold' letterSpacing='0.12em' textTransform='uppercase' color={isActive ? 'whiteAlpha.800' : 'gray.400'}>
-                {step.id}
+                Step {index + 1}
               </Text>
               <Text fontWeight='semibold'>{step.label}</Text>
               <Text fontSize='xs' whiteSpace='normal' color={isActive ? 'whiteAlpha.900' : 'gray.500'}>

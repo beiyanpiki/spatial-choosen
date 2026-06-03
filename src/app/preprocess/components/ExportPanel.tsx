@@ -23,20 +23,20 @@ export function ExportPanel({
 }: ExportPanelProps) {
   return (
     <Stack spacing={4}>
-      <Text color='gray.600'>Package processed outputs for downstream workflows.</Text>
+      <Text color='gray.600'>Download the registered crop, tissue spot matrix, and metadata needed for downstream analysis.</Text>
       <Checkbox
         isChecked={includeProject}
         onChange={(event) => onToggleIncludeProject(event.target.checked)}
         data-testid='export-include-project'
       >
-        Include recovery project
+        Include project recovery file
       </Checkbox>
       <Checkbox
         isChecked={includeAlignedImage}
         onChange={(event) => onToggleIncludeAlignedImage(event.target.checked)}
         data-testid='export-include-aligned-image'
       >
-        Include aligned HE image
+        Include registered H&E image
       </Checkbox>
       <Button
         colorScheme='brand'
@@ -45,7 +45,7 @@ export function ExportPanel({
         isDisabled={!canExport}
         data-testid='export-download-zip'
       >
-        Download preprocess ZIP
+        Download preprocessing package
       </Button>
     </Stack>
   );

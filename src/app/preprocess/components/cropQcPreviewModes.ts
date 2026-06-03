@@ -8,14 +8,14 @@ export type CropQcPreviewMode = {
 
 const CROP_QC_PREVIEW_MODES: Record<CropQcPreviewModeKey, CropQcPreviewMode> = {
   tissueAlign: {
-    title: 'Tissue align',
-    description: 'Checkerboard alignment preview of the eosin crop and warped HE crop.',
-    emptyState: 'Checkerboard alignment preview appears after crop generation.',
+    title: 'Checkerboard registration QC',
+    description: 'Alternating eosin reference and registered H&E tiles for checking local alignment.',
+    emptyState: 'Checkerboard QC appears after registered crop generation.',
   },
   featureMatches: {
-    title: 'Feature matches',
-    description: 'Side-by-side landmark montage connecting the eosin crop to the warped HE crop. This is not the checkerboard alignment artifact.',
-    emptyState: 'Feature-match landmark montage appears after crop generation.',
+    title: 'Landmark match QC',
+    description: 'Side-by-side landmark montage linking the eosin reference crop to the registered H&E crop.',
+    emptyState: 'Landmark match QC appears after registered crop generation.',
   },
 };
 

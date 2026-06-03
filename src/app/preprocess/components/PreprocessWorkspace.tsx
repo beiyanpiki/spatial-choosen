@@ -370,36 +370,36 @@ const placeholderCopyByStep: Record<
 	{ title: string; body: string }
 > = {
 	sourceAssets: {
-		title: "Source asset intake",
-		body: "Load and replace the local-only Eosin and H&E source images here before localization and alignment. Replacing either intake image keeps browser storage intact while invalidating downstream derived steps.",
+		title: "Source image intake",
+		body: "Upload the eosin reference image and the matching H&E image for this section. Replacing either source image keeps the project local and refreshes downstream registration, crop QC, spot projection, and tissue selection outputs.",
 	},
 	localization: {
 		title: "Chip localization",
-		body: "Rotate or flip the displayed eosin image, drag the chip box, and keep the saved rectangle normalized and axis-aligned in image coordinates.",
+		body: "Orient the eosin reference image and place the capture-area box over the chip region. Saved coordinates remain normalized in source-image space.",
 	},
 	heFocus: {
 		title: "H&E focus",
-		body: "Adjust a square H&E working region between localization and alignment. Saved focus bounds stay in original H&E image coordinates while the Localize inner-chip pane remains a static reference for comparison.",
+		body: "Define the H&E region used for registration. Match the chip-localized tissue area from the eosin reference while preserving the original H&E coordinate system.",
 	},
 	alignment: {
-		title: "Image alignment",
-		body: "Create paired eosin/H&E landmarks, verify coverage, and solve deterministic affine alignment with OpenCV quality gates.",
+		title: "Image registration",
+		body: "Create paired eosin and H&E landmarks, verify coverage, and solve the affine registration with OpenCV quality gates.",
 	},
 	cropQc: {
-		title: "Crop + QC shell",
-		body: "Crop review and QC warnings will appear here once those interactions are implemented.",
+		title: "Crop QC",
+		body: "Generate the registered crop, inspect checkerboard and landmark-match QC, then accept the crop before spot projection and tissue selection.",
 	},
 	chipConfig: {
-		title: "Chip configuration shell",
-		body: "Projected spot previews and chip settings are reserved for a later task. This placeholder keeps navigation and autosave working now.",
+		title: "Chip projection",
+		body: "Choose the capture pitch and project the chip spot grid onto the accepted eosin crop.",
 	},
 	tissueSelection: {
-		title: "Tissue selection shell",
-		body: "Manual tissue-region tools are intentionally deferred. The workspace still tracks step changes and saved state.",
+		title: "Tissue spot selection",
+		body: "Auto-select tissue-covered capture spots from the eosin crop, then manually refine the spot matrix.",
 	},
 	exportState: {
-		title: "Export shell",
-		body: "Export packaging will be added later. For now this step confirms route wiring, navigation, and autosave status feedback.",
+		title: "Export package",
+		body: "Download the registered crop outputs, tissue spot matrix, and optional recovery file for downstream analysis.",
 	},
 };
 
@@ -443,7 +443,7 @@ const resolveTissueAutoDetectionReadiness = (
 		return {
 			ready: false,
 			reason:
-				"Crop/QC output is stale or incomplete. Re-run Crop/QC and accept it before tissue auto detection.",
+				"Crop QC output is stale or incomplete. Regenerate and accept crop QC before tissue auto-selection.",
 		};
 	}
 
@@ -452,7 +452,7 @@ const resolveTissueAutoDetectionReadiness = (
 		return {
 			ready: false,
 			reason:
-				"Crop/QC assets are missing. Re-run Crop/QC before tissue auto detection.",
+				"Crop QC assets are missing. Regenerate crop QC before tissue auto-selection.",
 		};
 	}
 
@@ -460,7 +460,7 @@ const resolveTissueAutoDetectionReadiness = (
 		return {
 			ready: false,
 			reason:
-				"Chip projection is stale or incomplete. Reapply chip configuration before tissue auto detection.",
+				"Spot projection is stale or incomplete. Reapply the capture pitch before tissue auto-selection.",
 		};
 	}
 
@@ -476,7 +476,7 @@ const resolveTissueAutoDetectionReadiness = (
 		return {
 			ready: false,
 			reason:
-				"Projected spots are missing. Reapply chip configuration before tissue auto detection.",
+				"Projected capture spots are missing. Reapply the capture pitch before tissue auto-selection.",
 		};
 	}
 
@@ -587,12 +587,14 @@ function SourceAssetUploader({
 	label,
 	description,
 	buttonLabel,
+	emptyText,
 	image,
 	onUpload,
 }: {
 	label: string;
 	description: string;
 	buttonLabel: string;
+	emptyText: string;
 	image: PreprocessProject["sourceAssets"]["images"]["eosin"] | null;
 	onUpload: (fileList: FileList | null) => void;
 }) {
@@ -624,7 +626,7 @@ function SourceAssetUploader({
 				<Text fontSize="sm" color="gray.600">
 					{image
 						? `${image.fileName} • ${image.width ?? "?"}×${image.height ?? "?"} px`
-						: `No ${label} uploaded yet.`}
+						: emptyText}
 				</Text>
 				<Box>
 					<Button
@@ -1001,9 +1003,9 @@ export function PreprocessWorkspace({
 				});
 
 				toast({
-					title: "Eosin image loaded",
+					title: "Eosin reference image loaded",
 					description:
-						"The image is ready for localization and downstream preprocess steps were invalidated.",
+						"The image is ready for chip localization. Downstream preprocessing outputs were marked stale.",
 					status: "success",
 				});
 			} catch (error) {
@@ -1053,7 +1055,7 @@ export function PreprocessWorkspace({
 				toast({
 					title: "H&E image loaded",
 					description:
-						"Landmark alignment can now target this image and downstream preprocess steps were invalidated.",
+						"Landmark registration can now use this image. Downstream preprocessing outputs were marked stale.",
 					status: "success",
 				});
 			} catch (error) {
@@ -1335,7 +1337,7 @@ export function PreprocessWorkspace({
 			toast({
 				title: "Crop prerequisites missing",
 				description:
-					"Alignment and localization must be completed before crop/QC.",
+					"Image registration and chip localization must be complete before crop QC.",
 				status: "warning",
 			});
 			return;
@@ -1400,16 +1402,16 @@ export function PreprocessWorkspace({
 				(current) => ({
 					...current,
 					status: "error",
-					error: error instanceof Error ? error.message : "Crop/QC failed",
+					error: error instanceof Error ? error.message : "Crop QC failed",
 				}),
 				{ invalidateDownstream: false },
 			);
 			toast({
-				title: "Crop/QC failed",
+				title: "Crop QC failed",
 				description:
 					error instanceof Error
 						? error.message
-						: "Unable to generate crop previews.",
+						: "Unable to generate registered crop previews.",
 				status: "error",
 			});
 		}
@@ -1801,13 +1803,13 @@ export function PreprocessWorkspace({
 		? placeholderCopyByStep[project.currentStep]
 		: placeholderCopyByStep.sourceAssets;
 	const tissueDetectionStatusMessage = isDetectingTissue
-		? "Auto detection is running. Canvas editing is temporarily locked."
+		? "Tissue auto-selection is running. Manual edits are temporarily locked."
 		: tissueSupport.supportState !== "unsupported" &&
 				!tissueAutoDetectionReadiness.ready
 			? tissueAutoDetectionReadiness.reason
 			: project?.tissueSelection.status === "complete"
-				? "Auto detection ready. Activate or deactivate spots directly on the matrix-backed canvas."
-				: "Choose a threshold mode and run auto detection to refresh the tissue matrix.";
+				? "Tissue spot matrix is ready. Mark spots as tissue or background directly on the canvas."
+				: "Choose a signal mode and auto-select tissue spots to refresh the tissue matrix.";
 	const tissueProjectedSpots = useMemo(
 		() => project?.chipConfig.projectedSpots ?? [],
 		[project?.chipConfig.projectedSpots],
@@ -1839,7 +1841,7 @@ export function PreprocessWorkspace({
 	const commitProjectNameDraft = useCallback(() => {
 		const nextName = projectNameDraft.trim();
 		onProjectNameChange(
-			nextName || project?.name || "Untitled preprocess project",
+			nextName || project?.name || "Untitled preprocessing project",
 		);
 		setIsEditingProjectName(false);
 	}, [onProjectNameChange, project?.name, projectNameDraft]);
@@ -1860,7 +1862,7 @@ export function PreprocessWorkspace({
 				gap={4}
 			>
 				<Spinner size="xl" color="brand.500" thickness="4px" />
-				<Heading size="md">Loading preprocess project…</Heading>
+				<Heading size="md">Loading preprocessing project…</Heading>
 			</Flex>
 		);
 	}
@@ -1882,7 +1884,7 @@ export function PreprocessWorkspace({
 						<Badge colorScheme="red" alignSelf="flex-start">
 							Unavailable
 						</Badge>
-						<Heading size="md">Unable to open preprocess workspace</Heading>
+						<Heading size="md">Unable to open preprocessing workspace</Heading>
 						<Text color="gray.600">
 							{loadError ?? "Project not found in this browser."}
 						</Text>
@@ -1891,7 +1893,7 @@ export function PreprocessWorkspace({
 							colorScheme="brand"
 							alignSelf="flex-start"
 						>
-							Back to preprocess projects
+							Back to preprocessing projects
 						</Button>
 					</Stack>
 				</Box>
@@ -1926,7 +1928,7 @@ export function PreprocessWorkspace({
 								px={0}
 								onClick={onBackToLanding}
 							>
-								← Back to preprocess projects
+								← Back to preprocessing projects
 							</Button>
 							{isEditingProjectName ? (
 								<Input
@@ -1999,12 +2001,13 @@ export function PreprocessWorkspace({
 									<Flex direction={{ base: "column", xl: "row" }} gap={5}>
 										<SourceAssetUploader
 											label="Eosin source image"
-											description="This intake image drives chip localization and remains the localization target by default when replaced."
+											description="Reference image for chip localization, crop geometry, and tissue signal detection."
 											buttonLabel={
 												project.sourceAssets.images.eosin
-													? "Replace eosin image"
-													: "Upload eosin image"
+													? "Replace eosin reference"
+													: "Upload eosin reference"
 											}
+											emptyText="No eosin reference image uploaded yet."
 											image={project.sourceAssets.images.eosin}
 											onUpload={(fileList) => {
 												void handleUploadEosin(fileList);
@@ -2012,12 +2015,13 @@ export function PreprocessWorkspace({
 										/>
 										<SourceAssetUploader
 											label="H&E source image"
-											description="This intake image feeds landmark alignment while preserving the existing browser-only source asset storage."
+											description="Moving image for H&E focus, landmark registration, and registered crop generation."
 											buttonLabel={
 												project.sourceAssets.images.he
 													? "Replace H&E image"
 													: "Upload H&E image"
 											}
+											emptyText="No H&E source image uploaded yet."
 											image={project.sourceAssets.images.he}
 											onUpload={(fileList) => {
 												void handleUploadHe(fileList);
@@ -2139,15 +2143,15 @@ export function PreprocessWorkspace({
 												badgeReady: "H&E preview ready",
 												badgeWaiting: "Awaiting H&E image",
 												description:
-													"Adjust the square H&E working region and orientation before alignment.",
+													"Adjust the square H&E registration region and orientation before landmark pairing.",
 												emptyDescription:
-													"Upload the H&E source image in Source before defining the focus region.",
+													"Upload the H&E source image in Source images before defining the registration region.",
 												emptyTitle: "No H&E image loaded",
 												heading: "H&E focus canvas",
-												overlayAriaLabel: "H&E focus overlay",
+												overlayAriaLabel: "H&E registration region overlay",
 												resetAriaLabel: "Reset H&E focus transform",
 												savedHint:
-													"Saved focus bounds stay square and normalized in original H&E image coordinates.",
+													"Saved H&E focus bounds stay square and normalized in original H&E image coordinates.",
 											}}
 											onChipBoundsCancel={() => {
 												setHeFocusDraftChipBounds(null);
@@ -2263,21 +2267,21 @@ export function PreprocessWorkspace({
 												<Stack spacing={1}>
 													<HStack spacing={2} align="center">
 														<Heading size="sm">
-															Localize inner-chip reference
+															Eosin chip-localized reference
 														</Heading>
 														<Badge colorScheme="blue" variant="subtle">
-															Static reference
+															Reference crop
 														</Badge>
 													</HStack>
 													<Text fontSize="sm" color="gray.600">
 														Compare your live H&amp;E drag against the committed
-														Localize inner-chip crop.
+														eosin chip-localized crop.
 													</Text>
 												</Stack>
 												{heFocusComparisonImageDataUrl ? (
 													<Image
 														src={heFocusComparisonImageDataUrl}
-														alt="Localize inner-chip reference preview"
+														alt="Eosin chip-localized reference preview"
 														data-testid="he-focus-localize-reference-preview"
 														borderRadius="lg"
 														border="1px solid"
@@ -2303,7 +2307,7 @@ export function PreprocessWorkspace({
 															color="gray.600"
 															textAlign="center"
 														>
-															Preparing the Localize inner-chip reference
+															Preparing the eosin chip-localized reference
 															preview.
 														</Text>
 													</Flex>
@@ -2323,8 +2327,8 @@ export function PreprocessWorkspace({
 															color="gray.600"
 															textAlign="center"
 														>
-															Complete Localize with a committed inner-chip box
-															to enable this comparison reference.
+															Complete chip localization with a committed capture
+															area to enable this comparison reference.
 														</Text>
 													</Flex>
 												)}
@@ -2485,7 +2489,7 @@ export function PreprocessWorkspace({
 												<CardBody p={4}>
 													<Stack spacing={3}>
 														<Text fontSize="sm" fontWeight="semibold">
-															Chip size
+															Capture chip
 														</Text>
 														<FormControl isDisabled={isChipSelectorDisabled}>
 															<FormLabel
@@ -2493,11 +2497,11 @@ export function PreprocessWorkspace({
 																color="gray.500"
 																mb={1.5}
 															>
-																Capture pitch
+																Spot pitch
 															</FormLabel>
 															<Select
 																value={project.chipConfig.chipType ?? ""}
-																placeholder="Select chip size"
+																placeholder="Select capture pitch"
 																data-testid="tissue-chip-size-select"
 																onChange={(event) => {
 																	const chipId = event.target.value;
@@ -2672,9 +2676,9 @@ export function PreprocessWorkspace({
 															</Select>
 														</FormControl>
 														<Text fontSize="xs" color="gray.500">
-															Changing chip size clears previous tissue edits,
-															regenerates projected spots, and requires you to
-															rerun auto detection manually.
+															Changing the capture pitch clears previous tissue
+															edits, regenerates projected spots, and requires
+															tissue auto-selection to run again.
 														</Text>
 														{(chipConfigError ?? project.chipConfig.error) ? (
 															<Text fontSize="sm" color="red.600">
@@ -2870,7 +2874,7 @@ export function PreprocessWorkspace({
 															color="gray.600"
 															data-testid="tissue-selected-count"
 														>
-															Selected spots: {tissueSelectedSpotIds.length}
+															Tissue spots: {tissueSelectedSpotIds.length}
 														</Text>
 														{project.tissueSelection.warning ? (
 															<Text
@@ -2913,10 +2917,10 @@ export function PreprocessWorkspace({
 													fontWeight="semibold"
 													color="gray.700"
 												>
-													Detecting tissue spots…
+													Selecting tissue spots…
 												</Text>
 												<Text fontSize="xs" color="gray.500">
-													Canvas editing is paused until this run finishes.
+													Manual editing is paused until this run finishes.
 												</Text>
 											</Stack>
 										</Flex>

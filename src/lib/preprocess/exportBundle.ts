@@ -15,7 +15,7 @@ import { selectedSpotIdsFromMatrix, validateTissueActivationMatrix } from './tis
 import { resolveTissueSelectionSupport } from './tissueSupport';
 
 const FIDUCIAL_DIAMETER_FULLRES = 0.027;
-const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution HE crop image dimensions are unavailable. Re-run Crop/QC before export.';
+const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution H&E crop image dimensions are unavailable. Regenerate crop QC before export.';
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 
 type PreprocessExportReadiness =
@@ -194,7 +194,7 @@ export function getPreprocessZipExportReadiness(
   if (project.cropQc.status !== 'complete' || project.cropQc.isStale) {
     return {
       canExport: false,
-      reason: 'Crop/QC output is stale or incomplete. Re-run Crop/QC and accept it before export.',
+      reason: 'Crop QC output is stale or incomplete. Regenerate and accept crop QC before export.',
     };
   }
 
@@ -203,7 +203,7 @@ export function getPreprocessZipExportReadiness(
   if (typeof cropWidth !== 'number' || cropWidth <= 0 || typeof cropHeight !== 'number' || cropHeight <= 0) {
     return {
       canExport: false,
-      reason: 'Crop dimensions are missing. Re-run Crop/QC before export.',
+      reason: 'Crop dimensions are missing. Regenerate crop QC before export.',
     };
   }
 
@@ -214,7 +214,7 @@ export function getPreprocessZipExportReadiness(
   if (!heFullres || !heHires || !heLowres) {
     return {
       canExport: false,
-      reason: 'Canonical HE crop assets are missing. Re-run Crop/QC before export.',
+      reason: 'Registered H&E crop assets are missing. Regenerate crop QC before export.',
     };
   }
 
@@ -222,7 +222,7 @@ export function getPreprocessZipExportReadiness(
   if (options?.includeAlignedImage && !alignedImageDataUrl) {
     return {
       canExport: false,
-      reason: 'Aligned tissue image export requires checkerboard Crop/QC data.',
+      reason: 'Registered H&E image export requires checkerboard crop QC data.',
     };
   }
 
@@ -238,14 +238,14 @@ export function getPreprocessZipExportReadiness(
   ) {
     return {
       canExport: false,
-      reason: 'Scale metadata is missing. Re-run Crop/QC before export.',
+      reason: 'Scale metadata is missing. Regenerate crop QC before export.',
     };
   }
 
   if (project.chipConfig.status !== 'complete' || project.chipConfig.isStale) {
     return {
       canExport: false,
-      reason: 'Chip projection is stale or incomplete. Reapply chip configuration before export.',
+      reason: 'Spot projection is stale or incomplete. Reapply the capture pitch before export.',
     };
   }
 
@@ -393,7 +393,7 @@ export async function exportPreprocessZip(args: {
 
   if (includeAlignedImage) {
     if (!alignedImageDataUrl) {
-      throw new Error('Aligned tissue image export requires checkerboard Crop/QC data.');
+      throw new Error('Registered H&E image export requires checkerboard crop QC data.');
     }
     zip.file('aligned_tissue_image.png', await imageSourceToBytes(alignedImageDataUrl));
   }

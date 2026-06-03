@@ -332,7 +332,7 @@ describe('preprocess package matrix-first validation', () => {
     });
 
     await expect(deserializePreprocessImport(file)).rejects.toThrow(
-      'Preprocess project import is available in-browser only',
+      'Preprocessing project import is available in-browser only',
     );
   });
 

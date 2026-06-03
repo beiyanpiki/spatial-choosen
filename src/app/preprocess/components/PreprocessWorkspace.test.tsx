@@ -30,7 +30,7 @@ type CapturedProjectMutation = {
 const mockExportPreprocessZip = vi.fn();
 const mockGetPreprocessZipExportReadiness = vi.fn((_: unknown, options?: MockExportReadinessArgs) => (
   options?.includeAlignedImage
-    ? { canExport: false, reason: 'Aligned tissue image export requires checkerboard Crop/QC data.' }
+    ? { canExport: false, reason: 'Registered H&E image export requires checkerboard crop QC data.' }
     : {
         canExport: true,
         data: {
@@ -203,7 +203,7 @@ vi.mock('./TissueSelectionPanel', () => ({
   }) => (
     <div data-testid="tissue-selection-panel-mock">
       <div data-testid="tissue-panel-selected-count">
-        Selected spots: {props.selectedSpotIds.length}
+        Tissue spots: {props.selectedSpotIds.length}
       </div>
       <button
         type="button"
@@ -326,7 +326,7 @@ const { default: PreprocessPage } = await import('../page.client');
 
 const createProject = (): PreprocessProject => ({
   id: 'preprocess-project',
-  name: 'Preprocess project',
+  name: 'Preprocessing project',
   createdAt: '2026-04-14T00:00:00.000Z',
   updatedAt: '2026-04-14T00:00:00.000Z',
   workflowVersion: 3,
@@ -587,16 +587,16 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     const selectedCount = screen.getByTestId('tissue-selected-count');
     const panelSelectedCount = screen.getByTestId('tissue-panel-selected-count');
-    const toggleButton = screen.getByRole('button', { name: 'Hide spots' });
+    const toggleButton = screen.getByRole('button', { name: 'Hide spot grid' });
 
-    expect(selectedCount).toHaveTextContent('Selected spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Selected spots: 0');
+    expect(selectedCount).toHaveTextContent('Tissue spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Tissue spots: 0');
 
     await user.click(toggleButton);
 
-    expect(screen.getByRole('button', { name: 'Show spots' })).toBeInTheDocument();
-    expect(selectedCount).toHaveTextContent('Selected spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Selected spots: 0');
+    expect(screen.getByRole('button', { name: 'Show spot grid' })).toBeInTheDocument();
+    expect(selectedCount).toHaveTextContent('Tissue spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Tissue spots: 0');
   });
 
   it('uses edited activation and block thresholds for the next auto-detection run without auto-running on edit', async () => {
@@ -637,7 +637,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(activationInput).toHaveValue(0.25);
     expect(mockRunTissueAutoSelection).not.toHaveBeenCalled();
     expect(screen.getByTestId('tissue-detection-status')).toHaveTextContent(
-      'Choose a threshold mode and run auto detection to refresh the tissue matrix.',
+      'Choose a signal mode and auto-select tissue spots to refresh the tissue matrix.',
     );
 
     await user.clear(blockInput);
@@ -646,7 +646,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(blockInput).toHaveValue(140);
     expect(mockRunTissueAutoSelection).not.toHaveBeenCalled();
     expect(screen.getByTestId('tissue-detection-status')).toHaveTextContent(
-      'Choose a threshold mode and run auto detection to refresh the tissue matrix.',
+      'Choose a signal mode and auto-select tissue spots to refresh the tissue matrix.',
     );
 
     await user.click(runAutoButton);
@@ -772,7 +772,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 		render(<WorkspaceHarness initialProject={initialProject} />);
 
 		expect(screen.getByTestId('tissue-detection-status')).toHaveTextContent(
-			'Crop/QC output is stale or incomplete. Re-run Crop/QC and accept it before tissue auto detection.',
+			'Crop QC output is stale or incomplete. Regenerate and accept crop QC before tissue auto-selection.',
 		);
 
 		await user.click(screen.getByTestId('tissue-run-auto'));
@@ -828,13 +828,13 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(runAutoButton).not.toBeDisabled();
     expect(activateButton).not.toBeDisabled();
     expect(deactivateButton).not.toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Selected spots: 0');
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 0');
 
     await user.click(runAutoButton);
 
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Selected spots: 1');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Selected spots: 1');
+      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
     });
 
     await user.selectOptions(thresholdModeSelect, 'gray-max');
@@ -848,16 +848,16 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     });
 
     expect(
-      screen.getByText('Tissue selection currently supports only 15um and 50um chips.'),
+      screen.getByText('Tissue auto-selection currently supports only 15um and 50um capture chips.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('50um tissue selection requires a 64x64 grid.')).toBeInTheDocument();
+    expect(screen.getByText('50um tissue auto-selection requires a 64x64 spot grid.')).toBeInTheDocument();
     expect(chipSizeSelect).toBeEnabled();
     expect(thresholdModeSelect).toBeDisabled();
     expect(runAutoButton).toBeDisabled();
     expect(activateButton).toBeDisabled();
     expect(deactivateButton).toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Selected spots: 0');
-    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Selected spots: 0');
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 0');
+    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 0');
   });
 
   it('keeps only the latest auto-detection result when an older request resolves last', async () => {
@@ -965,7 +965,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     await waitFor(() => {
       expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Selected spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
     });
 
     requestA.resolve({
@@ -994,7 +994,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     await waitFor(() => {
       expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Selected spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
     });
   });
 });
@@ -1025,7 +1025,7 @@ describe('Preprocess page autosave failure handling', () => {
       expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
     });
 
-    await user.click(screen.getByRole('heading', { name: 'Preprocess project' }));
+    await user.click(screen.getByRole('heading', { name: 'Preprocessing project' }));
     await user.clear(screen.getByTestId('project-name-input'));
     await user.type(screen.getByTestId('project-name-input'), 'Unsaved metadata name');
     await user.keyboard('{Enter}');
@@ -1040,7 +1040,7 @@ describe('Preprocess page autosave failure handling', () => {
       status: 'error',
     }));
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      'Failed to autosave preprocess project',
+      'Failed to autosave preprocessing project',
       expect.objectContaining({ mode: 'full', projectId: storedProject.id }),
       metadataFailure,
     );

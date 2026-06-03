@@ -182,9 +182,9 @@ function PreprocessContent() {
 				console.error(error);
 				if (active) {
 					toast({
-						title: "Failed to read preprocess projects",
+						title: "Failed to read preprocessing projects",
 						description:
-							"Existing preprocess drafts could not be loaded from this browser.",
+							"Existing preprocessing projects could not be loaded from this browser.",
 						status: "error",
 					});
 				}
@@ -218,7 +218,7 @@ function PreprocessContent() {
 				}
 				if (!storedProject) {
 					setProject(null);
-					setLoadError("Preprocess project not found in this browser.");
+					setLoadError("Preprocessing project not found in this browser.");
 					return;
 				}
 
@@ -233,7 +233,7 @@ function PreprocessContent() {
 				if (cancelled) return;
 				console.error(error);
 				setProject(null);
-				setLoadError("Unable to load preprocess project from storage.");
+				setLoadError("Unable to load preprocessing project from storage.");
 			} finally {
 				if (!cancelled) setIsLoadingProject(false);
 			}
@@ -307,7 +307,7 @@ function PreprocessContent() {
 					setAutosaveDetail(`last saved at ${new Date().toLocaleTimeString()}`);
 				}
 			} catch (error) {
-				console.error("Failed to autosave preprocess project", {
+				console.error("Failed to autosave preprocessing project", {
 					mode,
 					projectId: normalizedSnapshot.id,
 					saveAttempt,
@@ -322,7 +322,7 @@ function PreprocessContent() {
 						await persistWithProtectedUrls(lastSavedProjectRef.current);
 					} catch (restoreError) {
 						console.error(
-							"Failed to restore last preprocess snapshot",
+							"Failed to restore last preprocessing snapshot",
 							{
 								mode,
 								projectId: lastSavedProjectRef.current.id,
@@ -339,7 +339,7 @@ function PreprocessContent() {
 					toast({
 						title: "Autosave failed",
 						description:
-							"The last successful preprocess snapshot stays in storage. Retry after fixing the issue.",
+							"The last successful preprocessing snapshot remains in storage. Retry after fixing the issue.",
 						status: "error",
 					});
 				}
@@ -462,12 +462,12 @@ function PreprocessContent() {
 			await upsertPreprocessProject(nextProject);
 			await refreshProjects();
 			setProjectName("");
-			toast({ title: "Preprocess project created", status: "success" });
+			toast({ title: "Preprocessing project created", status: "success" });
 			openProject(nextProject.id);
 		} catch (error) {
 			console.error(error);
 			toast({
-				title: "Failed to create preprocess project",
+				title: "Failed to create preprocessing project",
 				description: "The project could not be saved in this browser.",
 				status: "error",
 			});
@@ -484,12 +484,12 @@ function PreprocessContent() {
 				setProjects((previous) =>
 					previous.filter((entry) => entry.id !== projectId),
 				);
-				toast({ title: "Preprocess project deleted", status: "info" });
+				toast({ title: "Preprocessing project deleted", status: "info" });
 			} catch (error) {
 				console.error(error);
 				toast({
-					title: "Failed to delete preprocess project",
-					description: "This saved draft could not be removed.",
+					title: "Failed to delete preprocessing project",
+					description: "This saved project could not be removed.",
 					status: "error",
 				});
 			} finally {
@@ -510,7 +510,7 @@ function PreprocessContent() {
 				);
 				await upsertPreprocessProject(importedProject);
 				await refreshProjects();
-				toast({ title: "Preprocess project imported", status: "success" });
+				toast({ title: "Preprocessing project imported", status: "success" });
 				openProject(importedProject.id);
 			} catch (error) {
 				console.error(error);
@@ -519,7 +519,7 @@ function PreprocessContent() {
 					description:
 						error instanceof Error
 							? error.message
-							: "The selected preprocess project is invalid.",
+							: "The selected preprocessing project is invalid.",
 					status: "error",
 				});
 				await refreshProjects().catch((refreshError) =>
