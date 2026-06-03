@@ -552,6 +552,16 @@ const readExportedPngDimensions = async (blob: Blob, fileName: string) => {
   return readPngDimensions(await file.async('uint8array'));
 };
 
+const readZipBytes = async (blob: Blob, fileName: string) => {
+  const archive = await JSZip.loadAsync(await blob.arrayBuffer());
+  const file = archive.file(fileName);
+  if (!file) {
+    throw new Error(`Missing file in archive: ${fileName}`);
+  }
+
+  return file.async('uint8array');
+};
+
 const toExportArrayRow = (rows: number, runtimeArrayRow: number) => rows + 1 - runtimeArrayRow;
 
 const createExpectedExportedTissuePositionRow = (args: {
@@ -597,6 +607,12 @@ const indexRowsByBarcode = (rows: ExportedTissuePositionRow[]) => new Map(
 const exportProject = async (project: PreprocessProject) => exportPreprocessZip({
   project,
   includeAlignedImage: false,
+  includeProjectJson: false,
+});
+
+const exportProjectWithAlignedImage = async (project: PreprocessProject) => exportPreprocessZip({
+  project,
+  includeAlignedImage: true,
   includeProjectJson: false,
 });
 
@@ -962,6 +978,35 @@ describe('exportBundle canonical matrix exports', () => {
 
     expect(rows).toHaveLength(64);
     expect(rows.every((line) => line.split(',').length === 64)).toBe(true);
+  });
+
+  it('writes aligned_tissue_image.png from the accepted checkerboard Crop/QC image', async () => {
+    const checkerboardBytes = createPngBytes(32, 48);
+    const checkerboardDataUrl = createDataUrlFromBytes(checkerboardBytes);
+    const project = createBaseProject();
+    const checkerboardPreview = project.cropQc.checkerboardPreview;
+    if (!checkerboardPreview) {
+      throw new Error('Test fixture is missing checkerboard preview state.');
+    }
+    checkerboardPreview.dataUrl = checkerboardDataUrl;
+    project.cropQc.checkerboardPreviewDataUrl = checkerboardDataUrl;
+
+    const result = await exportProjectWithAlignedImage(project);
+
+    await expect(readZipBytes(result.blob, 'aligned_tissue_image.png')).resolves.toEqual(checkerboardBytes);
+    await expect(readZipBytes(result.blob, 'tissue_fullres_image.png')).resolves.not.toEqual(checkerboardBytes);
+  });
+
+  it('blocks aligned image export when accepted checkerboard Crop/QC data is missing', async () => {
+    const project = createBaseProject();
+
+    const readiness = getPreprocessZipExportReadiness(project, { includeAlignedImage: true });
+
+    expect(readiness).toEqual({
+      canExport: false,
+      reason: 'Aligned tissue image export requires checkerboard Crop/QC data.',
+    });
+    await expect(exportProjectWithAlignedImage(project)).rejects.toThrow('Aligned tissue image export requires checkerboard Crop/QC data.');
   });
 
   it('blocks export when tissue support state is unsupported', async () => {
