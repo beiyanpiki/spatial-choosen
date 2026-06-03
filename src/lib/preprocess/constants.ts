@@ -25,6 +25,8 @@ export const PREPROCESS_SOURCE_IMAGE_KINDS = ["eosin", "he"] as const satisfies 
 
 export const PREPROCESS_CANONICAL_CROP_ASSET_LEVELS = ["fullres", "hires", "lowres"] as const satisfies readonly PreprocessCropAssetScale[];
 
+export const PREPROCESS_WORKING_PROXY_MAX_BYTES = 10_000_000;
+
 export const PREPROCESS_NUMERIC_DEFAULTS = {
   alignmentOverlayOpacity: 0.5,
   cropPaddingRatio: 0.02,

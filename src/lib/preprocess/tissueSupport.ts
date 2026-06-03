@@ -34,6 +34,13 @@ export function resolveTissueSelectionSupport(args: TissueSupportArgs): TissueSe
     };
   }
 
+  if (args.rows === null || args.columns === null) {
+    return {
+      supportState: 'unsupported',
+      unsupportedReason: 'Tissue selection requires configured grid dimensions.',
+    };
+  }
+
   if (args.rows !== supportedGrid.rows || args.columns !== supportedGrid.columns) {
     return {
       supportState: 'unsupported',

@@ -5,7 +5,6 @@ import type {
 	LegacyAlignmentSlice,
 	LegacyChipConfigSlice,
 	LegacyCropQcSlice,
-	LegacyHeFocusSlice,
 	LegacyPreprocessProject,
 	LegacyProjectedSpot,
 	LegacyTissueSelectionSlice,
@@ -80,21 +79,11 @@ const createHeFocusSlice = (): HeFocusSlice => ({
 	imageTransform: {
 		...DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 	},
-	autoProposal: {
-		status: "idle",
-		method: null,
-		coarseBounds: null,
-		refinedBounds: null,
-		refinedQuad: null,
-		rotationDegrees: null,
-		eccCorrelation: null,
-		failureReason: null,
-	},
 	focusedImageDataUrl: null,
 });
 
 const normalizeHeFocusSlice = (
-	slice: HeFocusSlice | LegacyHeFocusSlice | undefined,
+	slice: HeFocusSlice | undefined,
 ): HeFocusSlice => {
 	if (!slice) {
 		return createHeFocusSlice();
@@ -103,7 +92,6 @@ const normalizeHeFocusSlice = (
 	return {
 		...slice,
 		targetImage: "he",
-		autoProposal: slice.autoProposal ?? createHeFocusSlice().autoProposal,
 		focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
 	};
 };
@@ -113,7 +101,7 @@ const normalizeLegacyAlignmentSource = (
 ): PreprocessProject["alignment"] => ({
 	...slice,
 	source:
-		slice.source === "auto" || slice.source === "manual" ? slice.source : null,
+		slice.source === "manual" ? slice.source : null,
 });
 
 const markSliceStale = <TSlice extends PreprocessSliceBase>(
@@ -883,7 +871,7 @@ export function migratePreprocessProject(
 	const normalizedAlignment = normalizeAlignmentSlice(
 		normalizeLegacyAlignmentSource(project.alignment),
 	);
-	const strictAcceptedAlignment =
+	const strictAlignmentAccepted =
 		normalizedAlignment.solveAccepted &&
 		normalizedAlignment.qualityFlags.accepted;
 	const normalizedAlignmentStatus = computeAlignmentStatus({
@@ -893,7 +881,7 @@ export function migratePreprocessProject(
 		hasMovingImage: Boolean(
 			project.sourceAssets.images[normalizedAlignment.movingImage],
 		),
-		solveAccepted: strictAcceptedAlignment,
+		solveAccepted: strictAlignmentAccepted,
 		failureReason: normalizedAlignment.failureReason,
 	});
 	const migratedAlignmentStatus =

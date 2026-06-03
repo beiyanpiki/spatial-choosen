@@ -85,11 +85,21 @@ export function TissueSelectionPanel({
     }
 
     const image = new Image();
-    image.src = eosinCropDataUrl;
     image.onload = () => {
       loadedImageRef.current = image;
       setImageDimensions({ width: image.width, height: image.height });
       requestCanvasRefresh();
+    };
+    image.onerror = () => {
+      loadedImageRef.current = null;
+      setImageDimensions(null);
+      requestCanvasRefresh();
+    };
+    image.src = eosinCropDataUrl;
+
+    return () => {
+      image.onload = null;
+      image.onerror = null;
     };
   }, [eosinCropDataUrl, requestCanvasRefresh]);
 
@@ -330,6 +340,7 @@ export function TissueSelectionPanel({
         return;
       }
 
+      event.preventDefault();
       const delta = event.deltaY > 0 ? 0.9 : 1.1;
       applyZoom(zoom * delta, anchorNorm, anchorScreen);
     },

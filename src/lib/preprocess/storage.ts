@@ -8,15 +8,15 @@ import type {
   PreprocessSourceImage,
   ProjectedSpot,
   SourceAssetsSlice,
+  TissueActivationMatrix,
   TissueSelectionSlice,
-} from '../../types/preprocess';
+} from '@/types/preprocess';
 import { loadChipConfigData } from './chipConfigs';
 import {
   PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
   PREPROCESS_DB_NAME,
   PREPROCESS_DB_VERSION,
   PREPROCESS_DERIVED_IMAGE_STORE,
-  PREPROCESS_NUMERIC_DEFAULTS,
   PREPROCESS_SOURCE_IMAGE_KINDS,
   PREPROCESS_SOURCE_IMAGE_STORE,
   PREPROCESS_STORAGE_KEY,
@@ -24,10 +24,10 @@ import {
   PREPROCESS_THUMBNAIL_STORE,
   PREPROCESS_TISSUE_SELECTION_STORE,
   PREPROCESS_WORKING_IMAGE_STORE,
-} from './constants';
+} from '@/lib/preprocess/constants';
 import { migratePreprocessProject } from './migrations';
-import { createDownsampledBlobFromSource, createThumbnailBlob, loadImageElement } from './sourceImage';
-import { matrixFromSelectedSpotIds } from './tissueMatrix';
+import { createThumbnailBlob, createWorkingProxyBlobFromSource, loadImageElement } from '@/lib/preprocess/sourceImage';
+import { matrixFromSelectedSpotIds, validateTissueActivationMatrix } from './tissueMatrix';
 
 declare global {
   interface Window {
@@ -130,6 +130,18 @@ type StoredTissueSelectionSlice = Omit<
   autoSelectedSpotIds: null;
 };
 
+export type StoredTissueSelectionPayloadV1 = {
+  version: 1;
+  tissueUpdatedAt: string | null;
+  matrix: TissueActivationMatrix | null;
+  autoSelectedSpotIds: string[];
+};
+
+type ParsedTissueSelectionPayload =
+  | { canonical: StoredTissueSelectionPayloadV1 }
+  | { legacy: string[] }
+  | { invalid: true };
+
 type StoredProjectedSpotIndexEntry = {
   id: string;
   arrayRow: number;
@@ -179,9 +191,102 @@ export type PreprocessProjectSummary = Pick<
   'id' | 'name' | 'createdAt' | 'updatedAt' | 'currentStep' | 'sourceAssets'
 >;
 
-export type PreprocessPersistMode = 'full' | 'metadata';
+export type PreprocessPersistMode = 'full' | 'metadata' | 'tissue';
 
 const isBrowser = () => typeof window !== 'undefined';
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object'
+  && value !== null
+  && !Array.isArray(value)
+);
+
+const parseTissueActivationMatrix = (value: unknown): TissueActivationMatrix | null | undefined => {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isPlainObject(value) || !Array.isArray(value.values)) {
+    return undefined;
+  }
+
+  try {
+    return validateTissueActivationMatrix({
+      rows: value.rows,
+      columns: value.columns,
+      values: value.values,
+    } as TissueActivationMatrix);
+  } catch {
+    return undefined;
+  }
+};
+
+const parseLegacyTissueSelectionPayload = (value: unknown) => (
+  Array.isArray(value) && value.every((item) => typeof item === 'string')
+    ? value
+    : null
+);
+
+export const toStoredTissueSelectionPayload = (
+  tissueSelection: PreprocessProject['tissueSelection'],
+): StoredTissueSelectionPayloadV1 => ({
+  version: 1,
+  tissueUpdatedAt: tissueSelection.updatedAt ?? null,
+  matrix: tissueSelection.matrix ? validateTissueActivationMatrix(tissueSelection.matrix) : null,
+  autoSelectedSpotIds: [...tissueSelection.autoSelectedSpotIds],
+});
+
+export const parseTissueSelectionPayload = (rawValue: unknown): ParsedTissueSelectionPayload => {
+  if (typeof rawValue !== 'string') {
+    return { invalid: true };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawValue) as unknown;
+  } catch {
+    return { invalid: true };
+  }
+
+  const legacy = parseLegacyTissueSelectionPayload(parsed);
+  if (legacy) {
+    return { legacy };
+  }
+
+  if (Array.isArray(parsed)) {
+    return { invalid: true };
+  }
+
+  if (!isPlainObject(parsed)) {
+    return { invalid: true };
+  }
+
+  if (parsed.version !== 1) {
+    return { invalid: true };
+  }
+
+  if (typeof parsed.tissueUpdatedAt !== 'string' && parsed.tissueUpdatedAt !== null) {
+    return { invalid: true };
+  }
+
+  if (!Array.isArray(parsed.autoSelectedSpotIds) || !parsed.autoSelectedSpotIds.every((item) => typeof item === 'string')) {
+    return { invalid: true };
+  }
+
+  const matrix = parseTissueActivationMatrix(parsed.matrix);
+  if (matrix === undefined) {
+    return { invalid: true };
+  }
+
+  return {
+    canonical: {
+      version: 1,
+      tissueUpdatedAt: parsed.tissueUpdatedAt,
+      matrix,
+      autoSelectedSpotIds: parsed.autoSelectedSpotIds,
+    },
+  };
+};
 
 const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
   if (!isBrowser()) {
@@ -357,11 +462,17 @@ const selectedSpotIdsFromStoredIndex = (
   });
 };
 
+const INVALID_TISSUE_SELECTION_PAYLOAD_MESSAGE = 'Invalid stored tissue selection payload';
+
 const repairProjectedSpotIndex = async (
   chipConfig: StoredChipConfigSlice,
 ): Promise<StoredProjectedSpotIndexEntry[] | null> => {
   if (chipConfig.projectedSpotIndex) {
     return chipConfig.projectedSpotIndex;
+  }
+
+  if (!chipConfig.rows || !chipConfig.columns) {
+    return null;
   }
 
   if (chipConfig.chipType !== '50um' && chipConfig.chipType !== '15um') {
@@ -679,56 +790,76 @@ const hydrateCropQcSlice = async (
   return clearHydratedCropQc(cropQc);
 };
 
-const toProjectMeta = (project: PreprocessProject): PreprocessProjectMeta => ({
-  ...project,
-  storageVersion: project.storageVersion ?? PREPROCESS_STORAGE_SCHEMA_VERSION,
-  sourceAssets: {
-    ...project.sourceAssets,
-    images: {
-      eosin: stripSourcePayload(project.sourceAssets.images.eosin),
-      he: stripSourcePayload(project.sourceAssets.images.he),
+const toProjectedSpotIndex = (projectedSpots: ProjectedSpot[] | null | undefined) => projectedSpots?.map((spot) => ({
+  id: spot.id,
+  arrayRow: spot.arrayRow,
+  arrayCol: spot.arrayCol,
+})) ?? null;
+
+const toProjectMeta = (
+  projectInput: PreprocessProject,
+  fallbackProjectedSpots?: ProjectedSpot[] | null,
+  fallbackTissueSelection?: PreprocessProject['tissueSelection'],
+): PreprocessProjectMeta => {
+  const project: PreprocessProject = {
+    ...projectInput,
+    chipConfig: {
+      ...projectInput.chipConfig,
+      projectedSpots: projectInput.chipConfig.projectedSpots ?? fallbackProjectedSpots ?? null,
     },
-  },
-  heFocus: {
-    ...project.heFocus,
-    focusedImageDataUrl: null,
-  },
-  alignment: {
-    ...project.alignment,
-    previewDataUrl: null,
-  },
-  cropQc: stripCropQcPayload(project.cropQc),
-  chipConfig: {
-    ...project.chipConfig,
-    projectedSpots: null,
-    projectedSpotIndex: project.chipConfig.projectedSpots?.map((spot) => ({
-      id: spot.id,
-      arrayRow: spot.arrayRow,
-      arrayCol: spot.arrayCol,
-    })) ?? null,
-  },
-  tissueSelection: (({
-    forcedInSpotIds: _forcedInSpotIds,
-    forcedOutSpotIds: _forcedOutSpotIds,
-    overrideNotice: _overrideNotice,
-    regions: _regions,
-    selectedRegionId: _selectedRegionId,
-    previewDataUrl: _previewDataUrl,
-    matrix: _matrix,
-    autoSelectedSpotIds: _autoSelectedSpotIds,
-    ...canonicalTissueSelection
-  }) => ({
-    ...canonicalTissueSelection,
-    previewDataUrl: null,
-    selectedSpotIds: null,
-    matrix: null,
-    autoSelectedSpotIds: null,
-  }))(project.tissueSelection),
-  exportState: {
-    ...project.exportState,
-    artifacts: [],
-  },
-});
+  };
+
+  return {
+    ...project,
+    storageVersion: project.storageVersion ?? PREPROCESS_STORAGE_SCHEMA_VERSION,
+    sourceAssets: {
+      ...project.sourceAssets,
+      images: {
+        eosin: stripSourcePayload(project.sourceAssets.images.eosin),
+        he: stripSourcePayload(project.sourceAssets.images.he),
+      },
+    },
+    heFocus: {
+      ...project.heFocus,
+      focusedImageDataUrl: null,
+    },
+    alignment: {
+      ...project.alignment,
+      previewDataUrl: null,
+    },
+    cropQc: stripCropQcPayload(project.cropQc),
+    chipConfig: {
+      ...project.chipConfig,
+      projectedSpots: null,
+      projectedSpotIndex: toProjectedSpotIndex(project.chipConfig.projectedSpots)
+        ?? toProjectedSpotIndex(fallbackProjectedSpots)
+        ?? ((project.chipConfig as StoredChipConfigSlice).projectedSpotIndex ?? null),
+    },
+    tissueSelection: (({
+      forcedInSpotIds: _forcedInSpotIds,
+      forcedOutSpotIds: _forcedOutSpotIds,
+      overrideNotice: _overrideNotice,
+      regions: _regions,
+      selectedRegionId: _selectedRegionId,
+      previewDataUrl: _previewDataUrl,
+      matrix: _matrix,
+      autoSelectedSpotIds: _autoSelectedSpotIds,
+      ...canonicalTissueSelection
+    }) => ({
+      ...canonicalTissueSelection,
+      supportState: fallbackTissueSelection?.supportState ?? projectInput.tissueSelection.supportState,
+      unsupportedReason: fallbackTissueSelection?.unsupportedReason ?? projectInput.tissueSelection.unsupportedReason,
+      previewDataUrl: null,
+      selectedSpotIds: null,
+      matrix: null,
+      autoSelectedSpotIds: null,
+    }))(project.tissueSelection),
+    exportState: {
+      ...project.exportState,
+      artifacts: [],
+    },
+  };
+};
 
 const hydrateSourcePayload = (payload: string | Blob | undefined) => {
   if (!payload) return null;
@@ -773,6 +904,8 @@ const hydrateSourceImage = async (
   let workingBlob = working?.blob;
   let workingObjectUrl = working?.objectUrl;
   let workingDataUrl = working?.displayUrl;
+  let workingWidth = meta.workingWidth;
+  let workingHeight = meta.workingHeight;
   let workingRegenerated = false;
 
   if (!thumbnailDataUrl && source.displayUrl) {
@@ -790,15 +923,16 @@ const hydrateSourceImage = async (
   if (!workingDataUrl && source.displayUrl) {
     try {
       const sourceImage = await loadImageElement(source.displayUrl);
-      const generatedBlob = await createDownsampledBlobFromSource(
+      const generatedProxy = await createWorkingProxyBlobFromSource(
         sourceImage,
         sourceImage.naturalWidth,
         sourceImage.naturalHeight,
-        PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
       );
-      workingBlob = generatedBlob;
-      workingObjectUrl = URL.createObjectURL(generatedBlob);
+      workingBlob = generatedProxy.blob;
+      workingObjectUrl = URL.createObjectURL(generatedProxy.blob);
       workingDataUrl = workingObjectUrl;
+      workingWidth = generatedProxy.width;
+      workingHeight = generatedProxy.height;
       workingRegenerated = true;
     } catch (error) {
       void error;
@@ -817,6 +951,8 @@ const hydrateSourceImage = async (
       dataUrl: source.displayUrl,
       thumbnailDataUrl,
       workingDataUrl,
+      workingWidth,
+      workingHeight,
     },
     thumbnailRegenerated,
     workingRegenerated,
@@ -877,38 +1013,47 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
 
   const repairedProjectedSpotIndex = await repairProjectedSpotIndex(repairedMeta.chipConfig);
 
-  // Read autoSelectedSpotIds from IndexedDB (not from metadata to avoid localStorage quota issues)
-  const storedAutoSelectedSpotIds = await readTissueSelectionStore(repairedMeta.id);
-  const autoSelectedSpotIds = storedAutoSelectedSpotIds ?? [];
+  const storedTissueSelection = await readTissueSelectionStore(repairedMeta.id);
+  let autoSelectedSpotIds: string[] = [];
+  let matrix: TissueActivationMatrix | null = null;
+  let runtimeSelectedSpotIds: string[] | null = null;
+  let invalidTissueSelectionPayload = false;
 
-  const reconstructedMatrix = autoSelectedSpotIds.length > 0 && repairedMeta.chipConfig.rows && repairedMeta.chipConfig.columns && repairedProjectedSpotIndex
-    ? matrixFromSelectedSpotIds({
-        rows: repairedMeta.chipConfig.rows,
-        columns: repairedMeta.chipConfig.columns,
-        projectedSpots: repairedProjectedSpotIndex.map((entry) => ({
-          id: entry.id,
-          barcode: entry.id,
-          arrayRow: entry.arrayRow,
-          arrayCol: entry.arrayCol,
-          x: 0,
-          y: 0,
-          chipX: 0,
-          chipY: 0,
-          imageX: 0,
-          imageY: 0,
-          diameterX: 0,
-          diameterY: 0,
-        })) as ProjectedSpot[],
-        selectedSpotIds: autoSelectedSpotIds,
-      })
-    : null;
-
-  const runtimeSelectedSpotIds = reconstructedMatrix && repairedProjectedSpotIndex
-    ? selectedSpotIdsFromStoredIndex(
-        reconstructedMatrix,
-        repairedProjectedSpotIndex,
-      )
-    : null;
+  if (storedTissueSelection && 'canonical' in storedTissueSelection) {
+    autoSelectedSpotIds = [...storedTissueSelection.canonical.autoSelectedSpotIds];
+    matrix = storedTissueSelection.canonical.matrix;
+    runtimeSelectedSpotIds = matrix
+      ? selectedSpotIdsFromStoredIndex(matrix, repairedProjectedSpotIndex)
+      : null;
+  } else if (storedTissueSelection && 'legacy' in storedTissueSelection) {
+    autoSelectedSpotIds = storedTissueSelection.legacy;
+    matrix = autoSelectedSpotIds.length > 0 && repairedMeta.chipConfig.rows && repairedMeta.chipConfig.columns && repairedProjectedSpotIndex
+      ? matrixFromSelectedSpotIds({
+          rows: repairedMeta.chipConfig.rows,
+          columns: repairedMeta.chipConfig.columns,
+          projectedSpots: repairedProjectedSpotIndex.map((entry) => ({
+            id: entry.id,
+            barcode: entry.id,
+            arrayRow: entry.arrayRow,
+            arrayCol: entry.arrayCol,
+            x: 0,
+            y: 0,
+            chipX: 0,
+            chipY: 0,
+            imageX: 0,
+            imageY: 0,
+            diameterX: 0,
+            diameterY: 0,
+          })) as ProjectedSpot[],
+          selectedSpotIds: autoSelectedSpotIds,
+        })
+      : null;
+    runtimeSelectedSpotIds = matrix && repairedProjectedSpotIndex
+      ? selectedSpotIdsFromStoredIndex(matrix, repairedProjectedSpotIndex)
+      : null;
+  } else if (storedTissueSelection && 'invalid' in storedTissueSelection) {
+    invalidTissueSelectionPayload = true;
+  }
 
   const project = migratePreprocessProject({
     ...repairedMeta,
@@ -957,7 +1102,15 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
       ...runtimeTissueSelection
     }) => ({
       ...runtimeTissueSelection,
-      matrix: reconstructedMatrix,
+      ...(invalidTissueSelectionPayload
+        ? {
+            status: 'stale' as const,
+            isStale: true,
+            warning: INVALID_TISSUE_SELECTION_PAYLOAD_MESSAGE,
+            error: INVALID_TISSUE_SELECTION_PAYLOAD_MESSAGE,
+          }
+        : {}),
+      matrix,
       selectedSpotIds: runtimeSelectedSpotIds,
       autoSelectedSpotIds,
     }))(project.tissueSelection),
@@ -976,7 +1129,11 @@ export const upsertPreprocessProjectMetadata = (project: PreprocessProject) => {
   const metas = readRawProjects() as PreprocessProjectMeta[];
   const repairedProject = repairCurrentSchemaCropGeometry(project);
   const migratedProject = migratePreprocessProject(repairedProject);
-  const meta = toProjectMeta(migratedProject);
+  const meta = toProjectMeta(
+    migratedProject,
+    repairedProject.chipConfig.projectedSpots,
+    repairedProject.tissueSelection,
+  );
   const index = metas.findIndex((entry) => entry.id === project.id);
   if (index >= 0) {
     metas[index] = meta;
@@ -1051,34 +1208,31 @@ const syncTissueSelectionStore = async (
   tissueSelection: PreprocessProject['tissueSelection'],
 ) => {
   const key = tissueSelectionStoreKey(projectId);
-  const payload = tissueSelection.autoSelectedSpotIds.length > 0
-    ? JSON.stringify(tissueSelection.autoSelectedSpotIds)
-    : undefined;
+  const payload = toStoredTissueSelectionPayload(tissueSelection);
+  const existing = await readTissueSelectionStore(projectId);
 
-  if (payload) {
-    await saveStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key, payload);
+  if (
+    existing
+    && 'canonical' in existing
+    && existing.canonical.tissueUpdatedAt !== null
+    && payload.tissueUpdatedAt !== null
+    && existing.canonical.tissueUpdatedAt > payload.tissueUpdatedAt
+  ) {
     return;
   }
 
-  await deleteStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key);
+  await saveStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key, JSON.stringify(payload));
 };
 
 const readTissueSelectionStore = async (
   projectId: string,
-): Promise<string[] | undefined> => {
+): Promise<ParsedTissueSelectionPayload | undefined> => {
   const key = tissueSelectionStoreKey(projectId);
   const value = await readStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, key);
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value) as unknown;
-      if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
-        return parsed as string[];
-      }
-    } catch {
-      // Invalid JSON, return undefined
-    }
+  if (value === undefined) {
+    return undefined;
   }
-  return undefined;
+  return parseTissueSelectionPayload(value);
 };
 
 export async function readPreprocessProjects(): Promise<PreprocessProject[]> {
@@ -1112,9 +1266,20 @@ export async function upsertPreprocessProject(
     throw new DOMException('Synthetic preprocess quota failure', 'QuotaExceededError');
   }
 
+  const mode = options?.mode ?? 'full';
+
+  if (mode === 'tissue') {
+    const metas = readRawProjects() as PreprocessProjectMeta[];
+    if (!metas.some((entry) => entry.id === project.id)) {
+      upsertPreprocessProjectMetadata(project);
+    }
+    await syncTissueSelectionStore(project.id, project.tissueSelection);
+    return;
+  }
+
   const migratedProject = upsertPreprocessProjectMetadata(project);
 
-  if ((options?.mode ?? 'full') === 'metadata') {
+  if (mode === 'metadata') {
     return;
   }
 
@@ -1122,7 +1287,7 @@ export async function upsertPreprocessProject(
     ...PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),
     syncDerivedImageStore(heFocusDerivedImageStoreKey(migratedProject.id), migratedProject.heFocus.focusedImageDataUrl),
     syncCropQcDerivedImageStores(migratedProject.id, migratedProject.cropQc),
-    syncTissueSelectionStore(migratedProject.id, migratedProject.tissueSelection),
+    syncTissueSelectionStore(migratedProject.id, project.tissueSelection),
   ]);
 }
 

@@ -110,37 +110,10 @@ export type HeFocusSlice = PreprocessSliceBase & {
   chipBounds: PreprocessRect | null;
   handles: LocalizationHandle[];
   imageTransform: LocalizationImageTransform;
-  autoProposal: HeFocusAutoProposal;
   focusedImageDataUrl: string | null;
 };
 
-export type HeFocusAutoProposalStatus = "idle" | "accepted" | "fallback" | "failed";
-
-export type HeFocusAutoProposalQuad = [
-  PreprocessPoint,
-  PreprocessPoint,
-  PreprocessPoint,
-  PreprocessPoint,
-];
-
-export type HeFocusAutoProposal = {
-  status: HeFocusAutoProposalStatus;
-  method: string | null;
-  coarseBounds: PreprocessRect | null;
-  refinedBounds: PreprocessRect | null;
-  refinedQuad: HeFocusAutoProposalQuad | null;
-  rotationDegrees: number | null;
-  eccCorrelation: number | null;
-  acceptedTransform?: {
-    affineMatrix: AlignmentAffineMatrix;
-    transform: AlignmentTransform;
-  } | null;
-  failureReason: string | null;
-};
-
-export type LegacyHeFocusSlice = Omit<HeFocusSlice, "autoProposal"> & {
-  autoProposal?: HeFocusAutoProposal | null;
-};
+export type LegacyHeFocusSlice = HeFocusSlice;
 
 export type AlignmentControlPoint = {
   id: string;
@@ -181,7 +154,7 @@ export type AlignmentSlice = PreprocessSliceBase & {
   movingImage: PreprocessImageKind;
   movingImageTransform: LocalizationImageTransform;
   overlayOpacity: number;
-  source: "auto" | "manual" | null;
+  source: "manual" | null;
   controlPoints: AlignmentControlPoint[];
   inlierMask: boolean[] | null;
   affineMatrix: AlignmentAffineMatrix | null;
@@ -196,7 +169,7 @@ export type AlignmentSlice = PreprocessSliceBase & {
 };
 
 export type LegacyAlignmentSlice = Omit<AlignmentSlice, "source"> & {
-  source?: AlignmentSlice["source"];
+  source?: AlignmentSlice["source"] | "auto";
 };
 
 export type CropQcIssue = {

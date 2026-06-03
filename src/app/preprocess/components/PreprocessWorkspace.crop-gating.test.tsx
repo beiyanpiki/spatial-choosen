@@ -171,8 +171,6 @@ const createProject = (overrides?: {
   solveAccepted?: boolean;
   alignmentSource?: PreprocessProject['alignment']['source'];
   heFocusChipBounds?: PreprocessProject['heFocus']['chipBounds'];
-  autoProposalCoarseBounds?: PreprocessProject['heFocus']['autoProposal']['coarseBounds'];
-  autoProposalRefinedQuad?: PreprocessProject['heFocus']['autoProposal']['refinedQuad'];
 }): PreprocessProject => ({
   id: 'workspace-crop-gating-project',
   name: 'Workspace crop gating project',
@@ -254,20 +252,6 @@ const createProject = (overrides?: {
       flipHorizontal: false,
       flipVertical: false,
       scale: 1,
-    },
-    autoProposal: {
-      status: overrides?.autoProposalRefinedQuad
-        ? 'accepted'
-        : overrides?.autoProposalCoarseBounds
-          ? 'fallback'
-          : 'idle',
-      method: overrides?.autoProposalRefinedQuad || overrides?.autoProposalCoarseBounds ? 'mask-ecc-v1' : null,
-      coarseBounds: overrides?.autoProposalCoarseBounds ?? null,
-      refinedBounds: null,
-      refinedQuad: overrides?.autoProposalRefinedQuad ?? null,
-      rotationDegrees: null,
-      eccCorrelation: null,
-      failureReason: null,
     },
     focusedImageDataUrl: null,
   },
@@ -492,31 +476,10 @@ describe('PreprocessWorkspace crop gating contract', () => {
     const [request] = mockRunCropQc.mock.calls[0] as Array<Record<string, unknown>>;
     expect(request.chipBounds).toEqual(defaultLocalizationChipBounds);
     expect(request.acceptedChipBounds).toEqual(outOfBoundsHeFocus);
-    expect(request.acceptedChipQuad).toBeUndefined();
   });
 
-  it('uses localization geometry for crop authority while forwarding accepted H&E geometry as QC evidence', async () => {
+  it('uses localization geometry for crop authority while forwarding manual H&E bounds as QC evidence', async () => {
     const acceptedChipBounds = { x: 0.31, y: 0.34, width: 0.22, height: 0.16 };
-    const acceptedChipQuad = [
-      { x: 0.31, y: 0.34 },
-      { x: 0.53, y: 0.34 },
-      { x: 0.53, y: 0.5 },
-      { x: 0.31, y: 0.5 },
-    ] as PreprocessProject['heFocus']['autoProposal']['refinedQuad'];
-
-    render(
-      <WorkspaceHarness
-        initialProject={createProject({
-          alignmentSource: 'auto',
-          heFocusChipBounds: acceptedChipBounds,
-          autoProposalRefinedQuad: acceptedChipQuad,
-        })}
-      />,
-    );
-
-    await act(async () => {
-      capturedCropQcPanelProps?.onRunCrop();
-    });
 
     render(
       <WorkspaceHarness
@@ -532,22 +495,12 @@ describe('PreprocessWorkspace crop gating contract', () => {
     });
 
     await waitFor(() => {
-      expect(mockRunCropQc).toHaveBeenCalledTimes(2);
+      expect(mockRunCropQc).toHaveBeenCalledTimes(1);
     });
 
-    const [automaticRequest] = mockRunCropQc.mock.calls[0] as Array<Record<string, unknown>>;
-    const [manualRequest] = mockRunCropQc.mock.calls[1] as Array<Record<string, unknown>>;
-
-    expect(automaticRequest.chipBounds).toEqual(defaultLocalizationChipBounds);
-    expect(automaticRequest.acceptedChipBounds).toEqual(acceptedChipBounds);
-    expect(automaticRequest.acceptedChipQuad).toEqual(acceptedChipQuad);
-
+    const [manualRequest] = mockRunCropQc.mock.calls[0] as Array<Record<string, unknown>>;
     expect(manualRequest.chipBounds).toEqual(defaultLocalizationChipBounds);
     expect(manualRequest.acceptedChipBounds).toEqual(acceptedChipBounds);
-    expect(manualRequest.acceptedChipQuad).toBeUndefined();
-    expect(automaticRequest.coarseChipBounds).toBeUndefined();
-    expect(manualRequest.coarseChipBounds).toBeUndefined();
-    expect(automaticRequest.solveAccepted).toBe(true);
     expect(manualRequest.solveAccepted).toBe(true);
   });
 
@@ -563,7 +516,7 @@ describe('PreprocessWorkspace crop gating contract', () => {
       expect(latestProject?.cropQc.previewDataUrl).toBe(baseRunResult.cropAssets.he.hires.dataUrl);
     });
 
-    expect(latestProject?.cropQc.cropAssets.he.fullres.dataUrl).toBe(baseRunResult.cropAssets.he.fullres.dataUrl);
+    expect(latestProject?.cropQc.cropAssets?.he?.fullres.dataUrl).toBe(baseRunResult.cropAssets.he.fullres.dataUrl);
   });
 
 	it('preserves emitted Crop/QC export-frame dimensions instead of overwriting them with eosinReferenceGeometry evidence', async () => {

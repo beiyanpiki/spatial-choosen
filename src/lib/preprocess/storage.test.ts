@@ -8,7 +8,15 @@ import * as chipConfigs from './chipConfigs';
 import { exportPreprocessZip } from './exportBundle';
 import { serializePreprocessProject } from './package';
 import { projectSpotsForCrop } from './spotProjection';
-import { getPreprocessProject, upsertPreprocessProject, upsertPreprocessProjectMetadata } from './storage';
+import {
+  deletePreprocessProject,
+  getPreprocessProject,
+  parseTissueSelectionPayload,
+  readPreprocessProjectSummaries,
+  toStoredTissueSelectionPayload,
+  upsertPreprocessProject,
+  upsertPreprocessProjectMetadata,
+} from './storage';
 
 const createPngBytes = (width: number, height: number) => {
   const bytes = new Uint8Array(24);
@@ -27,6 +35,7 @@ const createPngBytes = (width: number, height: number) => {
 const createPngDataUrl = (width: number, height: number) => `data:image/png;base64,${Buffer.from(createPngBytes(width, height)).toString('base64')}`;
 
 const PNG_DATA_URL = createPngDataUrl(200, 200);
+const JPEG_DATA_URL = 'data:image/jpeg;base64,/9j/2Q==';
 
 const createCropAssetSet = () => ({
   fullres: { dataUrl: PNG_DATA_URL },
@@ -37,6 +46,17 @@ const createCropAssetSet = () => ({
 const createCanonicalCropAssets = () => ({
   eosin: createCropAssetSet(),
   he: createCropAssetSet(),
+});
+
+const createSourceImage = (kind: 'eosin' | 'he') => ({
+  id: `${kind}-source`,
+  kind,
+  fileName: `${kind}.png`,
+  mimeType: 'image/png',
+  sizeBytes: 1024,
+  width: 4096,
+  height: 2048,
+  lastModified: 0,
 });
 
 const createProjectedSpot = (
@@ -107,16 +127,6 @@ const createProject = (): PreprocessProject => ({
       flipHorizontal: false,
       flipVertical: false,
       scale: 1,
-    },
-    autoProposal: {
-      status: 'idle',
-      method: null,
-      coarseBounds: null,
-      refinedBounds: null,
-      refinedQuad: null,
-      rotationDegrees: null,
-      eccCorrelation: null,
-      failureReason: null,
     },
     focusedImageDataUrl: null,
   },
@@ -325,7 +335,7 @@ const createIndexedDbMock = () => {
     },
     createObjectStore: (name: string) => ensureStore(name),
     transaction: (storeName: string) => {
-      const store = ensureStore(storeName);
+      ensureStore(storeName);
       const tx: {
         oncomplete: (() => void) | null;
         onerror: (() => void) | null;
@@ -380,7 +390,6 @@ const createIndexedDbMock = () => {
         close: () => undefined,
       };
 
-      store.size;
       return tx;
     },
     close: () => undefined,
@@ -420,6 +429,192 @@ describe('preprocess storage tissue metadata', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  const installImageProxyMocks = () => {
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 4096;
+      naturalHeight = 2048;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    const currentWindow = window as typeof window & {
+      Image?: typeof MockImage;
+    };
+    currentWindow.Image = MockImage;
+
+    vi.stubGlobal('document', {
+      createElement: (tagName: string) => {
+        if (tagName !== 'canvas') {
+          throw new Error(`Unexpected element requested: ${tagName}`);
+        }
+
+        return {
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            drawImage: vi.fn(),
+          }),
+          toBlob: (
+            callback: BlobCallback,
+            mimeType?: string,
+          ) => {
+            callback(new Blob([new Uint8Array(1024)], { type: mimeType ?? 'image/png' }));
+          },
+        };
+      },
+    });
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => `blob:${blob.type}:${blob.size}`);
+  };
+
+  it('hydrates legacy PNG working previews without regenerating them', async () => {
+    const project = createProject();
+    project.sourceAssets.images.eosin = createSourceImage('eosin');
+    upsertPreprocessProjectMetadata(project);
+
+    const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<{
+      sourceAssets: {
+        images: {
+          eosin: Record<string, unknown>;
+        };
+      };
+    }>;
+    stored[0].sourceAssets.images.eosin = {
+      ...stored[0].sourceAssets.images.eosin,
+      dataUrl: PNG_DATA_URL,
+      workingDataUrl: PNG_DATA_URL,
+      workingWidth: 1000,
+      workingHeight: 1000,
+    };
+    localStorage.setItem('spatial-preprocess-projects', JSON.stringify(stored));
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated?.sourceAssets.images.eosin?.dataUrl).toBe(PNG_DATA_URL);
+    expect(hydrated?.sourceAssets.images.eosin?.workingDataUrl).toBe(PNG_DATA_URL);
+    expect(hydrated?.sourceAssets.images.eosin?.workingWidth).toBe(1000);
+    expect(hydrated?.sourceAssets.images.eosin?.workingHeight).toBe(1000);
+  });
+
+  it('regenerates missing working previews as JPEG proxies during hydration', async () => {
+    installImageProxyMocks();
+    const project = createProject();
+    project.sourceAssets.images.eosin = createSourceImage('eosin');
+    upsertPreprocessProjectMetadata(project);
+
+    const stored = JSON.parse(localStorage.getItem('spatial-preprocess-projects') ?? '[]') as Array<{
+      sourceAssets: {
+        images: {
+          eosin: Record<string, unknown>;
+        };
+      };
+    }>;
+    stored[0].sourceAssets.images.eosin = {
+      ...stored[0].sourceAssets.images.eosin,
+      dataUrl: PNG_DATA_URL,
+      thumbnailDataUrl: JPEG_DATA_URL,
+    };
+    localStorage.setItem('spatial-preprocess-projects', JSON.stringify(stored));
+
+    const hydrated = await getPreprocessProject(project.id);
+    const image = hydrated?.sourceAssets.images.eosin;
+
+    expect(image?.dataUrl).toBe(PNG_DATA_URL);
+    expect(image?.workingBlob?.type).toBe('image/jpeg');
+    expect(image?.workingDataUrl).toBe('blob:image/jpeg:1024');
+    expect(image?.workingWidth).toBe(2048);
+    expect(image?.workingHeight).toBe(1024);
+  });
+
+  it('parses valid versioned canonical tissue selection payloads', () => {
+    const matrix = {
+      rows: 2,
+      columns: 2,
+      values: [1, 0, 0, 1],
+    };
+
+    const result = parseTissueSelectionPayload(JSON.stringify({
+      version: 1,
+      tissueUpdatedAt: '2026-04-14T00:00:00.000Z',
+      matrix,
+      autoSelectedSpotIds: ['spot-a'],
+    }));
+
+    expect(result).toEqual({
+      canonical: {
+        version: 1,
+        tissueUpdatedAt: '2026-04-14T00:00:00.000Z',
+        matrix,
+        autoSelectedSpotIds: ['spot-a'],
+      },
+    });
+  });
+
+  it('creates versioned canonical tissue selection payloads from project tissue state', () => {
+    const project = createProject();
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+
+    expect(toStoredTissueSelectionPayload(project.tissueSelection)).toEqual({
+      version: 1,
+      tissueUpdatedAt: '2026-04-15T00:00:00.000Z',
+      matrix: project.tissueSelection.matrix,
+      autoSelectedSpotIds: ['spot-a'],
+    });
+
+    project.tissueSelection.updatedAt = null;
+
+    expect(toStoredTissueSelectionPayload(project.tissueSelection).tissueUpdatedAt).toBeNull();
+  });
+
+  it('parses null timestamp and null matrix canonical tissue selection payloads', () => {
+    const result = parseTissueSelectionPayload(JSON.stringify({
+      version: 1,
+      tissueUpdatedAt: null,
+      matrix: null,
+      autoSelectedSpotIds: [],
+    }));
+
+    expect(result).toEqual({
+      canonical: {
+        version: 1,
+        tissueUpdatedAt: null,
+        matrix: null,
+        autoSelectedSpotIds: [],
+      },
+    });
+  });
+
+  it('detects legacy string-array tissue selection payloads', () => {
+    expect(parseTissueSelectionPayload(JSON.stringify(['spot-a', 'spot-b']))).toEqual({
+      legacy: ['spot-a', 'spot-b'],
+    });
+  });
+
+  it.each([
+    ['non-object payload', JSON.stringify('spot-a')],
+    ['wrong version', JSON.stringify({ version: 2, tissueUpdatedAt: null, matrix: null, autoSelectedSpotIds: [] })],
+    ['wrong matrix length', JSON.stringify({
+      version: 1,
+      tissueUpdatedAt: null,
+      matrix: { rows: 2, columns: 2, values: [1, 0] },
+      autoSelectedSpotIds: [],
+    })],
+    ['invalid timestamp type', JSON.stringify({ version: 1, tissueUpdatedAt: 123, matrix: null, autoSelectedSpotIds: [] })],
+    ['non-binary matrix values', JSON.stringify({
+      version: 1,
+      tissueUpdatedAt: null,
+      matrix: { rows: 2, columns: 2, values: [1, 0, 2, 0] },
+      autoSelectedSpotIds: [],
+    })],
+    ['legacy array with non-string entries', JSON.stringify(['spot-a', 1])],
+    ['invalid json', '{not-json'],
+  ])('rejects malformed tissue selection payloads: %s', (_caseName, rawValue) => {
+    expect(parseTissueSelectionPayload(rawValue)).toEqual({ invalid: true });
   });
 
   it('persists canonical matrix and support metadata while stripping runtime selectedSpotIds', async () => {
@@ -826,6 +1021,240 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
     expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
     expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+  });
+
+  // ── Regression tests: matrix-vs-autoSelectedSpotIds disagreement ──────────
+  // These expose the bug where hydration reconstructs the matrix from
+  // autoSelectedSpotIds instead of persisting the canonical matrix independently.
+  // When autoSelectedSpotIds disagrees with the matrix, the matrix should win.
+
+  it('hydrates selectedSpotIds from canonical matrix when autoSelectedSpotIds is empty', async () => {
+    const project = createProject();
+    // Matrix has spot-b (index 65 = row 2, col 2) active
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.autoSelectedSpotIds = [];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    await upsertPreprocessProject(project);
+
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === '/preprocess-chip-configs/50um/manifest.json') {
+        return new Response(JSON.stringify({
+          id: '50um',
+          label: '50um',
+          gridRows: 64,
+          gridCols: 64,
+          spotDiameter: 1,
+          spotGap: 1,
+          barcodeTemplatePath: '/template.csv',
+          tissuePositionsPath: '/template.csv',
+        }), { status: 200 });
+      }
+      if (input === '/template.csv') {
+        return new Response([
+          'barcode,array_row,array_col',
+          'spot-a,1,1',
+          'spot-b,2,2',
+        ].join('\n'), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    // Matrix must survive round-trip even when autoSelectedSpotIds is empty
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    // selectedSpotIds must follow canonical matrix, not empty auto IDs
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual([]);
+  });
+
+  it('hydrates selectedSpotIds from canonical matrix when autoSelectedSpotIds disagree', async () => {
+    const project = createProject();
+    // Matrix has spot-b (index 65 = row 2, col 2) active
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    // autoSelectedSpotIds points at spot-a instead — this is stale auto-detection output
+    // that no longer matches the user-edited (or imported) matrix
+    project.tissueSelection.autoSelectedSpotIds = ['spot-a'];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    await upsertPreprocessProject(project);
+
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === '/preprocess-chip-configs/50um/manifest.json') {
+        return new Response(JSON.stringify({
+          id: '50um',
+          label: '50um',
+          gridRows: 64,
+          gridCols: 64,
+          spotDiameter: 1,
+          spotGap: 1,
+          barcodeTemplatePath: '/template.csv',
+          tissuePositionsPath: '/template.csv',
+        }), { status: 200 });
+      }
+      if (input === '/template.csv') {
+        return new Response([
+          'barcode,array_row,array_col',
+          'spot-a,1,1',
+          'spot-b,2,2',
+        ].join('\n'), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    // Matrix must be preserved exactly, overriding the conflicting auto IDs
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    // selectedSpotIds must follow the canonical matrix, NOT autoSelectedSpotIds
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+  });
+
+  it('does not fall back to stale autoSelectedSpotIds when canonical matrix is all zeros', async () => {
+    const project = createProject();
+    // Matrix is all zeros — user manually cleared the selection
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: new Array(4096).fill(0 as const),
+    };
+    // autoSelectedSpotIds still has stale data from a previous auto-detection run
+    project.tissueSelection.autoSelectedSpotIds = ['spot-a'];
+    project.tissueSelection.selectedSpotIds = [];
+
+    await upsertPreprocessProject(project);
+
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === '/preprocess-chip-configs/50um/manifest.json') {
+        return new Response(JSON.stringify({
+          id: '50um',
+          label: '50um',
+          gridRows: 64,
+          gridCols: 64,
+          spotDiameter: 1,
+          spotGap: 1,
+          barcodeTemplatePath: '/template.csv',
+          tissuePositionsPath: '/template.csv',
+        }), { status: 200 });
+      }
+      if (input === '/template.csv') {
+        return new Response([
+          'barcode,array_row,array_col',
+          'spot-a,1,1',
+          'spot-b,2,2',
+        ].join('\n'), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    // Matrix must not be resurrected by stale auto IDs
+    expect(hydrated?.tissueSelection.matrix?.values.every((v) => v === 0)).toBe(true);
+    // selectedSpotIds must be empty when the canonical matrix says no spots are active
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual([]);
+  });
+
+  it('removes canonical tissue selection payload when deleting a project', async () => {
+    const project = createProject();
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    await upsertPreprocessProject(project);
+    await deletePreprocessProject(project.id);
+
+    const recreatedProject = createProject();
+    recreatedProject.tissueSelection.updatedAt = '2026-04-16T00:00:00.000Z';
+    recreatedProject.tissueSelection.matrix = null;
+    recreatedProject.tissueSelection.autoSelectedSpotIds = [];
+    recreatedProject.tissueSelection.selectedSpotIds = null;
+    upsertPreprocessProjectMetadata(recreatedProject);
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated?.tissueSelection.matrix).toBeNull();
+    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual([]);
+    expect(hydrated?.tissueSelection.selectedSpotIds).toBeNull();
+  });
+
+  it('keeps newer canonical tissue payload when an older timestamp save arrives later', async () => {
+    const project = createProject();
+    project.name = 'Fresh metadata';
+    project.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProject(project, { mode: 'tissue' });
+
+    const olderProject = createProject();
+    olderProject.name = 'Stale metadata';
+    olderProject.updatedAt = '2026-04-14T00:00:00.000Z';
+    olderProject.tissueSelection.updatedAt = '2026-04-14T00:00:00.000Z';
+    olderProject.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 0 ? 1 : 0 as const)),
+    };
+    olderProject.tissueSelection.autoSelectedSpotIds = ['spot-a'];
+    olderProject.tissueSelection.selectedSpotIds = ['spot-a'];
+
+    await upsertPreprocessProject(olderProject, { mode: 'tissue' });
+
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated?.name).toBe('Fresh metadata');
+    expect(hydrated?.updatedAt).toBe('2026-04-15T00:00:00.000Z');
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+  });
+
+  it('creates metadata for a first tissue-only save', async () => {
+    const project = createProject();
+    project.name = 'Tissue first project';
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    await upsertPreprocessProject(project, { mode: 'tissue' });
+
+    const summaries = await readPreprocessProjectSummaries();
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.name).toBe('Tissue first project');
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
   });
 
   it('strips storage-only projectedSpotIndex from hydrated runtime projects and package serialization', async () => {

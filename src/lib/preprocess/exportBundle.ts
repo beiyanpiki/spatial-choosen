@@ -41,6 +41,7 @@ type PreprocessExportReadiness =
         spotDiameterFullres: number;
         tissueHiresScale: number;
         tissueLowresScale: number;
+        alignedImageDataUrl: string | null;
       };
     };
 
@@ -188,7 +189,7 @@ const toMatrixCsv = (matrixValues: number[], rows: number, columns: number) => {
 
 export function getPreprocessZipExportReadiness(
   project: PreprocessProject,
-  _options?: { includeAlignedImage?: boolean },
+  options?: { includeAlignedImage?: boolean },
 ): PreprocessExportReadiness {
   if (project.cropQc.status !== 'complete' || project.cropQc.isStale) {
     return {
@@ -214,6 +215,14 @@ export function getPreprocessZipExportReadiness(
     return {
       canExport: false,
       reason: 'Canonical HE crop assets are missing. Re-run Crop/QC before export.',
+    };
+  }
+
+  const alignedImageDataUrl = project.cropQc.checkerboardPreview?.dataUrl ?? project.cropQc.checkerboardPreviewDataUrl;
+  if (options?.includeAlignedImage && !alignedImageDataUrl) {
+    return {
+      canExport: false,
+      reason: 'Aligned tissue image export requires checkerboard Crop/QC data.',
     };
   }
 
@@ -330,6 +339,7 @@ export function getPreprocessZipExportReadiness(
       spotDiameterFullres,
       tissueHiresScale,
       tissueLowresScale,
+      alignedImageDataUrl,
     },
   };
 }
@@ -340,7 +350,7 @@ export async function exportPreprocessZip(args: {
   includeAlignedImage: boolean;
 }) {
   const { project, includeProjectJson, includeAlignedImage } = args;
-  const readiness = getPreprocessZipExportReadiness(project);
+  const readiness = getPreprocessZipExportReadiness(project, { includeAlignedImage });
   if (!readiness.canExport) {
     throw new Error(readiness.reason);
   }
@@ -354,6 +364,7 @@ export async function exportPreprocessZip(args: {
     selectedSpotIds,
     tissueHiresScale,
     tissueLowresScale,
+    alignedImageDataUrl,
   } = readiness.data;
   const heFullresBytes = await imageSourceToBytes(heCropAssets.fullres.dataUrl);
   const { width: exportFullresWidth, height: exportFullresHeight } = getPngDimensionsFromBytes(heFullresBytes);
@@ -381,7 +392,10 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {
-    zip.file('aligned_tissue_image.png', heFullresBytes);
+    if (!alignedImageDataUrl) {
+      throw new Error('Aligned tissue image export requires checkerboard Crop/QC data.');
+    }
+    zip.file('aligned_tissue_image.png', await imageSourceToBytes(alignedImageDataUrl));
   }
 
   if (includeProjectJson) {

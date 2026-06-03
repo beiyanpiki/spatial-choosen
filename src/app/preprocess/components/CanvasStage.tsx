@@ -4,15 +4,15 @@ import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@ch
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { computeBaseView, getTransform } from '@/lib/canvasViewport';
 import {
-  invertDisplayRectPointToSource,
-  projectSourcePointToDisplayRect,
-} from '@/lib/preprocess/imageTransforms';
-import {
   clampNormalizedSquareRect,
   LOCALIZATION_BOX_COLOR_SWATCHS,
   resizeChipBounds,
   translateChipBounds,
 } from '@/lib/preprocess/localization';
+import {
+  invertDisplayRectPointToSource,
+  projectSourcePointToDisplayRect,
+} from '@/lib/preprocess/imageTransforms';
 import type {
   LocalizationBoxColor,
   LocalizationImageTransform,
@@ -325,8 +325,8 @@ export function CanvasStage({
       displayTransform.originX + displayTransform.width / 2,
       displayTransform.originY + displayTransform.height / 2,
     );
-    context.rotate((imageTransform.rotationDegrees * Math.PI) / 180);
     context.scale(imageTransform.flipHorizontal ? -1 : 1, imageTransform.flipVertical ? -1 : 1);
+    context.rotate((imageTransform.rotationDegrees * Math.PI) / 180);
     context.drawImage(
       activeImageElement,
       -displayTransform.width / 2,

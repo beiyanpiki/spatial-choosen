@@ -6,15 +6,15 @@ import type {
   PreprocessSourceImage,
   PreprocessStepId,
   TissueActivationMatrix,
-} from '../../types/preprocess';
+} from '@/types/preprocess';
 import {
   PREPROCESS_DB_NAME,
   PREPROCESS_DERIVED_IMAGE_STORE,
   PREPROCESS_NUMERIC_DEFAULTS,
   PREPROCESS_STORAGE_KEY,
-} from './constants';
+} from '@/lib/preprocess/constants';
 import { migratePreprocessProject } from './migrations';
-import { createDownsampledBlobFromSource, loadImageElement } from './sourceImage';
+import { createWorkingProxyBlobFromSource, loadImageElement } from '@/lib/preprocess/sourceImage';
 import { validateTissueActivationMatrix } from './tissueMatrix';
 import { resolveTissueSelectionSupport } from './tissueSupport';
 
@@ -362,10 +362,13 @@ const getWorkingDimensions = (sourceWidth: number, sourceHeight: number) => {
 };
 
 const hydratePackagedSourceBlob = async (image: PreprocessSourceImage, blob: Blob): Promise<PreprocessSourceImage> => {
-  const objectUrl = URL.createObjectURL(blob);
+  const sourceBlob = blob.type || !image.mimeType
+    ? blob
+    : new Blob([blob], { type: image.mimeType });
+  const objectUrl = URL.createObjectURL(sourceBlob);
   const hydratedImage: PreprocessSourceImage = {
     ...image,
-    sourceBlob: blob,
+    sourceBlob,
     objectUrl,
     dataUrl: objectUrl,
   };
@@ -376,22 +379,21 @@ const hydratePackagedSourceBlob = async (image: PreprocessSourceImage, blob: Blo
 
   try {
     const sourceImage = await loadImageElement(objectUrl);
-    const workingBlob = await createDownsampledBlobFromSource(
+    const workingProxy = await createWorkingProxyBlobFromSource(
       sourceImage,
       sourceImage.naturalWidth,
       sourceImage.naturalHeight,
-      PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
     );
-    const workingObjectUrl = URL.createObjectURL(workingBlob);
+    const workingObjectUrl = URL.createObjectURL(workingProxy.blob);
     const workingDimensions = getWorkingDimensions(sourceImage.naturalWidth, sourceImage.naturalHeight);
 
     return {
       ...hydratedImage,
-      workingBlob,
+      workingBlob: workingProxy.blob,
       workingObjectUrl,
       workingDataUrl: workingObjectUrl,
-      workingWidth: hydratedImage.workingWidth ?? workingDimensions.width,
-      workingHeight: hydratedImage.workingHeight ?? workingDimensions.height,
+      workingWidth: workingProxy.width ?? hydratedImage.workingWidth ?? workingDimensions.width,
+      workingHeight: workingProxy.height ?? hydratedImage.workingHeight ?? workingDimensions.height,
     };
   } catch (error) {
     void error;
@@ -1107,10 +1109,22 @@ function deserializePreprocessProjectText(text: string): PreprocessProject {
   );
 }
 
+const toZipLoadInput = async (file: File | Blob) => (
+  typeof FileReader !== 'undefined'
+    ? file
+    : await file.arrayBuffer()
+);
+
 export async function deserializePreprocessImport(file: File | Blob): Promise<PreprocessProject> {
-  const fileName = file instanceof File ? file.name.toLowerCase() : '';
+  if (!isBrowser()) {
+    throw new Error("Preprocess project import is available in-browser only");
+  }
+
+  const fileName = typeof File !== 'undefined' && file instanceof File
+    ? file.name.toLowerCase()
+    : '';
   if (fileName.endsWith('.zip')) {
-    const zip = await JSZip.loadAsync(file);
+    const zip = await JSZip.loadAsync(await toZipLoadInput(file));
     const projectEntry = zip.file('project.json');
     if (!projectEntry) {
       throw new Error('ZIP does not contain project.json');

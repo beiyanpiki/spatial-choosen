@@ -86,6 +86,7 @@ const waitForRuntime = (globalObject: OpenCvGlobal): Promise<void> => {
     };
 
     const tick = () => {
+      if (resolved) return;
       if (isReady(globalObject.cv)) {
         success();
         return;
@@ -94,14 +95,14 @@ const waitForRuntime = (globalObject: OpenCvGlobal): Promise<void> => {
         fail();
         return;
       }
-      window.setTimeout(tick, 50);
+      if (!resolved) window.setTimeout(tick, 50);
     };
 
     const cvObj = globalObject.cv;
     if (cvObj && typeof cvObj.onRuntimeInitialized === 'function') {
       const originalCallback = cvObj.onRuntimeInitialized;
-      cvObj.onRuntimeInitialized = function() {
-        originalCallback();
+      cvObj.onRuntimeInitialized = function(this: NonNullable<OpenCvGlobal['cv']>) {
+        originalCallback.call(this);
         success();
       };
     }
@@ -201,23 +202,21 @@ export async function loadOpenCv(): Promise<{ cv: OpenCvRuntime }> {
   }
 
   if (!globalObject.__opencvScriptPromise) {
-    globalObject.__opencvScriptPromise = new Promise<void>((resolve, reject) => {
-      (async () => {
-        try {
-          await appendScriptTag(globalObject);
-          await waitForRuntime(globalObject);
-          
-          if (!isReady(globalObject.cv)) {
-            throw new Error('OpenCV runtime not ready after wait');
-          }
-          
-          resolve();
-        } catch (error) {
-          globalObject.__opencvLoadError = error instanceof Error ? error : new Error(String(error));
-          reject(globalObject.__opencvLoadError);
+    globalObject.__opencvScriptPromise = (async () => {
+      try {
+        await appendScriptTag(globalObject);
+        await waitForRuntime(globalObject);
+
+        if (!isReady(globalObject.cv)) {
+          throw new Error('OpenCV runtime not ready after wait');
         }
-      })();
-    });
+      } catch (error) {
+        const loadError = error instanceof Error ? error : new Error(String(error));
+        globalObject.__opencvLoadError = loadError;
+        globalObject.__opencvScriptPromise = undefined;
+        throw loadError;
+      }
+    })();
   }
 
   await globalObject.__opencvScriptPromise;
