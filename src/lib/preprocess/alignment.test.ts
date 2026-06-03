@@ -217,6 +217,38 @@ const weakManualControlPoints: AlignmentControlPoint[] = [
 	},
 ];
 
+const createLooseScaleControlPoints = (): AlignmentControlPoint[] => {
+	const scale = 0.006;
+	const translationX = 75;
+	const translationY = 431;
+	const referenceWidth = 1000;
+	const referenceHeight = 1000;
+	const movingWidth = 160000;
+	const movingHeight = 160000;
+	const movingPoints = [
+		{ x: 10000, y: 10000 },
+		{ x: 140000, y: 10000 },
+		{ x: 10000, y: 140000 },
+		{ x: 140000, y: 140000 },
+		{ x: 80000, y: 16000 },
+		{ x: 16000, y: 80000 },
+		{ x: 80000, y: 150000 },
+		{ x: 150000, y: 80000 },
+	];
+
+	return movingPoints.map((target, index) => ({
+		id: `loose-scale-${index + 1}`,
+		target: {
+			x: target.x / movingWidth,
+			y: target.y / movingHeight,
+		},
+		source: {
+			x: (scale * target.x + translationX) / referenceWidth,
+			y: (scale * target.y + translationY) / referenceHeight,
+		},
+	}));
+};
+
 describe('solveAffineAlignment', () => {
 	it('keeps every marked point in all-points mode while strict acceptance rejects the solve', () => {
 		const result = solveAffineAlignment({
@@ -298,6 +330,23 @@ describe('solveAffineAlignment', () => {
 		expect(result.qualityFlags.accepted).toBe(false);
 		expect(result.solveAccepted).toBe(false);
 		expect(result.failureReason).toBe('insufficient-inliers');
+	});
+
+	it('accepts a clean solve when valid image scales are far below the former strict minimum', () => {
+		const result = solveAffineAlignment({
+			cv: fakeCv,
+			controlPoints: createLooseScaleControlPoints(),
+			chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+			referenceImageSize: { width: 1000, height: 1000 },
+			movingImageSize: { width: 160000, height: 160000 },
+			solveMode: 'allPoints',
+		});
+
+		expect(result.qualityFlags.scaleRange).toBe(true);
+		expect(result.qualityFlags.accepted).toBe(true);
+		expect(result.solveAccepted).toBe(true);
+		expect(result.transform?.scaleX).toBeCloseTo(0.006, 5);
+		expect(result.transform?.scaleY).toBeCloseTo(0.006, 5);
 	});
 
 
