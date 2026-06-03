@@ -1269,6 +1269,10 @@ export async function upsertPreprocessProject(
   const mode = options?.mode ?? 'full';
 
   if (mode === 'tissue') {
+    const metas = readRawProjects() as PreprocessProjectMeta[];
+    if (!metas.some((entry) => entry.id === project.id)) {
+      upsertPreprocessProjectMetadata(project);
+    }
     await syncTissueSelectionStore(project.id, project.tissueSelection);
     return;
   }

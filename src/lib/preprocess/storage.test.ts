@@ -12,6 +12,7 @@ import {
   deletePreprocessProject,
   getPreprocessProject,
   parseTissueSelectionPayload,
+  readPreprocessProjectSummaries,
   toStoredTissueSelectionPayload,
   upsertPreprocessProject,
   upsertPreprocessProjectMetadata,
@@ -1231,6 +1232,29 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
     expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
     expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+  });
+
+  it('creates metadata for a first tissue-only save', async () => {
+    const project = createProject();
+    project.name = 'Tissue first project';
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+
+    await upsertPreprocessProject(project, { mode: 'tissue' });
+
+    const summaries = await readPreprocessProjectSummaries();
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.name).toBe('Tissue first project');
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
   });
 
   it('strips storage-only projectedSpotIndex from hydrated runtime projects and package serialization', async () => {

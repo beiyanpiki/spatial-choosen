@@ -323,6 +323,19 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.tissueSelection.matrix?.values).toHaveLength(4096);
   });
 
+  it('rejects import before File checks outside browser runtime', async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal('window', undefined);
+    vi.stubGlobal('File', undefined);
+    const file = new Blob(['{}'], {
+      type: 'application/x-spatial-preprocess+json',
+    });
+
+    await expect(deserializePreprocessImport(file)).rejects.toThrow(
+      'Preprocess project import is available in-browser only',
+    );
+  });
+
   it('regenerates missing package working previews as JPEG proxies while retaining source blobs', async () => {
     installImageProxyMocks();
     const project = createProject();

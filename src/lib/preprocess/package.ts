@@ -1116,7 +1116,13 @@ const toZipLoadInput = async (file: File | Blob) => (
 );
 
 export async function deserializePreprocessImport(file: File | Blob): Promise<PreprocessProject> {
-  const fileName = file instanceof File ? file.name.toLowerCase() : '';
+  if (!isBrowser()) {
+    throw new Error("Preprocess project import is available in-browser only");
+  }
+
+  const fileName = typeof File !== 'undefined' && file instanceof File
+    ? file.name.toLowerCase()
+    : '';
   if (fileName.endsWith('.zip')) {
     const zip = await JSZip.loadAsync(await toZipLoadInput(file));
     const projectEntry = zip.file('project.json');
