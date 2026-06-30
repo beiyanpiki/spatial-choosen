@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+	AlignmentAffineMatrix,
   LegacyPreprocessProject,
   PreprocessPoint,
   LocalizationImageTransform,
@@ -18,7 +19,6 @@ import {
 } from '@/lib/preprocess/localization';
 import {
 	getOrientedChipBoundsPixelRect,
-	projectSourcePointToDisplayRect,
 } from '@/lib/preprocess/imageTransforms';
 
 const mockRunCropQc = vi.fn();
@@ -39,8 +39,8 @@ const ROTATED_LOCALIZE_WORKING_IMAGE_SIZE = {
 	height: 1862,
 };
 const EXPECTED_ROTATED_LOCALIZE_DRAG_BOUNDS: PreprocessRect = {
-	x: 0.23919138590494793,
-	y: 0.06374999999999995,
+	x: 0.322059326171875,
+	y: 0.2851041666666667,
 	width: 0.34,
 	height: 0.37386718750000003,
 };
@@ -518,9 +518,11 @@ const sourcePointToWorkspaceScreen = (
 	imageTransform: LocalizationImageTransform,
 ) => {
 	const displayTransform = getWorkspaceDisplayTransform(imageAspectRatio, imageTransform.scale);
-	const projected = projectSourcePointToDisplayRect(point, imageTransform, displayTransform);
 
-	return [projected.x, projected.y] as [number, number];
+	return [
+		displayTransform.originX + point.x * displayTransform.width,
+		displayTransform.originY + point.y * displayTransform.height,
+	] as [number, number];
 };
 
 const getRectSourceCorners = (rect: PreprocessRect) => [
@@ -839,7 +841,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		expect(nonHeProps?.showMovingImagePaddingBoundary).toBe(false);
 	});
 
-	it('moves Localization overlay with image rotation while preserving source chip bounds', async () => {
+	it('keeps Localization overlay canvas-axis-aligned while image rotation changes', async () => {
 		const user = userEvent.setup();
 		let latestProject = createBaseProject();
 		let initialChipBounds: PreprocessRect | null = null;
@@ -858,17 +860,20 @@ describe('PreprocessWorkspace rotation contract', () => {
 			initialChipBounds = JSON.parse(JSON.stringify(latestProject.localization.chipBounds)) as PreprocessRect;
 		});
 
-			await user.click(screen.getByTestId('localize-stage-rotate-right-90'));
+		await user.click(screen.getByTestId('localize-stage-rotate-right-90'));
 
 		await waitFor(() => {
 			expect(screen.getByTestId('localize-stage-rotation-value')).toHaveTextContent('90.0°');
 		});
+		if (!initialChipBounds) {
+			throw new Error('Expected initial localization chip bounds to be captured');
+		}
 
-			const afterPoints = parsePoints(getPolygonPoints('localize-box-outline'));
-			expectPointPairsCloseTo(
-				afterPoints,
-				expectedOutlinePoints(
-						initialChipBounds,
+		const afterPoints = parsePoints(getPolygonPoints('localize-box-outline'));
+		expectPointPairsCloseTo(
+			afterPoints,
+			expectedOutlinePoints(
+				initialChipBounds,
 					latestProject.localization.imageTransform,
 					200 / 150,
 				),
@@ -877,7 +882,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		expect(latestProject.localization.chipBounds).toEqual(initialChipBounds);
 	});
 
-	it('moves HEFocus overlay with image rotation while preserving source chip bounds', async () => {
+	it('keeps HEFocus overlay canvas-axis-aligned while image rotation changes', async () => {
 		const user = userEvent.setup();
 		let latestProject = createBaseProject();
 		latestProject.currentStep = 'heFocus';
@@ -923,7 +928,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		expect(chipBounds.width).toBeCloseTo(0.3);
 	});
 
-	it('renders transformed Localization overlay on first paint when the saved transform starts rotated and flipped', async () => {
+	it('renders canvas-axis-aligned Localization overlay on first paint when the saved transform starts rotated and flipped', async () => {
 		const localizationProject = createBaseProject();
 		localizationProject.localization.imageTransform = {
 			...localizationProject.localization.imageTransform,
@@ -952,7 +957,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		expect(screen.getByTestId('localize-stage-rotation-value')).toHaveTextContent('90.0°');
 	});
 
-	it('renders transformed HEFocus overlay on first paint when the saved transform starts rotated and flipped', async () => {
+	it('renders canvas-axis-aligned HEFocus overlay on first paint when the saved transform starts rotated and flipped', async () => {
 		const heFocusProject = createBaseProject();
 		heFocusProject.currentStep = 'heFocus';
 		heFocusProject.heFocus.imageTransform = {
@@ -1042,7 +1047,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		expectPointCloseTo(markerPoints[1], getVisualLowerLeftPoint(outlinePoints));
 	});
 
-	it('regenerates the Localize reference crop from the rotated committed source-space chip bounds', async () => {
+	it('regenerates the Localize reference crop from rotated canvas-axis chip bounds', async () => {
 		stubImageDimensions(
 			ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.width,
 			ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height,
@@ -1162,7 +1167,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 		}
 	});
 
-	it('sends the rotated committed source-space chip bounds into Crop/QC', async () => {
+	it('sends rotated canvas-axis chip bounds into Crop/QC', async () => {
 		stubImageDimensions(
 			ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.width,
 			ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height,
@@ -1229,10 +1234,10 @@ describe('PreprocessWorkspace rotation contract', () => {
 				...latestProject,
 				currentStep: 'cropQc' as const,
 				alignment: {
-						...latestProject.alignment,
-						movingImage: 'eosin' as const,
-						affineMatrix: [1, 0, 0, 0, 1, 0] as const,
-					},
+					...latestProject.alignment,
+					movingImage: 'eosin' as const,
+					affineMatrix: [1, 0, 0, 0, 1, 0] satisfies AlignmentAffineMatrix,
+				},
 			};
 
 			render(<WorkspaceHarness initialProject={cropQcProject} />);

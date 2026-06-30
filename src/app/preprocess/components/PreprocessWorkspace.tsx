@@ -104,6 +104,11 @@ import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
 
+type ProjectPersistOptions = {
+	mode?: PreprocessPersistMode;
+	strategy?: "immediate" | "debounced";
+};
+
 type PreprocessWorkspaceProps = {
 	autosaveStatus: AutosaveStatus;
 	autosaveDetail: string | null;
@@ -112,10 +117,7 @@ type PreprocessWorkspaceProps = {
 	onBackToLanding: () => void;
 	onProjectMutate: (
 		updater: (current: PreprocessProject) => PreprocessProject,
-		persistOptions?: {
-			mode?: PreprocessPersistMode;
-			strategy?: "immediate" | "debounced";
-		},
+		persistOptions?: ProjectPersistOptions,
 	) => void;
 	onProjectNameChange: (value: string) => void;
 	onStepChange: (stepId: PreprocessStepId) => void;
@@ -140,6 +142,34 @@ const autosaveTone: Record<AutosaveStatus, string> = {
 	retrying: "orange",
 	error: "red",
 };
+
+const METADATA_DEBOUNCED_PERSIST_OPTIONS = {
+	mode: "metadata",
+	strategy: "debounced",
+} satisfies ProjectPersistOptions;
+
+const hasCropQcPersistentPayload = (cropQc: CropQcSlice) => Boolean(
+	cropQc.cropAssets?.eosin?.fullres.dataUrl ||
+		cropQc.cropAssets?.he?.fullres.dataUrl ||
+		cropQc.checkerboardPreview?.dataUrl ||
+		cropQc.featureMatchesPreview?.dataUrl ||
+		cropQc.eosinPreviewDataUrl ||
+		cropQc.previewDataUrl ||
+		cropQc.checkerboardPreviewDataUrl ||
+		cropQc.featureMatchesPreviewDataUrl,
+);
+
+const hasTissuePersistentPayload = (tissueSelection: PreprocessProject["tissueSelection"]) => (
+	tissueSelection.matrix !== null || tissueSelection.autoSelectedSpotIds.length > 0
+);
+
+const hasLocalizationDownstreamPersistentPayload = (project: PreprocessProject | null) => Boolean(
+	project && (
+		project.heFocus.focusedImageDataUrl ||
+		hasCropQcPersistentPayload(project.cropQc) ||
+		hasTissuePersistentPayload(project.tissueSelection)
+	),
+);
 
 const AlignmentPanelWithPaddingBoundary =
 	AlignmentPanel as ComponentType<AlignmentPanelWithPaddingBoundaryProps>;
@@ -371,19 +401,19 @@ const placeholderCopyByStep: Record<
 > = {
 	sourceAssets: {
 		title: "Source image intake",
-		body: "Upload the eosin reference image and the matching H&E image for this section. Replacing either source image keeps the project local and refreshes downstream registration, crop QC, spot projection, and tissue selection outputs.",
+		body: "Upload the eosin reference image and the matching HE image for this section. Replacing either source image refreshes downstream registration, crop QC, spot projection, and tissue selection outputs.",
 	},
 	localization: {
 		title: "Chip localization",
 		body: "Orient the eosin reference image and place the capture-area box over the chip region. Saved coordinates remain normalized in source-image space.",
 	},
 	heFocus: {
-		title: "H&E focus",
-		body: "Define the H&E region used for registration. Match the chip-localized tissue area from the eosin reference while preserving the original H&E coordinate system.",
+		title: "HE focus",
+		body: "Define the HE region used for registration. Match the chip-localized tissue area from the eosin reference while preserving the original HE coordinate system.",
 	},
 	alignment: {
 		title: "Image registration",
-		body: "Create paired eosin and H&E landmarks, verify coverage, and solve the affine registration with OpenCV quality gates.",
+		body: "Create paired eosin and HE landmarks, verify coverage, and solve the affine registration with OpenCV quality gates.",
 	},
 	cropQc: {
 		title: "Crop QC",
@@ -725,6 +755,12 @@ export function PreprocessWorkspace({
 		currentHeImageSource?.dataUrl ??
 		null;
 	const focusedHeImageDataUrl = project?.heFocus.focusedImageDataUrl ?? null;
+	const localizationMetadataPersistOptions = hasLocalizationDownstreamPersistentPayload(project)
+		? undefined
+		: METADATA_DEBOUNCED_PERSIST_OPTIONS;
+	const heFocusMetadataPersistOptions = focusedHeImageDataUrl
+		? undefined
+		: METADATA_DEBOUNCED_PERSIST_OPTIONS;
 	const heFocusStageChipBounds =
 		heFocusDraftChipBounds ?? project?.heFocus.chipBounds ?? null;
 	const heFocusComparisonSource = useMemo(() => {
@@ -802,7 +838,10 @@ export function PreprocessWorkspace({
 	const applyLocalizationUpdate = useCallback(
 		(
 			updater: (current: LocalizationSlice) => LocalizationSlice,
-			options?: { invalidateDownstream?: boolean },
+			options?: {
+				invalidateDownstream?: boolean;
+				persistOptions?: ProjectPersistOptions;
+			},
 		) => {
 			onProjectMutate((current) => {
 				const nextLocalizationBase = normalizeLocalizationSlice(
@@ -834,7 +873,7 @@ export function PreprocessWorkspace({
 				return options?.invalidateDownstream === false
 					? nextProject
 					: invalidateOnLocalizationChange(nextProject);
-			});
+			}, options?.persistOptions);
 		},
 		[onProjectMutate],
 	);
@@ -845,6 +884,7 @@ export function PreprocessWorkspace({
 			options?: {
 				invalidateDownstream?: boolean;
 				invalidationScope?: "change" | "commit";
+				persistOptions?: ProjectPersistOptions;
 				preserveFocusedImage?: boolean;
 			},
 		) => {
@@ -887,7 +927,7 @@ export function PreprocessWorkspace({
 					: options?.invalidationScope === "commit"
 						? invalidateOnHeFocusCommit(nextProject)
 						: invalidateOnHeFocusChange(nextProject);
-			});
+			}, options?.persistOptions);
 		},
 		[onProjectMutate],
 	);
@@ -1053,7 +1093,7 @@ export function PreprocessWorkspace({
 				});
 
 				toast({
-					title: "H&E image loaded",
+					title: "HE image loaded",
 					description:
 						"Landmark registration can now use this image. Downstream preprocessing outputs were marked stale.",
 					status: "success",
@@ -1061,7 +1101,7 @@ export function PreprocessWorkspace({
 			} catch (error) {
 				console.error(error);
 				toast({
-					title: "Unable to load H&E image",
+					title: "Unable to load HE image",
 					description:
 						error instanceof Error
 							? error.message
@@ -1618,15 +1658,18 @@ export function PreprocessWorkspace({
 
 	const handleLocalizationRotationChange = useCallback(
 		(value: number) => {
-			applyLocalizationUpdate((current) => ({
-				...current,
-				imageTransform: {
-					...current.imageTransform,
-					rotationDegrees: normalizeLocalizationRotationDegrees(value),
-				},
-			}));
+			applyLocalizationUpdate(
+				(current) => ({
+					...current,
+					imageTransform: {
+						...current.imageTransform,
+						rotationDegrees: normalizeLocalizationRotationDegrees(value),
+					},
+				}),
+				{ persistOptions: localizationMetadataPersistOptions },
+			);
 		},
-		[applyLocalizationUpdate],
+		[applyLocalizationUpdate, localizationMetadataPersistOptions],
 	);
 
 	const tissueSupport = project
@@ -2014,14 +2057,14 @@ export function PreprocessWorkspace({
 											}}
 										/>
 										<SourceAssetUploader
-											label="H&E source image"
-											description="Moving image for H&E focus, landmark registration, and registered crop generation."
+											label="HE source image"
+											description="Moving image for HE focus, landmark registration, and registered crop generation."
 											buttonLabel={
 												project.sourceAssets.images.he
-													? "Replace H&E image"
-													: "Upload H&E image"
+													? "Replace HE image"
+													: "Upload HE image"
 											}
-											emptyText="No H&E source image uploaded yet."
+											emptyText="No HE source image uploaded yet."
 											image={project.sourceAssets.images.he}
 											onUpload={(fileList) => {
 												void handleUploadHe(fileList);
@@ -2043,68 +2086,86 @@ export function PreprocessWorkspace({
 										image={localizationImage}
 										imageTransform={project.localization.imageTransform}
 										onScaleChange={(value) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
-														...current.imageTransform,
-														scale: value,
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
+										applyLocalizationUpdate(
+											(current) => ({
+												...current,
+												imageTransform: {
+													...current.imageTransform,
+													scale: value,
+												},
+											}),
+											{
+												invalidateDownstream: false,
+												persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+											},
+										);
+									}}
 										onScaleDelta={(delta) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
+										applyLocalizationUpdate(
+											(current) => ({
+												...current,
+												imageTransform: {
 														...current.imageTransform,
 														scale: clampLocalizationScale(
 															current.imageTransform.scale + delta,
 														),
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
+												},
+											}),
+											{
+												invalidateDownstream: false,
+												persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+											},
+										);
+									}}
 										onRotationChange={handleLocalizationRotationChange}
 										onRotationDelta={(delta) => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													rotationDegrees: normalizeLocalizationRotationDegrees(
-														current.imageTransform.rotationDegrees + delta,
-													),
-												},
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+													imageTransform: {
+														...current.imageTransform,
+											rotationDegrees: normalizeLocalizationRotationDegrees(
+												current.imageTransform.rotationDegrees + delta,
+											),
+										},
+									}),
+									{ persistOptions: localizationMetadataPersistOptions },
+								);
+							}}
 										onFlipHorizontal={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													flipHorizontal:
-														!current.imageTransform.flipHorizontal,
-												},
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+													imageTransform: {
+														...current.imageTransform,
+										flipHorizontal:
+											!current.imageTransform.flipHorizontal,
+									},
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 										onFlipVertical={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													flipVertical: !current.imageTransform.flipVertical,
-												},
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+													imageTransform: {
+														...current.imageTransform,
+										flipVertical: !current.imageTransform.flipVertical,
+									},
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 										onResetTransform={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+									imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 										onChipBoundsChange={(chipBounds) => {
 											setLocalizationDraftChipBounds(chipBounds);
 										}}
@@ -2113,12 +2174,15 @@ export function PreprocessWorkspace({
 										}}
 										onChipBoundsCommit={(chipBounds) => {
 											setLocalizationDraftChipBounds(null);
-											applyLocalizationUpdate((current) => ({
-												...current,
-												chipBounds,
-												method: "manual",
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+									chipBounds,
+									method: "manual",
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 									/>
 								</Flex>
 							) : project.currentStep === "heFocus" ? (
@@ -2140,18 +2204,18 @@ export function PreprocessWorkspace({
 											image={currentHeImageSource}
 											imageTransform={project.heFocus.imageTransform}
 											labels={{
-												badgeReady: "H&E preview ready",
-												badgeWaiting: "Awaiting H&E image",
+												badgeReady: "HE preview ready",
+												badgeWaiting: "Awaiting HE image",
 												description:
-													"Adjust the square H&E registration region and orientation before landmark pairing.",
+													"Adjust the square HE registration region and orientation before landmark pairing.",
 												emptyDescription:
-													"Upload the H&E source image in Source images before defining the registration region.",
-												emptyTitle: "No H&E image loaded",
-												heading: "H&E focus canvas",
-												overlayAriaLabel: "H&E registration region overlay",
-												resetAriaLabel: "Reset H&E focus transform",
+													"Upload the HE source image in Source images before defining the registration region.",
+												emptyTitle: "No HE image loaded",
+												heading: "HE focus canvas",
+												overlayAriaLabel: "HE registration region overlay",
+												resetAriaLabel: "Reset HE focus transform",
 												savedHint:
-													"Saved H&E focus bounds stay square and normalized in original H&E image coordinates.",
+													"Saved HE focus bounds stay square and normalized in original HE image coordinates.",
 											}}
 											onChipBoundsCancel={() => {
 												setHeFocusDraftChipBounds(null);
@@ -2165,11 +2229,12 @@ export function PreprocessWorkspace({
 															scale: value,
 														},
 													}),
-													{
-														invalidateDownstream: false,
-														preserveFocusedImage: true,
-													},
-												);
+												{
+													invalidateDownstream: false,
+													persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+													preserveFocusedImage: true,
+												},
+											);
 											}}
 											onScaleDelta={(delta) => {
 												applyHeFocusUpdate(
@@ -2182,24 +2247,29 @@ export function PreprocessWorkspace({
 															),
 														},
 													}),
-													{
-														invalidateDownstream: false,
-														preserveFocusedImage: true,
-													},
-												);
+												{
+													invalidateDownstream: false,
+													persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+													preserveFocusedImage: true,
+												},
+											);
 											}}
 											onRotationChange={(value) => {
-												applyHeFocusUpdate((current) => ({
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
 														rotationDegrees:
 															normalizeLocalizationRotationDegrees(value),
 													},
-												}));
-											}}
-											onRotationDelta={(delta) => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onRotationDelta={(delta) => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
@@ -2208,33 +2278,44 @@ export function PreprocessWorkspace({
 																current.imageTransform.rotationDegrees + delta,
 															),
 													},
-												}));
-											}}
-											onFlipHorizontal={() => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onFlipHorizontal={() => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
 														flipHorizontal:
 															!current.imageTransform.flipHorizontal,
 													},
-												}));
-											}}
-											onFlipVertical={() => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onFlipVertical={() => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
 														flipVertical: !current.imageTransform.flipVertical,
 													},
-												}));
-											}}
-											onResetTransform={() => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onResetTransform={() => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-												}));
-											}}
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
 											onChipBoundsChange={(chipBounds) => {
 												setHeFocusDraftChipBounds(chipBounds);
 											}}
@@ -2247,6 +2328,7 @@ export function PreprocessWorkspace({
 													}),
 													{
 														invalidationScope: "commit",
+														persistOptions: heFocusMetadataPersistOptions,
 													},
 												);
 											}}
@@ -2274,7 +2356,7 @@ export function PreprocessWorkspace({
 														</Badge>
 													</HStack>
 													<Text fontSize="sm" color="gray.600">
-														Compare your live H&amp;E drag against the committed
+														Compare your live HE drag against the committed
 														eosin chip-localized crop.
 													</Text>
 												</Stack>

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PreprocessProject } from '@/types/preprocess';
+import type { PreprocessProject, PreprocessRect } from '@/types/preprocess';
 
 type MockExportReadinessArgs = {
   includeAlignedImage?: boolean;
@@ -25,6 +25,27 @@ type CapturedPersistOptions = {
 type CapturedProjectMutation = {
   project: PreprocessProject;
   persistOptions?: CapturedPersistOptions;
+};
+
+type CanvasStageMockLabels = Partial<{
+  badgeReady: string;
+  badgeWaiting: string;
+  description: string;
+  emptyDescription: string;
+  emptyTitle: string;
+  heading: string;
+  overlayAriaLabel: string;
+  resetAriaLabel: string;
+  savedHint: string;
+}>;
+
+type CanvasStageMockProps = {
+	chipBounds?: PreprocessRect | null;
+	controlTestIdPrefix?: string;
+  labels?: CanvasStageMockLabels;
+	onChipBoundsCommit?: (chipBounds: PreprocessRect) => void;
+	onFlipHorizontal?: () => void;
+	onRotationDelta?: (delta: number) => void;
 };
 
 const mockExportPreprocessZip = vi.fn();
@@ -118,6 +139,7 @@ vi.mock('../../../lib/preprocess/loadOpenCv', () => ({
 
 vi.mock('../../../lib/preprocess/localization', () => ({
   buildLocalizationHandles: () => [],
+  buildPermissiveHeFocusHandles: () => [],
   clampNormalizedSquareRect: (value: unknown) => value,
   computeLocalizationStatus: () => 'complete',
   createDefaultChipBounds: () => ({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 }),
@@ -164,7 +186,38 @@ vi.mock('./AlignmentPanel', () => ({
 }));
 
 vi.mock('./CanvasStage', () => ({
-  CanvasStage: () => null,
+  CanvasStage: ({ chipBounds, controlTestIdPrefix = 'localize', labels, onChipBoundsCommit, onFlipHorizontal, onRotationDelta }: CanvasStageMockProps) => (
+    <div data-testid="canvas-stage-mock">
+      <button
+        type="button"
+        data-testid={`${controlTestIdPrefix}-mock-rotate-right-90`}
+        onClick={() => onRotationDelta?.(90)}
+      >
+        Rotate right 90
+      </button>
+      <button
+        type="button"
+        data-testid={`${controlTestIdPrefix}-mock-flip-horizontal`}
+        onClick={() => onFlipHorizontal?.()}
+      >
+        Flip horizontal
+      </button>
+      <button
+        type="button"
+        data-testid={`${controlTestIdPrefix}-mock-commit-bounds`}
+        onClick={() => onChipBoundsCommit?.(chipBounds ?? { x: 0.2, y: 0.2, width: 0.4, height: 0.4 })}
+      >
+        Commit bounds
+      </button>
+      {labels ? (
+        <>
+          {Object.entries(labels).map(([key, value]) => (
+            <span key={key}>{value}</span>
+          ))}
+        </>
+      ) : null}
+    </div>
+  ),
 }));
 
 vi.mock('./CropQcPanel', () => ({
@@ -580,6 +633,25 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 		mockLoadAllChipConfigManifests.mockResolvedValue([]);
 		mockLoadChipConfigData.mockResolvedValue(null);
 	});
+
+  it('uses HE terminology and avoids repeated local wording in source image copy', () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'sourceAssets';
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByText(
+      'Upload the eosin reference image and the matching HE image for this section. Replacing either source image refreshes downstream registration, crop QC, spot projection, and tissue selection outputs.',
+    )).toBeInTheDocument();
+    expect(screen.getByText('HE source image')).toBeInTheDocument();
+    expect(screen.getByText('Moving image for HE focus, landmark registration, and registered crop generation.')).toBeInTheDocument();
+    expect(screen.getByText('Upload HE image')).toBeInTheDocument();
+    expect(screen.getByText('No HE source image uploaded yet.')).toBeInTheDocument();
+
+    expect(screen.getByTestId('preprocess-workspace-shell')).not.toHaveTextContent('H&E');
+    expect(screen.getByTestId('preprocess-workspace-shell')).not.toHaveTextContent(/keeps the project local/i);
+    expect(screen.getByTestId('preprocess-workspace-shell')).not.toHaveTextContent(/local export/i);
+  });
 
   it('toggles spot visibility locally without changing the selected spot count', async () => {
     const user = userEvent.setup();
@@ -1094,7 +1166,131 @@ describe('Preprocess page autosave failure handling', () => {
   });
 });
 
+describe('PreprocessWorkspace autosave persistence mode', () => {
+	it('uses debounced metadata persistence for localization orientation changes', async () => {
+		const initialProject = createProject();
+		initialProject.currentStep = 'localization';
+		initialProject.localization.chipBounds = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+		initialProject.cropQc.cropAssets = { eosin: null, he: null };
+		initialProject.cropQc.eosinPreviewDataUrl = null;
+		initialProject.cropQc.previewDataUrl = null;
+		initialProject.cropQc.checkerboardPreviewDataUrl = null;
+		initialProject.cropQc.featureMatchesPreviewDataUrl = null;
+		initialProject.cropQc.checkerboardPreview = { dataUrl: null };
+		initialProject.cropQc.featureMatchesPreview = { dataUrl: null };
+		initialProject.tissueSelection.matrix = null;
+		initialProject.tissueSelection.autoSelectedSpotIds = [];
+		initialProject.tissueSelection.selectedSpotIds = null;
+		const mutations: CapturedProjectMutation[] = [];
+		const user = userEvent.setup();
+
+		render(
+			<WorkspaceHarness
+				initialProject={initialProject}
+				onProjectMutateCapture={(mutation) => mutations.push(mutation)}
+			/>,
+		);
+
+		await user.click(screen.getByTestId('localize-mock-rotate-right-90'));
+
+		await waitFor(() => {
+			expect(mutations.at(-1)?.project.localization.imageTransform.rotationDegrees).toBe(90);
+		});
+		expect(mutations.at(-1)?.persistOptions).toEqual({ mode: 'metadata', strategy: 'debounced' });
+	});
+
+	it('uses full persistence for localization orientation changes when downstream payloads must be cleared', async () => {
+		const initialProject = createProject();
+		initialProject.currentStep = 'localization';
+		initialProject.localization.chipBounds = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+		initialProject.heFocus.focusedImageDataUrl = 'data:image/png;base64,focused-he';
+		const mutations: CapturedProjectMutation[] = [];
+		const user = userEvent.setup();
+
+		render(
+			<WorkspaceHarness
+				initialProject={initialProject}
+				onProjectMutateCapture={(mutation) => mutations.push(mutation)}
+			/>,
+		);
+
+		await user.click(screen.getByTestId('localize-mock-rotate-right-90'));
+
+		await waitFor(() => {
+			expect(mutations.at(-1)?.project.localization.imageTransform.rotationDegrees).toBe(90);
+		});
+		expect(mutations.at(-1)?.persistOptions).toBeUndefined();
+	});
+
+	it('uses debounced metadata persistence for HE focus orientation changes without a derived focus image', async () => {
+		const initialProject = createProject();
+		initialProject.currentStep = 'heFocus';
+		initialProject.sourceAssets.images.he = {
+			id: 'he-source',
+			kind: 'he',
+			fileName: 'he.png',
+			mimeType: 'image/png',
+			sizeBytes: 10,
+			width: 200,
+			height: 150,
+			lastModified: 2,
+			dataUrl: 'data:image/png;base64,BB==',
+		};
+		initialProject.heFocus.chipBounds = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 };
+		initialProject.heFocus.focusedImageDataUrl = null;
+		const mutations: CapturedProjectMutation[] = [];
+		const user = userEvent.setup();
+
+		render(
+			<WorkspaceHarness
+				initialProject={initialProject}
+				onProjectMutateCapture={(mutation) => mutations.push(mutation)}
+			/>,
+		);
+
+		await user.click(screen.getByTestId('he-focus-mock-rotate-right-90'));
+
+		await waitFor(() => {
+			expect(mutations.at(-1)?.project.heFocus.imageTransform.rotationDegrees).toBe(90);
+		});
+		expect(mutations.at(-1)?.persistOptions).toEqual({ mode: 'metadata', strategy: 'debounced' });
+	});
+});
+
 describe('PreprocessWorkspace H&E focus bootstrap', () => {
+  it('passes HE terminology into the focus canvas labels', () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'heFocus';
+    initialProject.localization.chipBounds = { x: 0.12, y: 0.18, width: 0.42, height: 0.4 };
+    initialProject.sourceAssets.images.he = {
+      id: 'he-source',
+      kind: 'he',
+      fileName: 'he.png',
+      mimeType: 'image/png',
+      sizeBytes: 10,
+      width: 200,
+      height: 150,
+      workingWidth: 100,
+      workingHeight: 75,
+      lastModified: 2,
+      dataUrl: 'data:image/png;base64,BB==',
+    };
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByText('HE preview ready')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting HE image')).toBeInTheDocument();
+    expect(screen.getByText('Adjust the square HE registration region and orientation before landmark pairing.')).toBeInTheDocument();
+    expect(screen.getByText('Upload the HE source image in Source images before defining the registration region.')).toBeInTheDocument();
+    expect(screen.getByText('No HE image loaded')).toBeInTheDocument();
+    expect(screen.getByText('HE focus canvas')).toBeInTheDocument();
+    expect(screen.getByText('HE registration region overlay')).toBeInTheDocument();
+    expect(screen.getByText('Reset HE focus transform')).toBeInTheDocument();
+    expect(screen.getByText('Saved HE focus bounds stay square and normalized in original HE image coordinates.')).toBeInTheDocument();
+
+    expect(screen.getByTestId('canvas-stage-mock')).not.toHaveTextContent('H&E');
+  });
+
   it('seeds the default manual H&E focus bounds', async () => {
     const initialProject = createProject();
     initialProject.currentStep = 'heFocus';
