@@ -683,6 +683,9 @@ const assertAlignmentSlice = (value: unknown) => {
   for (const key of ["minPairs", "inlierRatio", "rmse", "finiteMatrix", "scaleRange", "accepted"] as const) {
     assertBoolean(flags[key], `alignment.qualityFlags.${key}`);
   }
+  if ("forceAccepted" in slice) {
+    assertBoolean(slice.forceAccepted, "alignment.forceAccepted");
+  }
   if (slice.failureReason !== null && !["missing-images", "insufficient-pairs", "solve-failed", "insufficient-inliers", "rmse-too-high", "invalid-matrix"].includes(slice.failureReason as string)) {
     throw new Error('Project field "alignment.failureReason" is invalid or missing');
   }

@@ -93,26 +93,26 @@ export function CropQcPanel({
     <Stack spacing={5}>
       <HStack spacing={3}>
         <Button onClick={onRunCrop} data-testid='cropqc-run' colorScheme='brand' isDisabled={!canRun}>
-          Generate registered crop
+          Generate Registered ROI
         </Button>
         <Button onClick={onAccept} data-testid='cropqc-accept' colorScheme='green' isDisabled={!canAccept}>
-          Accept crop QC
+          Approve Registration
         </Button>
         <Button onClick={onRejectToAlign} data-testid='cropqc-reject-to-align' variant='outline' isDisabled={!canAccept}>
-          Return to registration
+          Return to Landmark Pairing
         </Button>
       </HStack>
 
       <HStack justify='space-between'>
-        <Text color='gray.600'>Output crop size</Text>
+        <Text color='gray.600'>Registered Image Size</Text>
         <Text fontWeight='semibold' data-testid='cropqc-dimensions'>{dimensionsText}</Text>
       </HStack>
 
       <Tabs size='sm' variant='enclosed' isLazy>
         <TabList>
-          <Tab>Checkerboard QC</Tab>
-          <Tab>Landmark matches</Tab>
-          <Tab>Overlay opacity</Tab>
+          <Tab>Checkerboard View</Tab>
+          <Tab>Landmark Pair Verification</Tab>
+          <Tab>Overlay View</Tab>
         </TabList>
 
         <TabPanels>
@@ -195,7 +195,8 @@ export function CropQcPanel({
           <TabPanel px={0} pt={4}>
             <Stack spacing={4}>
               <Stack spacing={2}>
-                <Text fontSize='sm' color='gray.600'>H&E overlay opacity: {displayedOverlayOpacity.toFixed(2)}</Text>
+                <Text fontSize='sm' color='gray.600'>Adjust the transparency of the registered H&E image to visually assess the overlap between the selected ROI and the NATA Align image.</Text>
+                <Text fontSize='sm' color='gray.600'>Overlay Transparency: {displayedOverlayOpacity.toFixed(2)}</Text>
                 <Slider
                   min={0}
                   max={1}
@@ -235,7 +236,7 @@ export function CropQcPanel({
                     {heCropDataUrl ? (
                       <img
                         src={heCropDataUrl}
-                        alt='Registered H&E crop preview'
+                        alt='Registered HE crop preview'
                         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: displayedOverlayOpacity }}
                       />
                     ) : null}

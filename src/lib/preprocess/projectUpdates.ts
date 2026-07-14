@@ -8,6 +8,7 @@ import type {
 import {
   createEmptyMatrix,
   invertTissueActivationMatrix,
+  matrixFromSelectedSpotIds,
   selectedSpotIdsFromMatrix,
 } from './tissueMatrix';
 import { applyTissueMatrixEdit } from './tissueMatrixEdits';
@@ -28,6 +29,7 @@ type ManualTissueSelectionMatrixEditArgs = {
   projectedSpots: ProjectedSpot[];
   editArea?: PreprocessPoint[];
   nextValue?: TissueActivationValue;
+  spotId?: string;
   rows?: number | null;
   columns?: number | null;
   updatedAt: string;
@@ -61,7 +63,8 @@ export function buildManualTissueSelectionState<T extends ManualTissueSelectionM
   args: T,
 ): TissueSelectionSlice {
   const { current } = args;
-  if (!args.editArea || typeof args.nextValue === 'undefined') {
+  const hasSpotToggle = typeof args.spotId === 'string';
+  if (!hasSpotToggle && (!args.editArea || typeof args.nextValue === 'undefined')) {
     return current;
   }
 
@@ -80,14 +83,46 @@ export function buildManualTissueSelectionState<T extends ManualTissueSelectionM
     return current;
   }
 
-  const nextMatrix = applyTissueMatrixEdit({
-    matrix,
-    projectedSpots: args.projectedSpots,
-    editArea: args.editArea,
-    nextValue: args.nextValue,
-  });
+  let nextMatrix: typeof matrix;
+  if (hasSpotToggle) {
+    const targetSpot = args.projectedSpots.find((spot) => spot.id === args.spotId);
+    if (!targetSpot) {
+      return current;
+    }
+
+    const selectedSpotIds = new Set(selectedSpotIdsFromMatrix(matrix, args.projectedSpots));
+    if (selectedSpotIds.has(targetSpot.id)) {
+      selectedSpotIds.delete(targetSpot.id);
+    } else {
+      selectedSpotIds.add(targetSpot.id);
+    }
+    nextMatrix = matrixFromSelectedSpotIds({
+      rows: matrix.rows,
+      columns: matrix.columns,
+      projectedSpots: args.projectedSpots,
+      selectedSpotIds: [...selectedSpotIds],
+    });
+  } else {
+    if (!args.editArea || typeof args.nextValue === 'undefined') {
+      return current;
+    }
+    nextMatrix = applyTissueMatrixEdit({
+      matrix,
+      projectedSpots: args.projectedSpots,
+      editArea: args.editArea,
+      nextValue: args.nextValue,
+    });
+  }
 
   if (current.matrix !== null && nextMatrix === matrix) {
+    return current;
+  }
+
+  if (
+    nextMatrix.rows === matrix.rows
+    && nextMatrix.columns === matrix.columns
+    && nextMatrix.values.every((value, index) => value === matrix.values[index])
+  ) {
     return current;
   }
 

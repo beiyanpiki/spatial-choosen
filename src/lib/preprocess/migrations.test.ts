@@ -130,6 +130,7 @@ const createLegacyProject = (): LegacyPreprocessProject => ({
       accepted: false,
     },
     solveAccepted: false,
+    forceAccepted: false,
     failureReason: null,
     transform: null,
     previewDataUrl: null,
@@ -365,6 +366,30 @@ describe('migratePreprocessProject tissue matrix migration', () => {
 
     expect(migrated.currentStep).toBe('alignment');
     expect(migrated.alignment.status).not.toBe('complete');
+  });
+
+  it('preserves force-accepted alignment status and step on migration', () => {
+    const project = createLegacyProject();
+    project.workflowVersion = 3;
+    project.storageVersion = PREPROCESS_STORAGE_SCHEMA_VERSION;
+    project.sourceAssets.images = {
+      eosin: createSourceImage('eosin') as never,
+      he: createSourceImage('he') as never,
+    };
+    project.currentStep = 'cropQc';
+    project.alignment.status = 'complete';
+    project.alignment.qualityFlags.accepted = false;
+    project.alignment.solveAccepted = true;
+    project.alignment.forceAccepted = true;
+    project.alignment.failureReason = null;
+    applyCanonicalEmptyCropContract(project);
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.alignment.status).toBe('complete');
+    expect(migrated.alignment.solveAccepted).toBe(true);
+    expect(migrated.alignment.forceAccepted).toBe(true);
+    expect(migrated.currentStep).toBe('cropQc');
   });
 
   it('stales downstream slices when legacy alignment is complete-looking but strict acceptance is false', () => {

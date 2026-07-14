@@ -4,10 +4,6 @@ import { useState } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { clampNormalizedSquareRect, resizeChipBounds, translateChipBounds } from '../../../lib/preprocess/localization';
-import {
-	invertDisplayRectPointToSource,
-	projectSourcePointToDisplayRect,
-} from '@/lib/preprocess/imageTransforms';
 import { theme } from '../../../theme';
 import type {
 	LocalizationImageTransform,
@@ -171,30 +167,6 @@ const sourcePointToScreen = (
 	point: { x: number; y: number },
 ) => [point.x * HOST_WIDTH, point.y * HOST_HEIGHT] as [number, number];
 
-const sourcePointToTransformedScreen = (
-	point: { x: number; y: number },
-	transform: LocalizationImageTransform,
-) => {
-	const projected = projectSourcePointToDisplayRect(point, transform, {
-		originX: 0,
-		originY: 0,
-		width: HOST_WIDTH,
-		height: HOST_HEIGHT,
-	});
-
-	return [projected.x, projected.y] as [number, number];
-};
-
-const transformedScreenPointToSource = (
-	point: { x: number; y: number },
-	transform: LocalizationImageTransform,
-) => invertDisplayRectPointToSource(point, transform, {
-	originX: 0,
-	originY: 0,
-	width: HOST_WIDTH,
-	height: HOST_HEIGHT,
-});
-
 const expectPointPairsCloseTo = (
 	actual: [number, number][],
 	expected: [number, number][],
@@ -332,6 +304,46 @@ function StageCommitHarness({
 }
 
 describe('CanvasStage', () => {
+	it('omits only the localization ready pill while preserving the waiting status', () => {
+		const commonProps = {
+			boxColor: 'green' as const,
+			imageTransform: createTransform(),
+			onChipBoundsChange: vi.fn(),
+			onFlipHorizontal: vi.fn(),
+			onFlipVertical: vi.fn(),
+			onResetTransform: vi.fn(),
+			onRotationChange: vi.fn(),
+			onRotationDelta: vi.fn(),
+			onScaleChange: vi.fn(),
+			onScaleDelta: vi.fn(),
+		};
+		const { rerender } = render(
+			<ChakraProvider theme={theme}>
+				<CanvasStage
+					{...commonProps}
+					chipBounds={createChipBounds()}
+					image={createImage()}
+				/>
+			</ChakraProvider>,
+		);
+
+		expect(screen.getByText('Define Capture Area')).toBeInTheDocument();
+		expect(screen.getByText('Use the controls on the right to adjust the position and orientation of the NATA Align image until the ROI is completely enclosed within the green capture area.')).toBeInTheDocument();
+		expect(screen.queryByText('Eosin reference ready')).not.toBeInTheDocument();
+
+		rerender(
+			<ChakraProvider theme={theme}>
+				<CanvasStage
+					{...commonProps}
+					chipBounds={null}
+					image={null}
+				/>
+			</ChakraProvider>,
+		);
+
+		expect(screen.getByText('Awaiting eosin reference')).toBeInTheDocument();
+	});
+
 	it('loads the working image URL for interactive previews before falling back to canonical source data', async () => {
 		render(
 			<ChakraProvider theme={theme}>
@@ -363,7 +375,7 @@ describe('CanvasStage', () => {
 		expect(imageSrcAssignments).not.toContain('data:image/png;base64,AA==');
 	});
 
-	it('moves overlay points with image transforms while preserving chip bounds', async () => {
+	it('keeps overlay points canvas-axis-aligned while image orientation changes', async () => {
 		render(<StageHarness />);
 
 		await waitFor(() => {
@@ -382,12 +394,9 @@ describe('CanvasStage', () => {
 			expect(readTransform()).toMatchObject({ rotationDegrees: 90 });
 		});
 
-		const rotatedTransform = readTransform();
-		const expectedRotatedPoints = getRectSourceCorners(initialRect)
-			.map((point) => sourcePointToTransformedScreen(point, rotatedTransform));
 		const rotatedOutlinePoints = readOutlinePoints();
-		expectPointPairsCloseTo(rotatedOutlinePoints, expectedRotatedPoints);
-		expectMarkerAnchorCloseToVisualLowerLeft(readLowerLeftMarkerPoints(), expectedRotatedPoints);
+		expectPointPairsCloseTo(rotatedOutlinePoints, initialPoints);
+		expectMarkerAnchorCloseToVisualLowerLeft(readLowerLeftMarkerPoints(), initialPoints);
 		expect(readChipBounds()).toEqual(initialBounds);
 
 		fireEvent.click(screen.getByTestId('localize-stage-flip-horizontal'));
@@ -396,15 +405,12 @@ describe('CanvasStage', () => {
 			expect(readTransform()).toMatchObject({ flipHorizontal: true });
 		});
 
-		const flippedTransform = readTransform();
-		const expectedFlippedPoints = getRectSourceCorners(initialRect)
-			.map((point) => sourcePointToTransformedScreen(point, flippedTransform));
-		expectPointPairsCloseTo(readOutlinePoints(), expectedFlippedPoints);
-		expectMarkerAnchorCloseToVisualLowerLeft(readLowerLeftMarkerPoints(), expectedFlippedPoints);
+		expectPointPairsCloseTo(readOutlinePoints(), initialPoints);
+		expectMarkerAnchorCloseToVisualLowerLeft(readLowerLeftMarkerPoints(), initialPoints);
 		expect(readChipBounds()).toEqual(initialBounds);
 	});
 
-	it('uses transform-aware pointer coordinates for body drag updates and commits', async () => {
+	it('uses canvas-axis pointer coordinates for body drag updates and commits', async () => {
 		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
 		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
 		const rotatedTransform = { ...createTransform(), rotationDegrees: 90 };
@@ -426,7 +432,7 @@ describe('CanvasStage', () => {
 			x: initialRect.x + initialRect.width / 2,
 			y: initialRect.y + initialRect.height / 2,
 		};
-		const [startScreenX, startScreenY] = sourcePointToTransformedScreen(startSourcePoint, rotatedTransform);
+		const [startScreenX, startScreenY] = sourcePointToScreen(startSourcePoint);
 		const firstSourcePoint = {
 			x: startSourcePoint.x + 0.1,
 			y: startSourcePoint.y,
@@ -435,14 +441,10 @@ describe('CanvasStage', () => {
 			x: startSourcePoint.x + 0.2,
 			y: startSourcePoint.y + 0.1,
 		};
-		const [firstScreenX, firstScreenY] = sourcePointToTransformedScreen(firstSourcePoint, rotatedTransform);
-		const [finalScreenX, finalScreenY] = sourcePointToTransformedScreen(finalSourcePoint, rotatedTransform);
+		const [firstScreenX, firstScreenY] = sourcePointToScreen(firstSourcePoint);
+		const [finalScreenX, finalScreenY] = sourcePointToScreen(finalSourcePoint);
 		const firstScreenPoint = { x: firstScreenX, y: firstScreenY };
 		const finalScreenPoint = { x: finalScreenX, y: finalScreenY };
-		const projectedSourceCorner = sourcePointToTransformedScreen({ x: 0.2, y: 0.2 }, rotatedTransform);
-		const invertedSourceCorner = transformedScreenPointToSource({ x: projectedSourceCorner[0], y: projectedSourceCorner[1] }, rotatedTransform);
-		expect(invertedSourceCorner.x).toBeCloseTo(0.2, 12);
-		expect(invertedSourceCorner.y).toBeCloseTo(0.2, 12);
 		const expectedFirstMove = translateChipBounds(
 			initialRect,
 			{
@@ -499,7 +501,7 @@ describe('CanvasStage', () => {
 		});
 	});
 
-	it('inverts literal 800x600 canvas points through the transformed frame for drag updates', async () => {
+	it('maps literal 800x600 canvas points directly for drag updates while the image is rotated', async () => {
 		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
 		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
 		const rotatedTransform = { ...createTransform(), rotationDegrees: 90 };
@@ -517,8 +519,8 @@ describe('CanvasStage', () => {
 		});
 
 		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
-		const [cornerScreenX, cornerScreenY] = sourcePointToTransformedScreen({ x: 0.2, y: 0.2 }, rotatedTransform);
-		const [targetScreenX, targetScreenY] = sourcePointToTransformedScreen({ x: 0.3, y: 0.3 }, rotatedTransform);
+		const [cornerScreenX, cornerScreenY] = sourcePointToScreen({ x: 0.2, y: 0.2 });
+		const [targetScreenX, targetScreenY] = sourcePointToScreen({ x: 0.3, y: 0.3 });
 		const literalProjectedCorner = { x: cornerScreenX, y: cornerScreenY };
 		const literalProjectedSourcePoint = { x: targetScreenX, y: targetScreenY };
 		const expectedMove = translateChipBounds(
@@ -558,7 +560,7 @@ describe('CanvasStage', () => {
 		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedMove);
 	});
 
-	it('uses transform-aware pointer coordinates for resize handles', async () => {
+	it('uses canvas-axis pointer coordinates for resize handles while the image is rotated', async () => {
 		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
 		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
 		const rotatedTransform = { ...createTransform(), rotationDegrees: 90 };
@@ -584,8 +586,8 @@ describe('CanvasStage', () => {
 			x: initialRect.x + initialRect.width + 0.15,
 			y: initialRect.y + initialRect.height / 2,
 		};
-		const [handleScreenX, handleScreenY] = sourcePointToTransformedScreen(eastSourcePoint, rotatedTransform);
-		const [targetScreenX, targetScreenY] = sourcePointToTransformedScreen(targetSourcePoint, rotatedTransform);
+		const [handleScreenX, handleScreenY] = sourcePointToScreen(eastSourcePoint);
+		const [targetScreenX, targetScreenY] = sourcePointToScreen(targetSourcePoint);
 		const expectedResizedRect = resizeChipBounds(
 			initialRect,
 			'e',
@@ -661,9 +663,8 @@ describe('CanvasStage', () => {
 		await waitFor(() => {
 			expect(readTransform().rotationDegrees).not.toBe(0);
 		});
-		const finalTransform = readTransform();
 		const expectedFinalOutline = getRectSourceCorners(clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO))
-			.map((point) => sourcePointToTransformedScreen(point, finalTransform));
+			.map((point) => sourcePointToScreen(point));
 		expectPointPairsCloseTo(readOutlinePoints(), expectedFinalOutline);
 		expect(readChipBounds()).toEqual(initialBounds);
 	});

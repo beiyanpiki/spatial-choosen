@@ -145,12 +145,127 @@ const createAlignmentSlice = (): AlignmentSlice => ({
     accepted: false,
   },
   solveAccepted: false,
+  forceAccepted: false,
   failureReason: null,
   transform: null,
   previewDataUrl: null,
 });
 
+const createRejectedAlignmentSlice = (): AlignmentSlice => ({
+  ...createAlignmentSlice(),
+  status: 'error',
+  affineMatrix: [1, 0, 5, 0, 1, 5],
+  reprojectionRmse: 42.5,
+  ransacReprojThreshold: 8,
+  solveAccepted: false,
+  forceAccepted: false,
+  failureReason: 'rmse-too-high',
+  qualityFlags: {
+    minPairs: true,
+    inlierRatio: true,
+    rmse: false,
+    finiteMatrix: true,
+    scaleRange: true,
+    accepted: false,
+  },
+});
+
 describe('AlignmentPanel', () => {
+  it('preserves dynamic values in the revised workflow labels', async () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={createSourceImage('he')}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
+    });
+
+    expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
+      'Use wheel zoom and drag pan on the eosin reference, then click to place the next reference landmark.',
+    );
+    expect(screen.getByText('Image Registration')).toBeInTheDocument();
+    expect(screen.getByTestId('alignment-pair-count-badge')).toHaveTextContent('Landmark Pairs: 7 / 15');
+    expect(screen.getByRole('button', { name: 'Move NATA Align Image Point' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move HE point' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Registration Preview' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear All Pairs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review Registration' })).toBeInTheDocument();
+    expect(screen.getByTestId('alignment-distribution-warning')).toHaveTextContent(
+      'Landmark spread is narrow. Coverage ratios are 0.9% width and 0.9% height, below the 35% minimum.',
+    );
+    expect(screen.getByLabelText('Zoom out HE image')).toBeInTheDocument();
+    expect(screen.getByLabelText('Zoom in HE image')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE left 90 degrees')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE right 90 degrees')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE left 1 degree')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE right 1 degree')).toBeInTheDocument();
+    expect(screen.getByLabelText('Flip HE horizontally')).toBeInTheDocument();
+    expect(screen.getByLabelText('Flip HE vertically')).toBeInTheDocument();
+    expect(screen.getByAltText('HE landmarks (moving)')).toBeInTheDocument();
+    expect(screen.getByTestId('alignment-workflow-instruction')).not.toHaveTextContent('H&E');
+  });
+
+  it('removes only the retired workflow hints', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={createSourceImage('he')}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    expect(screen.queryByText('Drag to pan. Wheel to zoom. Add or adjust landmark pairs in order.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pan, zoom, and place landmarks.')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Show canvas help')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Minimize canvas help')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Dismiss canvas help')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Eosin landmarks (reference)')).toBeInTheDocument();
+    expect(screen.getByAltText('HE landmarks (moving)')).toBeInTheDocument();
+  });
+
+  it('uses HE terminology in missing-image guidance', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={null}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    expect(screen.getByText('Registration needs both source images')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Eosin and HE images must be present before landmark pairing and registration solving can run.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/H&E/)).not.toBeInTheDocument();
+  });
+
   it('renders working preview URLs in alignment image panes while canonical data URLs remain available', async () => {
     const referenceImage = {
       ...createSourceImage('eosin'),
@@ -297,6 +412,65 @@ describe('AlignmentPanel', () => {
 		await waitFor(() => {
 			expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
 		});
+	});
+
+	it('hides Force accept when no finite matrix is available', () => {
+		render(
+			<ChakraProvider theme={theme}>
+				<AlignmentPanel
+					alignment={createAlignmentSlice()}
+					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+					movingImage={createSourceImage('he')}
+					onSolveAccepted={vi.fn()}
+					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
+					onAlignmentChange={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		expect(screen.queryByTestId('alignment-force-accept')).not.toBeInTheDocument();
+	});
+
+	it('force-accepts a rejected solve with a finite matrix and advances', async () => {
+		const onSolveAccepted = vi.fn();
+		const onAlignmentChange = vi.fn();
+
+		render(
+			<ChakraProvider theme={theme}>
+				<AlignmentPanel
+					alignment={createRejectedAlignmentSlice()}
+					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+					movingImage={createSourceImage('he')}
+					onSolveAccepted={onSolveAccepted}
+					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
+					onAlignmentChange={onAlignmentChange}
+				/>
+			</ChakraProvider>,
+		);
+
+		const forceButton = await screen.findByTestId('alignment-force-accept');
+		expect(forceButton).toBeEnabled();
+
+		const user = userEvent.setup();
+		await user.click(forceButton);
+
+		expect(onSolveAccepted).toHaveBeenCalledTimes(1);
+		expect(onAlignmentChange).toHaveBeenCalledTimes(1);
+
+		const updater = onAlignmentChange.mock.calls[0][0] as (
+			current: AlignmentSlice,
+		) => AlignmentSlice;
+		const next = updater(createRejectedAlignmentSlice());
+
+		expect(next.forceAccepted).toBe(true);
+		expect(next.solveAccepted).toBe(true);
+		expect(next.status).toBe('complete');
+		expect(next.failureReason).toBeNull();
+		expect(next.affineMatrix).toEqual([1, 0, 5, 0, 1, 5]);
 	});
 
 });

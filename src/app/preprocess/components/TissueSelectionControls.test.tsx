@@ -390,4 +390,15 @@ describe("TissueSelectionControls", () => {
 		expect(screen.getByTestId("tissue-tool-activate")).toBeDisabled();
 		expect(screen.getByTestId("tissue-tool-deactivate")).toBeDisabled();
 	});
+
+	it("renders the revised tissue detection and refinement copy", () => {
+		renderControls();
+
+		expect(screen.getByText("Automatic Tissue Detection")).toBeInTheDocument();
+		expect(screen.getByText("Tissue Signal Threshold")).toBeInTheDocument();
+		expect(screen.getByText("Saturation Threshold")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Detect Tissue Spots" })).toBeInTheDocument();
+		expect(screen.getByText("Manual Refinement")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Invert selection" })).toBeInTheDocument();
+	});
 });

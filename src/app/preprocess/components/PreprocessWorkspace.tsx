@@ -36,9 +36,11 @@ import type {
 	LocalizationImageTransform,
 	LocalizationSlice,
 	PreprocessProject,
+	PreprocessPoint,
 	PreprocessRect,
 	PreprocessSourceImage,
 	PreprocessStepId,
+	TissueActivationValue,
 } from "@/types/preprocess";
 import {
 	normalizeAlignmentSlice,
@@ -104,6 +106,11 @@ import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
 
+type ProjectPersistOptions = {
+	mode?: PreprocessPersistMode;
+	strategy?: "immediate" | "debounced";
+};
+
 type PreprocessWorkspaceProps = {
 	autosaveStatus: AutosaveStatus;
 	autosaveDetail: string | null;
@@ -112,10 +119,7 @@ type PreprocessWorkspaceProps = {
 	onBackToLanding: () => void;
 	onProjectMutate: (
 		updater: (current: PreprocessProject) => PreprocessProject,
-		persistOptions?: {
-			mode?: PreprocessPersistMode;
-			strategy?: "immediate" | "debounced";
-		},
+		persistOptions?: ProjectPersistOptions,
 	) => void;
 	onProjectNameChange: (value: string) => void;
 	onStepChange: (stepId: PreprocessStepId) => void;
@@ -140,6 +144,34 @@ const autosaveTone: Record<AutosaveStatus, string> = {
 	retrying: "orange",
 	error: "red",
 };
+
+const METADATA_DEBOUNCED_PERSIST_OPTIONS = {
+	mode: "metadata",
+	strategy: "debounced",
+} satisfies ProjectPersistOptions;
+
+const hasCropQcPersistentPayload = (cropQc: CropQcSlice) => Boolean(
+	cropQc.cropAssets?.eosin?.fullres.dataUrl ||
+		cropQc.cropAssets?.he?.fullres.dataUrl ||
+		cropQc.checkerboardPreview?.dataUrl ||
+		cropQc.featureMatchesPreview?.dataUrl ||
+		cropQc.eosinPreviewDataUrl ||
+		cropQc.previewDataUrl ||
+		cropQc.checkerboardPreviewDataUrl ||
+		cropQc.featureMatchesPreviewDataUrl,
+);
+
+const hasTissuePersistentPayload = (tissueSelection: PreprocessProject["tissueSelection"]) => (
+	tissueSelection.matrix !== null || tissueSelection.autoSelectedSpotIds.length > 0
+);
+
+const hasLocalizationDownstreamPersistentPayload = (project: PreprocessProject | null) => Boolean(
+	project && (
+		project.heFocus.focusedImageDataUrl ||
+		hasCropQcPersistentPayload(project.cropQc) ||
+		hasTissuePersistentPayload(project.tissueSelection)
+	),
+);
 
 const AlignmentPanelWithPaddingBoundary =
 	AlignmentPanel as ComponentType<AlignmentPanelWithPaddingBoundaryProps>;
@@ -371,19 +403,19 @@ const placeholderCopyByStep: Record<
 > = {
 	sourceAssets: {
 		title: "Source image intake",
-		body: "Upload the eosin reference image and the matching H&E image for this section. Replacing either source image keeps the project local and refreshes downstream registration, crop QC, spot projection, and tissue selection outputs.",
+		body: "Upload the NATA Align image and the corresponding H&E stained tissue image. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.",
 	},
 	localization: {
 		title: "Chip localization",
 		body: "Orient the eosin reference image and place the capture-area box over the chip region. Saved coordinates remain normalized in source-image space.",
 	},
 	heFocus: {
-		title: "H&E focus",
-		body: "Define the H&E region used for registration. Match the chip-localized tissue area from the eosin reference while preserving the original H&E coordinate system.",
+		title: "HE focus",
+		body: "Define the HE region used for registration. Match the chip-localized tissue area from the eosin reference while preserving the original HE coordinate system.",
 	},
 	alignment: {
 		title: "Image registration",
-		body: "Create paired eosin and H&E landmarks, verify coverage, and solve the affine registration with OpenCV quality gates.",
+		body: "Create paired eosin and HE landmarks, verify coverage, and solve the affine registration with OpenCV quality gates.",
 	},
 	cropQc: {
 		title: "Crop QC",
@@ -672,7 +704,7 @@ export function PreprocessWorkspace({
 	const [chipManifests, setChipManifests] = useState<ChipConfigManifest[]>([]);
 	const [chipConfigError, setChipConfigError] = useState<string | null>(null);
 	const [includeProjectJson, setIncludeProjectJson] = useState(false);
-	const [includeAlignedImage, setIncludeAlignedImage] = useState(false);
+	const includeAlignedImage = true;
 	const [isExporting, setIsExporting] = useState(false);
 	const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 	const [projectNameDraft, setProjectNameDraft] = useState("");
@@ -725,6 +757,12 @@ export function PreprocessWorkspace({
 		currentHeImageSource?.dataUrl ??
 		null;
 	const focusedHeImageDataUrl = project?.heFocus.focusedImageDataUrl ?? null;
+	const localizationMetadataPersistOptions = hasLocalizationDownstreamPersistentPayload(project)
+		? undefined
+		: METADATA_DEBOUNCED_PERSIST_OPTIONS;
+	const heFocusMetadataPersistOptions = focusedHeImageDataUrl
+		? undefined
+		: METADATA_DEBOUNCED_PERSIST_OPTIONS;
 	const heFocusStageChipBounds =
 		heFocusDraftChipBounds ?? project?.heFocus.chipBounds ?? null;
 	const heFocusComparisonSource = useMemo(() => {
@@ -802,7 +840,10 @@ export function PreprocessWorkspace({
 	const applyLocalizationUpdate = useCallback(
 		(
 			updater: (current: LocalizationSlice) => LocalizationSlice,
-			options?: { invalidateDownstream?: boolean },
+			options?: {
+				invalidateDownstream?: boolean;
+				persistOptions?: ProjectPersistOptions;
+			},
 		) => {
 			onProjectMutate((current) => {
 				const nextLocalizationBase = normalizeLocalizationSlice(
@@ -834,7 +875,7 @@ export function PreprocessWorkspace({
 				return options?.invalidateDownstream === false
 					? nextProject
 					: invalidateOnLocalizationChange(nextProject);
-			});
+			}, options?.persistOptions);
 		},
 		[onProjectMutate],
 	);
@@ -845,6 +886,7 @@ export function PreprocessWorkspace({
 			options?: {
 				invalidateDownstream?: boolean;
 				invalidationScope?: "change" | "commit";
+				persistOptions?: ProjectPersistOptions;
 				preserveFocusedImage?: boolean;
 			},
 		) => {
@@ -887,7 +929,7 @@ export function PreprocessWorkspace({
 					: options?.invalidationScope === "commit"
 						? invalidateOnHeFocusCommit(nextProject)
 						: invalidateOnHeFocusChange(nextProject);
-			});
+			}, options?.persistOptions);
 		},
 		[onProjectMutate],
 	);
@@ -1053,7 +1095,7 @@ export function PreprocessWorkspace({
 				});
 
 				toast({
-					title: "H&E image loaded",
+					title: "HE image loaded",
 					description:
 						"Landmark registration can now use this image. Downstream preprocessing outputs were marked stale.",
 					status: "success",
@@ -1061,7 +1103,7 @@ export function PreprocessWorkspace({
 			} catch (error) {
 				console.error(error);
 				toast({
-					title: "Unable to load H&E image",
+					title: "Unable to load HE image",
 					description:
 						error instanceof Error
 							? error.message
@@ -1618,15 +1660,18 @@ export function PreprocessWorkspace({
 
 	const handleLocalizationRotationChange = useCallback(
 		(value: number) => {
-			applyLocalizationUpdate((current) => ({
-				...current,
-				imageTransform: {
-					...current.imageTransform,
-					rotationDegrees: normalizeLocalizationRotationDegrees(value),
-				},
-			}));
+			applyLocalizationUpdate(
+				(current) => ({
+					...current,
+					imageTransform: {
+						...current.imageTransform,
+						rotationDegrees: normalizeLocalizationRotationDegrees(value),
+					},
+				}),
+				{ persistOptions: localizationMetadataPersistOptions },
+			);
 		},
-		[applyLocalizationUpdate],
+		[applyLocalizationUpdate, localizationMetadataPersistOptions],
 	);
 
 	const tissueSupport = project
@@ -1808,7 +1853,7 @@ export function PreprocessWorkspace({
 				!tissueAutoDetectionReadiness.ready
 			? tissueAutoDetectionReadiness.reason
 			: project?.tissueSelection.status === "complete"
-				? "Tissue spot matrix is ready. Mark spots as tissue or background directly on the canvas."
+				? "Tissue spot selection is complete. Refine the selection by marking spots as tissue or background if necessary."
 				: "Choose a signal mode and auto-select tissue spots to refresh the tissue matrix.";
 	const tissueProjectedSpots = useMemo(
 		() => project?.chipConfig.projectedSpots ?? [],
@@ -1832,6 +1877,50 @@ export function PreprocessWorkspace({
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
+	const commitManualTissueSelection = useCallback(
+		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
+			onProjectMutate(
+				(current) => {
+					const projectedSpots = current.chipConfig.projectedSpots ?? [];
+					const updatedAt = new Date().toISOString();
+					const nextValue: TissueActivationValue = tissueTool === "activate" ? 1 : 0;
+					const editArgs = "editArea" in edit
+						? {
+								editArea: edit.editArea,
+								nextValue,
+							}
+						: { spotId: edit.spotId };
+					const nextTissueSelection = buildManualTissueSelectionState({
+						current: current.tissueSelection,
+						projectedSpots,
+						...editArgs,
+						rows: current.chipConfig.rows,
+						columns: current.chipConfig.columns,
+						updatedAt,
+					});
+					if (nextTissueSelection === current.tissueSelection) {
+						return current;
+					}
+
+					return {
+						...current,
+						tissueSelection: nextTissueSelection,
+						exportState: {
+							...current.exportState,
+							status: "stale",
+							isStale: true,
+							updatedAt,
+							lastExportedAt: null,
+							artifacts: [],
+							error: null,
+						},
+					};
+				},
+				{ mode: "tissue", strategy: "debounced" },
+			);
+		},
+		[onProjectMutate, tissueTool],
+	);
 
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
@@ -2000,11 +2089,11 @@ export function PreprocessWorkspace({
 									</Text>
 									<Flex direction={{ base: "column", xl: "row" }} gap={5}>
 										<SourceAssetUploader
-											label="Eosin source image"
-											description="Reference image for chip localization, crop geometry, and tissue signal detection."
+											label="NATA Align image"
+											description="The NATA Align image uploaded here should be exported from the NATA Align Spatial Instrument and will be used for downstream chip capture area localization and image analysis."
 											buttonLabel={
 												project.sourceAssets.images.eosin
-													? "Replace eosin reference"
+													? "Replace reference"
 													: "Upload eosin reference"
 											}
 											emptyText="No eosin reference image uploaded yet."
@@ -2014,14 +2103,14 @@ export function PreprocessWorkspace({
 											}}
 										/>
 										<SourceAssetUploader
-											label="H&E source image"
-											description="Moving image for H&E focus, landmark registration, and registered crop generation."
+											label="H&E stained tissue image"
+											description="Moving image for HE focus, landmark registration, and registered crop generation."
 											buttonLabel={
 												project.sourceAssets.images.he
-													? "Replace H&E image"
-													: "Upload H&E image"
+													? "Replace image"
+													: "Upload HE image"
 											}
-											emptyText="No H&E source image uploaded yet."
+											emptyText="No HE source image uploaded yet."
 											image={project.sourceAssets.images.he}
 											onUpload={(fileList) => {
 												void handleUploadHe(fileList);
@@ -2043,68 +2132,86 @@ export function PreprocessWorkspace({
 										image={localizationImage}
 										imageTransform={project.localization.imageTransform}
 										onScaleChange={(value) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
-														...current.imageTransform,
-														scale: value,
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
+										applyLocalizationUpdate(
+											(current) => ({
+												...current,
+												imageTransform: {
+													...current.imageTransform,
+													scale: value,
+												},
+											}),
+											{
+												invalidateDownstream: false,
+												persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+											},
+										);
+									}}
 										onScaleDelta={(delta) => {
-											applyLocalizationUpdate(
-												(current) => ({
-													...current,
-													imageTransform: {
+										applyLocalizationUpdate(
+											(current) => ({
+												...current,
+												imageTransform: {
 														...current.imageTransform,
 														scale: clampLocalizationScale(
 															current.imageTransform.scale + delta,
 														),
-													},
-												}),
-												{ invalidateDownstream: false },
-											);
-										}}
+												},
+											}),
+											{
+												invalidateDownstream: false,
+												persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+											},
+										);
+									}}
 										onRotationChange={handleLocalizationRotationChange}
 										onRotationDelta={(delta) => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													rotationDegrees: normalizeLocalizationRotationDegrees(
-														current.imageTransform.rotationDegrees + delta,
-													),
-												},
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+													imageTransform: {
+														...current.imageTransform,
+											rotationDegrees: normalizeLocalizationRotationDegrees(
+												current.imageTransform.rotationDegrees + delta,
+											),
+										},
+									}),
+									{ persistOptions: localizationMetadataPersistOptions },
+								);
+							}}
 										onFlipHorizontal={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													flipHorizontal:
-														!current.imageTransform.flipHorizontal,
-												},
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+													imageTransform: {
+														...current.imageTransform,
+										flipHorizontal:
+											!current.imageTransform.flipHorizontal,
+									},
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 										onFlipVertical={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: {
-													...current.imageTransform,
-													flipVertical: !current.imageTransform.flipVertical,
-												},
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+													imageTransform: {
+														...current.imageTransform,
+										flipVertical: !current.imageTransform.flipVertical,
+									},
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 										onResetTransform={() => {
-											applyLocalizationUpdate((current) => ({
-												...current,
-												imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+									imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 										onChipBoundsChange={(chipBounds) => {
 											setLocalizationDraftChipBounds(chipBounds);
 										}}
@@ -2113,12 +2220,15 @@ export function PreprocessWorkspace({
 										}}
 										onChipBoundsCommit={(chipBounds) => {
 											setLocalizationDraftChipBounds(null);
-											applyLocalizationUpdate((current) => ({
-												...current,
-												chipBounds,
-												method: "manual",
-											}));
-										}}
+											applyLocalizationUpdate(
+												(current) => ({
+													...current,
+									chipBounds,
+									method: "manual",
+								}),
+								{ persistOptions: localizationMetadataPersistOptions },
+							);
+						}}
 									/>
 								</Flex>
 							) : project.currentStep === "heFocus" ? (
@@ -2140,18 +2250,18 @@ export function PreprocessWorkspace({
 											image={currentHeImageSource}
 											imageTransform={project.heFocus.imageTransform}
 											labels={{
-												badgeReady: "H&E preview ready",
-												badgeWaiting: "Awaiting H&E image",
+												badgeReady: "HE preview ready",
+												badgeWaiting: "Awaiting HE image",
 												description:
-													"Adjust the square H&E registration region and orientation before landmark pairing.",
+													"Using the adjusted NATA Align image as a reference, position and orient the H&E ROI to match the corresponding tissue region before landmark pairing.",
 												emptyDescription:
-													"Upload the H&E source image in Source images before defining the registration region.",
-												emptyTitle: "No H&E image loaded",
-												heading: "H&E focus canvas",
-												overlayAriaLabel: "H&E registration region overlay",
-												resetAriaLabel: "Reset H&E focus transform",
+													"Upload the HE source image in Source images before defining the registration region.",
+												emptyTitle: "No HE image loaded",
+												heading: "H&E ROI Alignment",
+												overlayAriaLabel: "HE registration region overlay",
+												resetAriaLabel: "Reset HE focus transform",
 												savedHint:
-													"Saved H&E focus bounds stay square and normalized in original H&E image coordinates.",
+													"Saved HE focus bounds stay square and normalized in original HE image coordinates.",
 											}}
 											onChipBoundsCancel={() => {
 												setHeFocusDraftChipBounds(null);
@@ -2165,11 +2275,12 @@ export function PreprocessWorkspace({
 															scale: value,
 														},
 													}),
-													{
-														invalidateDownstream: false,
-														preserveFocusedImage: true,
-													},
-												);
+												{
+													invalidateDownstream: false,
+													persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+													preserveFocusedImage: true,
+												},
+											);
 											}}
 											onScaleDelta={(delta) => {
 												applyHeFocusUpdate(
@@ -2182,24 +2293,29 @@ export function PreprocessWorkspace({
 															),
 														},
 													}),
-													{
-														invalidateDownstream: false,
-														preserveFocusedImage: true,
-													},
-												);
+												{
+													invalidateDownstream: false,
+													persistOptions: METADATA_DEBOUNCED_PERSIST_OPTIONS,
+													preserveFocusedImage: true,
+												},
+											);
 											}}
 											onRotationChange={(value) => {
-												applyHeFocusUpdate((current) => ({
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
 														rotationDegrees:
 															normalizeLocalizationRotationDegrees(value),
 													},
-												}));
-											}}
-											onRotationDelta={(delta) => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onRotationDelta={(delta) => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
@@ -2208,33 +2324,44 @@ export function PreprocessWorkspace({
 																current.imageTransform.rotationDegrees + delta,
 															),
 													},
-												}));
-											}}
-											onFlipHorizontal={() => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onFlipHorizontal={() => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
 														flipHorizontal:
 															!current.imageTransform.flipHorizontal,
 													},
-												}));
-											}}
-											onFlipVertical={() => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onFlipVertical={() => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: {
 														...current.imageTransform,
 														flipVertical: !current.imageTransform.flipVertical,
 													},
-												}));
-											}}
-											onResetTransform={() => {
-												applyHeFocusUpdate((current) => ({
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
+										onResetTransform={() => {
+											applyHeFocusUpdate(
+												(current) => ({
 													...current,
 													imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-												}));
-											}}
+												}),
+												{ persistOptions: heFocusMetadataPersistOptions },
+											);
+										}}
 											onChipBoundsChange={(chipBounds) => {
 												setHeFocusDraftChipBounds(chipBounds);
 											}}
@@ -2247,6 +2374,7 @@ export function PreprocessWorkspace({
 													}),
 													{
 														invalidationScope: "commit",
+														persistOptions: heFocusMetadataPersistOptions,
 													},
 												);
 											}}
@@ -2267,15 +2395,15 @@ export function PreprocessWorkspace({
 												<Stack spacing={1}>
 													<HStack spacing={2} align="center">
 														<Heading size="sm">
-															Eosin chip-localized reference
+													NATA Align Reference Image
 														</Heading>
 														<Badge colorScheme="blue" variant="subtle">
 															Reference crop
 														</Badge>
 													</HStack>
 													<Text fontSize="sm" color="gray.600">
-														Compare your live H&amp;E drag against the committed
-														eosin chip-localized crop.
+												Use the reference NATA Align image to identify and align the
+												corresponding ROI in the H&E image.
 													</Text>
 												</Stack>
 												{heFocusComparisonImageDataUrl ? (
@@ -2408,12 +2536,13 @@ export function PreprocessWorkspace({
 											{ invalidateDownstream: true },
 										);
 									}}
-									canRun={Boolean(
-										project.alignment.status === "complete" &&
-											project.alignment.qualityFlags.accepted &&
-											alignmentReferenceImage?.dataUrl &&
-											alignmentMovingImage?.dataUrl,
-									)}
+								canRun={Boolean(
+									project.alignment.status === "complete" &&
+										(project.alignment.qualityFlags.accepted ||
+											project.alignment.forceAccepted) &&
+										alignmentReferenceImage?.dataUrl &&
+										alignmentMovingImage?.dataUrl,
+								)}
 									canAccept={Boolean(
 										project.cropQc.cropWidth && project.cropQc.cropHeight,
 									)}
@@ -2440,37 +2569,10 @@ export function PreprocessWorkspace({
 												disabled={isTissueInteractionDisabled}
 												onToolChange={setTissueTool}
 												onEditCommit={(editArea) => {
-													onProjectMutate(
-														(current) => {
-															const projectedSpots =
-																current.chipConfig.projectedSpots ?? [];
-															const updatedAt = new Date().toISOString();
-															return {
-																...current,
-																tissueSelection:
-																	buildManualTissueSelectionState({
-																		current: current.tissueSelection,
-																		projectedSpots,
-																		editArea,
-																		nextValue:
-																			tissueTool === "activate" ? 1 : 0,
-																		rows: current.chipConfig.rows,
-																		columns: current.chipConfig.columns,
-																		updatedAt,
-																	}),
-																exportState: {
-																	...current.exportState,
-																	status: "stale",
-																	isStale: true,
-																	updatedAt,
-																	lastExportedAt: null,
-																	artifacts: [],
-																	error: null,
-																},
-															};
-														},
-														{ mode: "tissue", strategy: "debounced" },
-													);
+													commitManualTissueSelection({ editArea });
+												}}
+												onSpotToggle={(spotId) => {
+													commitManualTissueSelection({ spotId });
 												}}
 											/>
 										</Box>
@@ -2489,7 +2591,7 @@ export function PreprocessWorkspace({
 												<CardBody p={4}>
 													<Stack spacing={3}>
 														<Text fontSize="sm" fontWeight="semibold">
-															Capture chip
+															Chip Information
 														</Text>
 														<FormControl isDisabled={isChipSelectorDisabled}>
 															<FormLabel
@@ -2497,7 +2599,7 @@ export function PreprocessWorkspace({
 																color="gray.500"
 																mb={1.5}
 															>
-																Spot pitch
+																Spot Size
 															</FormLabel>
 															<Select
 																value={project.chipConfig.chipType ?? ""}
@@ -2676,9 +2778,9 @@ export function PreprocessWorkspace({
 															</Select>
 														</FormControl>
 														<Text fontSize="xs" color="gray.500">
-															Changing the capture pitch clears previous tissue
-															edits, regenerates projected spots, and requires
-															tissue auto-selection to run again.
+															Changing the capture resolution will clear previous tissue edits,
+															regenerate the projected spot grid, and require tissue auto-selection
+															to be performed again.
 														</Text>
 														{(chipConfigError ?? project.chipConfig.error) ? (
 															<Text fontSize="sm" color="red.600">
@@ -2874,7 +2976,7 @@ export function PreprocessWorkspace({
 															color="gray.600"
 															data-testid="tissue-selected-count"
 														>
-															Tissue spots: {tissueSelectedSpotIds.length}
+															Number of Tissue Spots: {tissueSelectedSpotIds.length}
 														</Text>
 														{project.tissueSelection.warning ? (
 															<Text
@@ -2929,9 +3031,7 @@ export function PreprocessWorkspace({
 							) : project.currentStep === "exportState" ? (
 								<ExportPanel
 									includeProject={includeProjectJson}
-									includeAlignedImage={includeAlignedImage}
 									onToggleIncludeProject={setIncludeProjectJson}
-									onToggleIncludeAlignedImage={setIncludeAlignedImage}
 									isExporting={isExporting}
 									canExport={exportReadiness.canExport}
 									onDownload={() => {

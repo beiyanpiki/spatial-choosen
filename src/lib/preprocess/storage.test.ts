@@ -5,6 +5,7 @@ import { normalizeProjectForPersistence, normalizeProjectForWorkspace } from '@/
 import type { PreprocessProject, ProjectedSpot } from '@/types/preprocess';
 
 import * as chipConfigs from './chipConfigs';
+import { PREPROCESS_STORAGE_SCHEMA_VERSION } from './constants';
 import { exportPreprocessZip } from './exportBundle';
 import { serializePreprocessProject } from './package';
 import { projectSpotsForCrop } from './spotProjection';
@@ -160,6 +161,7 @@ const createProject = (): PreprocessProject => ({
       accepted: false,
     },
     solveAccepted: false,
+    forceAccepted: false,
     failureReason: null,
     transform: null,
     previewDataUrl: null,
@@ -313,7 +315,7 @@ class MemoryStorage {
   }
 }
 
-const createIndexedDbMock = () => {
+const createIndexedDbMock = (shouldFailPut: (storeName: string) => boolean = () => false) => {
   const stores = new Map<string, Map<string, string | Blob>>();
 
   const ensureStore = (name: string) => {
@@ -378,6 +380,11 @@ const createIndexedDbMock = () => {
               return request;
             },
             put: (value: string | Blob, key: string) => {
+              if (shouldFailPut(name)) {
+                tx.error = new Error(`Forced ${name} write failure`);
+                queueMicrotask(() => tx.onerror?.());
+                return;
+              }
               target.set(key, value);
               queueMicrotask(() => tx.oncomplete?.());
             },
@@ -1255,6 +1262,70 @@ describe('preprocess storage tissue metadata', () => {
     expect(summaries[0]?.name).toBe('Tissue first project');
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
     expect(hydrated?.tissueSelection.autoSelectedSpotIds).toEqual(['spot-b']);
+  });
+
+  it('persists tissue metadata consistently with the tissue matrix', async () => {
+    const project = createProject();
+    project.storageVersion = PREPROCESS_STORAGE_SCHEMA_VERSION;
+    await upsertPreprocessProject(project);
+
+    project.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+    project.tissueSelection.paritySummary = {
+      selectedCount: 1,
+      selectedPercent: 50,
+      maskCoverage: 50,
+    };
+    project.exportState.status = 'stale';
+    project.exportState.isStale = true;
+    project.exportState.updatedAt = '2026-04-15T00:00:00.000Z';
+
+    await upsertPreprocessProject(project, { mode: 'tissue' });
+    const hydrated = await getPreprocessProject(project.id);
+
+    expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+    expect(hydrated?.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
+    expect(hydrated?.tissueSelection.paritySummary).toEqual(project.tissueSelection.paritySummary);
+    expect(hydrated?.exportState.status).toBe('stale');
+    expect(hydrated?.exportState.isStale).toBe(true);
+  });
+
+  it('restores prior metadata when a tissue payload write fails', async () => {
+    let failTissueWrite = false;
+    vi.stubGlobal('window', {
+      localStorage,
+      indexedDB: createIndexedDbMock(
+        (storeName) => failTissueWrite && storeName === 'preprocess-tissue-selection',
+      ),
+    });
+    const project = createProject();
+    project.storageVersion = PREPROCESS_STORAGE_SCHEMA_VERSION;
+    await upsertPreprocessProject(project);
+    const previousMetadata = localStorage.getItem('spatial-preprocess-projects');
+
+    project.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+    project.tissueSelection.matrix = {
+      rows: 64,
+      columns: 64,
+      values: Array.from({ length: 4096 }, (_, index) => (index === 65 ? 1 : 0 as const)),
+    };
+    project.tissueSelection.selectedSpotIds = ['spot-b'];
+    project.exportState.status = 'stale';
+    project.exportState.isStale = true;
+    failTissueWrite = true;
+
+    await expect(upsertPreprocessProject(project, { mode: 'tissue' })).rejects.toThrow(
+      'Forced preprocess-tissue-selection write failure',
+    );
+
+    expect(localStorage.getItem('spatial-preprocess-projects')).toBe(previousMetadata);
   });
 
   it('strips storage-only projectedSpotIndex from hydrated runtime projects and package serialization', async () => {

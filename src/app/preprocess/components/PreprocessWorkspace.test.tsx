@@ -4,16 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PreprocessProject } from '@/types/preprocess';
+import type { PreprocessProject, PreprocessRect } from '@/types/preprocess';
 
 type MockExportReadinessArgs = {
   includeAlignedImage?: boolean;
 };
 
 type CapturedExportPanelProps = {
-  includeAlignedImage: boolean;
   canExport: boolean;
-  onToggleIncludeAlignedImage: (value: boolean) => void;
   onDownload: () => void;
 };
 
@@ -25,6 +23,27 @@ type CapturedPersistOptions = {
 type CapturedProjectMutation = {
   project: PreprocessProject;
   persistOptions?: CapturedPersistOptions;
+};
+
+type CanvasStageMockLabels = Partial<{
+  badgeReady: string;
+  badgeWaiting: string;
+  description: string;
+  emptyDescription: string;
+  emptyTitle: string;
+  heading: string;
+  overlayAriaLabel: string;
+  resetAriaLabel: string;
+  savedHint: string;
+}>;
+
+type CanvasStageMockProps = {
+	chipBounds?: PreprocessRect | null;
+	controlTestIdPrefix?: string;
+  labels?: CanvasStageMockLabels;
+	onChipBoundsCommit?: (chipBounds: PreprocessRect) => void;
+	onFlipHorizontal?: () => void;
+	onRotationDelta?: (delta: number) => void;
 };
 
 const mockExportPreprocessZip = vi.fn();
@@ -118,6 +137,7 @@ vi.mock('../../../lib/preprocess/loadOpenCv', () => ({
 
 vi.mock('../../../lib/preprocess/localization', () => ({
   buildLocalizationHandles: () => [],
+  buildPermissiveHeFocusHandles: () => [],
   clampNormalizedSquareRect: (value: unknown) => value,
   computeLocalizationStatus: () => 'complete',
   createDefaultChipBounds: () => ({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 }),
@@ -164,7 +184,38 @@ vi.mock('./AlignmentPanel', () => ({
 }));
 
 vi.mock('./CanvasStage', () => ({
-  CanvasStage: () => null,
+  CanvasStage: ({ chipBounds, controlTestIdPrefix = 'localize', labels, onChipBoundsCommit, onFlipHorizontal, onRotationDelta }: CanvasStageMockProps) => (
+    <div data-testid="canvas-stage-mock">
+      <button
+        type="button"
+        data-testid={`${controlTestIdPrefix}-mock-rotate-right-90`}
+        onClick={() => onRotationDelta?.(90)}
+      >
+        Rotate right 90
+      </button>
+      <button
+        type="button"
+        data-testid={`${controlTestIdPrefix}-mock-flip-horizontal`}
+        onClick={() => onFlipHorizontal?.()}
+      >
+        Flip horizontal
+      </button>
+      <button
+        type="button"
+        data-testid={`${controlTestIdPrefix}-mock-commit-bounds`}
+        onClick={() => onChipBoundsCommit?.(chipBounds ?? { x: 0.2, y: 0.2, width: 0.4, height: 0.4 })}
+      >
+        Commit bounds
+      </button>
+      {labels ? (
+        <>
+          {Object.entries(labels).map(([key, value]) => (
+            <span key={key}>{value}</span>
+          ))}
+        </>
+      ) : null}
+    </div>
+  ),
 }));
 
 vi.mock('./CropQcPanel', () => ({
@@ -200,10 +251,11 @@ vi.mock('./TissueSelectionPanel', () => ({
   TissueSelectionPanel: (props: {
     selectedSpotIds: string[];
     onEditCommit?: (editArea: Array<{ x: number; y: number }>) => void;
+    onSpotToggle?: (spotId: string) => void;
   }) => (
     <div data-testid="tissue-selection-panel-mock">
       <div data-testid="tissue-panel-selected-count">
-        Tissue spots: {props.selectedSpotIds.length}
+        Number of Tissue Spots: {props.selectedSpotIds.length}
       </div>
       <button
         type="button"
@@ -216,6 +268,20 @@ vi.mock('./TissueSelectionPanel', () => ({
         ])}
       >
         Commit manual tissue edit
+      </button>
+      <button
+        type="button"
+        data-testid="tissue-panel-toggle-spot"
+        onClick={() => props.onSpotToggle?.('spot-a')}
+      >
+        Toggle spot
+      </button>
+      <button
+        type="button"
+        data-testid="tissue-panel-toggle-missing-spot"
+        onClick={() => props.onSpotToggle?.('missing-spot')}
+      >
+        Toggle missing spot
       </button>
     </div>
   ),
@@ -321,6 +387,7 @@ function WorkspaceHarness({
 }
 
 const { theme } = await import('../../../theme');
+const { normalizeProjectForWorkspace } = await import('../projectState');
 const { PreprocessWorkspace } = await import('./PreprocessWorkspace');
 const { default: PreprocessPage } = await import('../page.client');
 
@@ -418,6 +485,7 @@ const createProject = (): PreprocessProject => ({
       accepted: false,
     },
     solveAccepted: false,
+    forceAccepted: false,
     failureReason: null,
     transform: null,
     previewDataUrl: null,
@@ -581,6 +649,22 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 		mockLoadChipConfigData.mockResolvedValue(null);
 	});
 
+  it('renders the revised source image copy', () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'sourceAssets';
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByText(
+      'Upload the NATA Align image and the corresponding H&E stained tissue image. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.',
+    )).toBeInTheDocument();
+    expect(screen.getByText('NATA Align image')).toBeInTheDocument();
+    expect(screen.getByText('H&E stained tissue image')).toBeInTheDocument();
+    expect(screen.getByText('Moving image for HE focus, landmark registration, and registered crop generation.')).toBeInTheDocument();
+    expect(screen.getByText('Upload HE image')).toBeInTheDocument();
+    expect(screen.getByText('No HE source image uploaded yet.')).toBeInTheDocument();
+  });
+
   it('toggles spot visibility locally without changing the selected spot count', async () => {
     const user = userEvent.setup();
     render(<WorkspaceHarness />);
@@ -589,14 +673,14 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     const panelSelectedCount = screen.getByTestId('tissue-panel-selected-count');
     const toggleButton = screen.getByRole('button', { name: 'Hide spot grid' });
 
-    expect(selectedCount).toHaveTextContent('Tissue spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Tissue spots: 0');
+    expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
 
     await user.click(toggleButton);
 
     expect(screen.getByRole('button', { name: 'Show spot grid' })).toBeInTheDocument();
-    expect(selectedCount).toHaveTextContent('Tissue spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Tissue spots: 0');
+    expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
   });
 
   it('uses edited activation and block thresholds for the next auto-detection run without auto-running on edit', async () => {
@@ -692,6 +776,57 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     );
     expect(manualEditMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
     expect(manualEditMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
+  });
+
+  it('persists a single-click spot toggle with tissue-aware debounced options', async () => {
+    const user = userEvent.setup();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    render(
+      <WorkspaceHarness
+        onProjectMutateCapture={(mutation) => {
+          capturedMutations.push(mutation);
+        }}
+      />,
+    );
+
+    await user.click(screen.getByTestId('tissue-panel-toggle-spot'));
+
+    await waitFor(() => {
+      expect(capturedMutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            persistOptions: { mode: 'tissue', strategy: 'debounced' },
+          }),
+        ]),
+      );
+    });
+
+    const toggleMutation = capturedMutations.find(
+      (mutation) => mutation.persistOptions?.mode === 'tissue'
+        && mutation.persistOptions.strategy === 'debounced',
+    );
+    expect(toggleMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
+    expect(toggleMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
+  });
+
+  it('keeps the current project and export state for a stale spot id', async () => {
+    const user = userEvent.setup();
+    const initialProject = createProject();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectMutateCapture={(mutation) => {
+          capturedMutations.push(mutation);
+        }}
+      />,
+    );
+
+    await user.click(screen.getByTestId('tissue-panel-toggle-missing-spot'));
+
+    expect(capturedMutations).toHaveLength(1);
+    expect(capturedMutations[0]?.project).toBe(initialProject);
+    expect(capturedMutations[0]?.project.exportState.status).toBe('idle');
   });
 
   it('persists completed auto-detection matrix writes with tissue-aware options', async () => {
@@ -828,13 +963,13 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(runAutoButton).not.toBeDisabled();
     expect(activateButton).not.toBeDisabled();
     expect(deactivateButton).not.toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 0');
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
 
     await user.click(runAutoButton);
 
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 1');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
+      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
 
     await user.selectOptions(thresholdModeSelect, 'gray-max');
@@ -856,8 +991,8 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(runAutoButton).toBeDisabled();
     expect(activateButton).toBeDisabled();
     expect(deactivateButton).toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 0');
-    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 0');
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
   });
 
   it('keeps only the latest auto-detection result when an older request resolves last', async () => {
@@ -965,7 +1100,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     await waitFor(() => {
       expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
 
     requestA.resolve({
@@ -994,10 +1129,19 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     await waitFor(() => {
       expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
   });
 });
+
+const createStoredStepSixProject = () => {
+  const stepSixProject = createProject();
+  const storedProject = normalizeProjectForWorkspace(stepSixProject);
+  storedProject.currentStep = 'tissueSelection';
+  storedProject.chipConfig = stepSixProject.chipConfig;
+  storedProject.tissueSelection = stepSixProject.tissueSelection;
+  return storedProject;
+};
 
 describe('Preprocess page autosave failure handling', () => {
   beforeEach(() => {
@@ -1053,8 +1197,7 @@ describe('Preprocess page autosave failure handling', () => {
 
   it('does not mark tissue autosave saved when the tissue payload write fails', async () => {
     const tissueFailure = new Error('forced tissue payload failure');
-    const storedProject = createProject();
-    storedProject.currentStep = 'tissueSelection';
+    const storedProject = createStoredStepSixProject();
     mockGetPreprocessProject.mockResolvedValue(storedProject);
     mockUpsertPreprocessProject.mockRejectedValue(tissueFailure);
 
@@ -1068,7 +1211,6 @@ describe('Preprocess page autosave failure handling', () => {
     await waitFor(() => {
       expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
     });
-    await user.click(screen.getByTestId('step-sidebar-select-tissue'));
     await waitFor(() => {
       expect(screen.getByTestId('tissue-chip-size-select')).toBeInTheDocument();
     });
@@ -1092,9 +1234,151 @@ describe('Preprocess page autosave failure handling', () => {
       status: 'error',
     }));
   });
+
+  it('does not persist tissue metadata alone during pagehide', async () => {
+    const storedProject = createStoredStepSixProject();
+    mockGetPreprocessProject.mockResolvedValue(storedProject);
+    const user = userEvent.setup();
+    render(
+      <ChakraProvider theme={theme}>
+        <PreprocessPage />
+      </ChakraProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tissue-panel-toggle-spot')).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId('tissue-panel-toggle-spot'));
+    window.dispatchEvent(new Event('pagehide'));
+
+    expect(mockUpsertPreprocessProjectMetadata).not.toHaveBeenCalled();
+  });
+});
+
+describe('PreprocessWorkspace autosave persistence mode', () => {
+	it('uses debounced metadata persistence for localization orientation changes', async () => {
+		const initialProject = createProject();
+		initialProject.currentStep = 'localization';
+		initialProject.localization.chipBounds = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+		initialProject.cropQc.cropAssets = { eosin: null, he: null };
+		initialProject.cropQc.eosinPreviewDataUrl = null;
+		initialProject.cropQc.previewDataUrl = null;
+		initialProject.cropQc.checkerboardPreviewDataUrl = null;
+		initialProject.cropQc.featureMatchesPreviewDataUrl = null;
+		initialProject.cropQc.checkerboardPreview = { dataUrl: null };
+		initialProject.cropQc.featureMatchesPreview = { dataUrl: null };
+		initialProject.tissueSelection.matrix = null;
+		initialProject.tissueSelection.autoSelectedSpotIds = [];
+		initialProject.tissueSelection.selectedSpotIds = null;
+		const mutations: CapturedProjectMutation[] = [];
+		const user = userEvent.setup();
+
+		render(
+			<WorkspaceHarness
+				initialProject={initialProject}
+				onProjectMutateCapture={(mutation) => mutations.push(mutation)}
+			/>,
+		);
+
+		await user.click(screen.getByTestId('localize-mock-rotate-right-90'));
+
+		await waitFor(() => {
+			expect(mutations.at(-1)?.project.localization.imageTransform.rotationDegrees).toBe(90);
+		});
+		expect(mutations.at(-1)?.persistOptions).toEqual({ mode: 'metadata', strategy: 'debounced' });
+	});
+
+	it('uses full persistence for localization orientation changes when downstream payloads must be cleared', async () => {
+		const initialProject = createProject();
+		initialProject.currentStep = 'localization';
+		initialProject.localization.chipBounds = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+		initialProject.heFocus.focusedImageDataUrl = 'data:image/png;base64,focused-he';
+		const mutations: CapturedProjectMutation[] = [];
+		const user = userEvent.setup();
+
+		render(
+			<WorkspaceHarness
+				initialProject={initialProject}
+				onProjectMutateCapture={(mutation) => mutations.push(mutation)}
+			/>,
+		);
+
+		await user.click(screen.getByTestId('localize-mock-rotate-right-90'));
+
+		await waitFor(() => {
+			expect(mutations.at(-1)?.project.localization.imageTransform.rotationDegrees).toBe(90);
+		});
+		expect(mutations.at(-1)?.persistOptions).toBeUndefined();
+	});
+
+	it('uses debounced metadata persistence for HE focus orientation changes without a derived focus image', async () => {
+		const initialProject = createProject();
+		initialProject.currentStep = 'heFocus';
+		initialProject.sourceAssets.images.he = {
+			id: 'he-source',
+			kind: 'he',
+			fileName: 'he.png',
+			mimeType: 'image/png',
+			sizeBytes: 10,
+			width: 200,
+			height: 150,
+			lastModified: 2,
+			dataUrl: 'data:image/png;base64,BB==',
+		};
+		initialProject.heFocus.chipBounds = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 };
+		initialProject.heFocus.focusedImageDataUrl = null;
+		const mutations: CapturedProjectMutation[] = [];
+		const user = userEvent.setup();
+
+		render(
+			<WorkspaceHarness
+				initialProject={initialProject}
+				onProjectMutateCapture={(mutation) => mutations.push(mutation)}
+			/>,
+		);
+
+		await user.click(screen.getByTestId('he-focus-mock-rotate-right-90'));
+
+		await waitFor(() => {
+			expect(mutations.at(-1)?.project.heFocus.imageTransform.rotationDegrees).toBe(90);
+		});
+		expect(mutations.at(-1)?.persistOptions).toEqual({ mode: 'metadata', strategy: 'debounced' });
+	});
 });
 
 describe('PreprocessWorkspace H&E focus bootstrap', () => {
+  it('passes HE terminology into the focus canvas labels', () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'heFocus';
+    initialProject.localization.chipBounds = { x: 0.12, y: 0.18, width: 0.42, height: 0.4 };
+    initialProject.sourceAssets.images.he = {
+      id: 'he-source',
+      kind: 'he',
+      fileName: 'he.png',
+      mimeType: 'image/png',
+      sizeBytes: 10,
+      width: 200,
+      height: 150,
+      workingWidth: 100,
+      workingHeight: 75,
+      lastModified: 2,
+      dataUrl: 'data:image/png;base64,BB==',
+    };
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByText('HE preview ready')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting HE image')).toBeInTheDocument();
+    expect(screen.getByText('Using the adjusted NATA Align image as a reference, position and orient the H&E ROI to match the corresponding tissue region before landmark pairing.')).toBeInTheDocument();
+    expect(screen.getByText('Upload the HE source image in Source images before defining the registration region.')).toBeInTheDocument();
+    expect(screen.getByText('No HE image loaded')).toBeInTheDocument();
+    expect(screen.getByText('H&E ROI Alignment')).toBeInTheDocument();
+    expect(screen.getByText('HE registration region overlay')).toBeInTheDocument();
+    expect(screen.getByText('Reset HE focus transform')).toBeInTheDocument();
+    expect(screen.getByText('Saved HE focus bounds stay square and normalized in original HE image coordinates.')).toBeInTheDocument();
+
+  });
+
   it('seeds the default manual H&E focus bounds', async () => {
     const initialProject = createProject();
     initialProject.currentStep = 'heFocus';
@@ -1132,7 +1416,7 @@ describe('PreprocessWorkspace H&E focus bootstrap', () => {
   });
 });
 describe('PreprocessWorkspace export readiness gating', () => {
-  it('threads includeAlignedImage through export readiness and blocks download before export when checkerboard data is missing', async () => {
+  it('always includes the registered HE image and blocks download when checkerboard data is missing', async () => {
     const exportProject = {
       ...createProject(),
       currentStep: 'exportState' as const,
@@ -1141,16 +1425,6 @@ describe('PreprocessWorkspace export readiness gating', () => {
     render(<WorkspaceHarness initialProject={exportProject} />);
 
     await waitFor(() => {
-      expect(capturedExportPanelProps?.canExport).toBe(true);
-    });
-    expect(mockGetPreprocessZipExportReadiness).toHaveBeenLastCalledWith(expect.anything(), { includeAlignedImage: false });
-
-    await act(async () => {
-      capturedExportPanelProps?.onToggleIncludeAlignedImage(true);
-    });
-
-    await waitFor(() => {
-      expect(capturedExportPanelProps?.includeAlignedImage).toBe(true);
       expect(capturedExportPanelProps?.canExport).toBe(false);
     });
     expect(mockGetPreprocessZipExportReadiness).toHaveBeenLastCalledWith(expect.anything(), { includeAlignedImage: true });

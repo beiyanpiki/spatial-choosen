@@ -9,10 +9,6 @@ import {
   resizeChipBounds,
   translateChipBounds,
 } from '@/lib/preprocess/localization';
-import {
-  invertDisplayRectPointToSource,
-  projectSourcePointToDisplayRect,
-} from '@/lib/preprocess/imageTransforms';
 import type {
   LocalizationBoxColor,
   LocalizationImageTransform,
@@ -44,7 +40,7 @@ type CanvasStageProps = {
 };
 
 type CanvasStageLabels = {
-  badgeReady: string;
+  badgeReady: string | null;
   badgeWaiting: string;
   description: string;
   emptyDescription: string;
@@ -101,12 +97,12 @@ const normalizeDegrees = (value: number) => {
 };
 
 const DEFAULT_CANVAS_STAGE_LABELS: CanvasStageLabels = {
-  badgeReady: 'Eosin reference ready',
+  badgeReady: null,
   badgeWaiting: 'Awaiting eosin reference',
-  description: 'Orient the eosin reference image and place the capture area over the chip region.',
+  description: 'Use the controls on the right to adjust the position and orientation of the NATA Align image until the ROI is completely enclosed within the green capture area.',
   emptyDescription: 'Upload the eosin reference image in Source images before placing the capture area.',
   emptyTitle: 'No eosin reference loaded',
-  heading: 'Chip localization canvas',
+  heading: 'Define Capture Area',
   overlayAriaLabel: 'Chip capture area overlay',
   resetAriaLabel: 'Reset localization transform',
   savedHint: 'Saved chip coordinates remain normalized in the eosin source image.',
@@ -121,24 +117,28 @@ const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve
   image.src = src;
 });
 
-const projectSourcePointToScreen = (
+const projectCanvasPointToScreen = (
   point: PreprocessPoint,
   displayTransform: ReturnType<typeof getTransform>,
-  imageTransform: LocalizationImageTransform,
 ): ScreenPoint | null => {
   if (!displayTransform) return null;
 
-  return projectSourcePointToDisplayRect(point, imageTransform, displayTransform);
+  return {
+    x: displayTransform.originX + point.x * displayTransform.width,
+    y: displayTransform.originY + point.y * displayTransform.height,
+  };
 };
 
-const projectScreenPointToSource = (
+const projectScreenPointToCanvas = (
   screenPoint: ScreenPoint | null,
   displayTransform: ReturnType<typeof getTransform>,
-  imageTransform: LocalizationImageTransform,
 ): PreprocessPoint | null => {
   if (!screenPoint || !displayTransform) return null;
 
-  return invertDisplayRectPointToSource(screenPoint, imageTransform, displayTransform);
+  return {
+    x: (screenPoint.x - displayTransform.originX) / displayTransform.width,
+    y: (screenPoint.y - displayTransform.originY) / displayTransform.height,
+  };
 };
 
 const getRectSourceCorners = (
@@ -350,8 +350,8 @@ export function CanvasStage({
 
   const getOverlayImagePoint = useCallback((clientX: number, clientY: number) => {
     const relativePoint = getRelativePoint(clientX, clientY);
-    return projectScreenPointToSource(relativePoint, displayTransform, imageTransform);
-  }, [displayTransform, getRelativePoint, imageTransform]);
+    return projectScreenPointToCanvas(relativePoint, displayTransform);
+  }, [displayTransform, getRelativePoint]);
 
   const getInteractionImagePoint = useCallback((clientX: number, clientY: number) => (
     getOverlayImagePoint(clientX, clientY)
@@ -443,8 +443,8 @@ export function CanvasStage({
   }, [hostElement, image, imageTransform.scale, onScaleChange]);
 
   const projectOverlayPointToScreen = useCallback((point: PreprocessPoint) => (
-    projectSourcePointToScreen(point, displayTransform, imageTransform)
-  ), [displayTransform, imageTransform]);
+    projectCanvasPointToScreen(point, displayTransform)
+  ), [displayTransform]);
 
   const overlay = useMemo(() => {
     if (!displayTransform || !normalizedChipBounds) return null;
@@ -501,9 +501,13 @@ export function CanvasStage({
           <Heading size='sm'>{copy.heading}</Heading>
           <Text fontSize='sm' color='gray.500'>{copy.description}</Text>
         </Stack>
-        <Badge colorScheme={image ? 'green' : 'orange'} borderRadius='full'>
-          {image ? copy.badgeReady : copy.badgeWaiting}
-        </Badge>
+        {image ? (
+          copy.badgeReady ? (
+            <Badge colorScheme='green' borderRadius='full'>{copy.badgeReady}</Badge>
+          ) : null
+        ) : (
+          <Badge colorScheme='orange' borderRadius='full'>{copy.badgeWaiting}</Badge>
+        )}
       </Flex>
 
       <Box
