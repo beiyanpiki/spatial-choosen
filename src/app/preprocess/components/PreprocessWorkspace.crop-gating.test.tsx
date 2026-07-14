@@ -291,6 +291,7 @@ const createProject = (overrides?: {
       accepted: overrides?.alignmentAccepted ?? true,
     },
     solveAccepted: overrides?.solveAccepted ?? true,
+    forceAccepted: false,
     failureReason: null,
     transform: null,
     previewDataUrl: null,

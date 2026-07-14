@@ -1288,7 +1288,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 			const preview = screen.getByTestId('he-focus-localize-reference-preview');
 			expect(preview).toBeInTheDocument();
 			expect(screen.getByTestId('he-focus-localize-reference-card')).toHaveTextContent(
-				'Eosin chip-localized reference',
+				'NATA Align Reference Image',
 			);
 			expect(preview.getAttribute('src')).toContain(
 				'data:image/png;base64,regenerated-he-focus-preview',

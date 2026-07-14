@@ -163,6 +163,7 @@ export type AlignmentSlice = PreprocessSliceBase & {
   ransacReprojThreshold: number | null;
   qualityFlags: AlignmentQualityFlags;
   solveAccepted: boolean;
+  forceAccepted: boolean;
   failureReason: AlignmentFailureReason | null;
   transform: AlignmentTransform | null;
   previewDataUrl: string | null;

@@ -403,7 +403,7 @@ const placeholderCopyByStep: Record<
 > = {
 	sourceAssets: {
 		title: "Source image intake",
-		body: "Upload the eosin reference image and the matching HE image for this section. Replacing either source image refreshes downstream registration, crop QC, spot projection, and tissue selection outputs.",
+		body: "Upload the NATA Align image and the corresponding H&E stained tissue image. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.",
 	},
 	localization: {
 		title: "Chip localization",
@@ -704,7 +704,7 @@ export function PreprocessWorkspace({
 	const [chipManifests, setChipManifests] = useState<ChipConfigManifest[]>([]);
 	const [chipConfigError, setChipConfigError] = useState<string | null>(null);
 	const [includeProjectJson, setIncludeProjectJson] = useState(false);
-	const [includeAlignedImage, setIncludeAlignedImage] = useState(false);
+	const includeAlignedImage = true;
 	const [isExporting, setIsExporting] = useState(false);
 	const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 	const [projectNameDraft, setProjectNameDraft] = useState("");
@@ -1853,7 +1853,7 @@ export function PreprocessWorkspace({
 				!tissueAutoDetectionReadiness.ready
 			? tissueAutoDetectionReadiness.reason
 			: project?.tissueSelection.status === "complete"
-				? "Tissue spot matrix is ready. Mark spots as tissue or background directly on the canvas."
+				? "Tissue spot selection is complete. Refine the selection by marking spots as tissue or background if necessary."
 				: "Choose a signal mode and auto-select tissue spots to refresh the tissue matrix.";
 	const tissueProjectedSpots = useMemo(
 		() => project?.chipConfig.projectedSpots ?? [],
@@ -2089,11 +2089,11 @@ export function PreprocessWorkspace({
 									</Text>
 									<Flex direction={{ base: "column", xl: "row" }} gap={5}>
 										<SourceAssetUploader
-											label="Eosin source image"
-											description="Reference image for chip localization, crop geometry, and tissue signal detection."
+											label="NATA Align image"
+											description="The NATA Align image uploaded here should be exported from the NATA Align Spatial Instrument and will be used for downstream chip capture area localization and image analysis."
 											buttonLabel={
 												project.sourceAssets.images.eosin
-													? "Replace eosin reference"
+													? "Replace reference"
 													: "Upload eosin reference"
 											}
 											emptyText="No eosin reference image uploaded yet."
@@ -2103,11 +2103,11 @@ export function PreprocessWorkspace({
 											}}
 										/>
 										<SourceAssetUploader
-											label="HE source image"
+											label="H&E stained tissue image"
 											description="Moving image for HE focus, landmark registration, and registered crop generation."
 											buttonLabel={
 												project.sourceAssets.images.he
-													? "Replace HE image"
+													? "Replace image"
 													: "Upload HE image"
 											}
 											emptyText="No HE source image uploaded yet."
@@ -2253,11 +2253,11 @@ export function PreprocessWorkspace({
 												badgeReady: "HE preview ready",
 												badgeWaiting: "Awaiting HE image",
 												description:
-													"Adjust the square HE registration region and orientation before landmark pairing.",
+													"Using the adjusted NATA Align image as a reference, position and orient the H&E ROI to match the corresponding tissue region before landmark pairing.",
 												emptyDescription:
 													"Upload the HE source image in Source images before defining the registration region.",
 												emptyTitle: "No HE image loaded",
-												heading: "HE focus canvas",
+												heading: "H&E ROI Alignment",
 												overlayAriaLabel: "HE registration region overlay",
 												resetAriaLabel: "Reset HE focus transform",
 												savedHint:
@@ -2395,15 +2395,15 @@ export function PreprocessWorkspace({
 												<Stack spacing={1}>
 													<HStack spacing={2} align="center">
 														<Heading size="sm">
-															Eosin chip-localized reference
+													NATA Align Reference Image
 														</Heading>
 														<Badge colorScheme="blue" variant="subtle">
 															Reference crop
 														</Badge>
 													</HStack>
 													<Text fontSize="sm" color="gray.600">
-														Compare your live HE drag against the committed
-														eosin chip-localized crop.
+												Use the reference NATA Align image to identify and align the
+												corresponding ROI in the H&E image.
 													</Text>
 												</Stack>
 												{heFocusComparisonImageDataUrl ? (
@@ -2536,12 +2536,13 @@ export function PreprocessWorkspace({
 											{ invalidateDownstream: true },
 										);
 									}}
-									canRun={Boolean(
-										project.alignment.status === "complete" &&
-											project.alignment.qualityFlags.accepted &&
-											alignmentReferenceImage?.dataUrl &&
-											alignmentMovingImage?.dataUrl,
-									)}
+								canRun={Boolean(
+									project.alignment.status === "complete" &&
+										(project.alignment.qualityFlags.accepted ||
+											project.alignment.forceAccepted) &&
+										alignmentReferenceImage?.dataUrl &&
+										alignmentMovingImage?.dataUrl,
+								)}
 									canAccept={Boolean(
 										project.cropQc.cropWidth && project.cropQc.cropHeight,
 									)}
@@ -2590,7 +2591,7 @@ export function PreprocessWorkspace({
 												<CardBody p={4}>
 													<Stack spacing={3}>
 														<Text fontSize="sm" fontWeight="semibold">
-															Capture chip
+															Chip Information
 														</Text>
 														<FormControl isDisabled={isChipSelectorDisabled}>
 															<FormLabel
@@ -2598,7 +2599,7 @@ export function PreprocessWorkspace({
 																color="gray.500"
 																mb={1.5}
 															>
-																Spot pitch
+																Spot Size
 															</FormLabel>
 															<Select
 																value={project.chipConfig.chipType ?? ""}
@@ -2777,9 +2778,9 @@ export function PreprocessWorkspace({
 															</Select>
 														</FormControl>
 														<Text fontSize="xs" color="gray.500">
-															Changing the capture pitch clears previous tissue
-															edits, regenerates projected spots, and requires
-															tissue auto-selection to run again.
+															Changing the capture resolution will clear previous tissue edits,
+															regenerate the projected spot grid, and require tissue auto-selection
+															to be performed again.
 														</Text>
 														{(chipConfigError ?? project.chipConfig.error) ? (
 															<Text fontSize="sm" color="red.600">
@@ -2975,7 +2976,7 @@ export function PreprocessWorkspace({
 															color="gray.600"
 															data-testid="tissue-selected-count"
 														>
-															Tissue spots: {tissueSelectedSpotIds.length}
+															Number of Tissue Spots: {tissueSelectedSpotIds.length}
 														</Text>
 														{project.tissueSelection.warning ? (
 															<Text
@@ -3030,9 +3031,7 @@ export function PreprocessWorkspace({
 							) : project.currentStep === "exportState" ? (
 								<ExportPanel
 									includeProject={includeProjectJson}
-									includeAlignedImage={includeAlignedImage}
 									onToggleIncludeProject={setIncludeProjectJson}
-									onToggleIncludeAlignedImage={setIncludeAlignedImage}
 									isExporting={isExporting}
 									canExport={exportReadiness.canExport}
 									onDownload={() => {

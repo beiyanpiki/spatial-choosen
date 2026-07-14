@@ -72,6 +72,7 @@ const createProject = (): PreprocessProject => ({
       scale: 1,
     },
     overlayOpacity: 0.5,
+    source: null,
     controlPoints: [],
     inlierMask: null,
     affineMatrix: null,
@@ -87,6 +88,7 @@ const createProject = (): PreprocessProject => ({
       accepted: false,
     },
     solveAccepted: false,
+    forceAccepted: false,
     failureReason: null,
     transform: null,
     previewDataUrl: null,
@@ -183,7 +185,7 @@ describe('resolveTissueSelectionSupport', () => {
   it('rejects 50um 50x50 chips as unsupported', () => {
     expect(resolveTissueSelectionSupport({ chipType: '50um', rows: 50, columns: 50 })).toEqual({
       supportState: 'unsupported',
-      unsupportedReason: '50um tissue selection requires a 64x64 grid.',
+      unsupportedReason: '50um tissue auto-selection requires a 64x64 spot grid.',
     });
   });
 

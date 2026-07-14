@@ -107,14 +107,14 @@ export function TissueSelectionControls({
     setBlockThresholdInput(String(blockThreshold));
   }, [blockThreshold]);
 
-  const blockThresholdLabel = thresholdMode === 'raw' ? 'Saturation cutoff' : 'Background cutoff';
+  const blockThresholdLabel = thresholdMode === 'raw' ? 'Saturation Threshold' : 'Background cutoff';
 
   return (
     <Stack spacing={4}>
       <Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
         <CardBody p={4}>
           <Stack spacing={4}>
-            <Text fontSize="sm" fontWeight="semibold">Tissue auto-selection</Text>
+            <Text fontSize="sm" fontWeight="semibold">Automatic Tissue Detection</Text>
             {isUnsupported ? (
               <Stack spacing={1}>
                 <Text fontSize="sm" color="orange.700">
@@ -142,7 +142,7 @@ export function TissueSelectionControls({
               </Select>
             </FormControl>
             <FormControl isDisabled={isUnsupported || isDetecting}>
-              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Tissue signal cutoff</FormLabel>
+              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Tissue Signal Threshold</FormLabel>
               <Input
                 type="number"
                 step="0.01"
@@ -205,7 +205,7 @@ export function TissueSelectionControls({
               isDisabled={isUnsupported || hasInvalidLocalThresholdState}
               onClick={onRunAutoDetection}
             >
-              Auto-select tissue spots
+              Detect Tissue Spots
             </Button>
           </Stack>
         </CardBody>
@@ -214,7 +214,7 @@ export function TissueSelectionControls({
       <Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
         <CardBody p={4}>
           <Stack spacing={3}>
-            <Text fontSize="sm" fontWeight="semibold">Manual refinement</Text>
+            <Text fontSize="sm" fontWeight="semibold">Manual Refinement</Text>
             <Button
               data-testid="tissue-show-spots-toggle"
               variant="outline"
@@ -231,7 +231,7 @@ export function TissueSelectionControls({
               isDisabled={isUnsupported || isDetecting}
               onClick={onInvertSelection}
             >
-              Invert tissue selection
+              Invert selection
             </Button>
             {TOOL_OPTIONS.map((tool) => (
               <Button

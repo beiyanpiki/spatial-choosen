@@ -255,6 +255,7 @@ export const buildEmptyPreprocessProject = (
 				accepted: false,
 			},
 			solveAccepted: false,
+			forceAccepted: false,
 			failureReason: null,
 			transform: null,
 			previewDataUrl: null,

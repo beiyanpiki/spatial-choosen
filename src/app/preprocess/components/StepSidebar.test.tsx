@@ -22,6 +22,7 @@ const createProjectedSpot = (id: string) => ({
 const createProject = (
   alignmentStatus: PreprocessStepStatus,
   alignmentAccepted = false,
+  forceAccepted = false,
 ): PreprocessProject => ({
   id: 'project-step-sidebar',
   name: 'Step sidebar project',
@@ -90,6 +91,7 @@ const createProject = (
       scale: 1,
     },
     overlayOpacity: 0.5,
+    source: null,
     controlPoints: [],
     inlierMask: null,
     affineMatrix: null,
@@ -105,6 +107,7 @@ const createProject = (
       accepted: alignmentAccepted,
     },
     solveAccepted: alignmentAccepted,
+    forceAccepted,
     failureReason: alignmentStatus === 'error' ? 'solve-failed' : null,
     transform: null,
     previewDataUrl: null,
@@ -186,6 +189,26 @@ const renderSidebar = (project: PreprocessProject) =>
   );
 
 describe('StepSidebar', () => {
+  it('renders the revised seven-step workflow copy', () => {
+    renderSidebar(createProject('complete', true));
+
+    expect(screen.getByText('Complete each step in sequence to generate the preprocessing results required for downstream analysis.')).toBeInTheDocument();
+    expect(screen.getByText('Upload Images')).toBeInTheDocument();
+    expect(screen.getByText('Upload the NATA Align image and the corresponding H&E image.')).toBeInTheDocument();
+    expect(screen.getByText('Define Capture Area')).toBeInTheDocument();
+    expect(screen.getByText('Position the capture area on the NATA Align image.')).toBeInTheDocument();
+    expect(screen.getByText('H&E ROI Alignment')).toBeInTheDocument();
+    expect(screen.getByText('Select the corresponding ROI in the H&E image.')).toBeInTheDocument();
+    expect(screen.getByText('Image Registration')).toBeInTheDocument();
+    expect(screen.getByText('Create landmark pairs and register the images.')).toBeInTheDocument();
+    expect(screen.getByText('Registration Review')).toBeInTheDocument();
+    expect(screen.getByText('Review the registration results using Checkerboard, Landmark Pair, and Overlay views.')).toBeInTheDocument();
+    expect(screen.getByText('Tissue Spot Selection')).toBeInTheDocument();
+    expect(screen.getByText('Automatically detect and manually refine tissue spots.')).toBeInTheDocument();
+    expect(screen.getByText('Export Preprocessing Package')).toBeInTheDocument();
+    expect(screen.getByText('Download the preprocessing package for downstream analysis in NATA Insight Bioinformatics Software.')).toBeInTheDocument();
+  });
+
   it('keeps Crop disabled when alignment status is not complete', () => {
     const { rerender } = renderSidebar(createProject('ready'));
 
@@ -214,6 +237,12 @@ describe('StepSidebar', () => {
 
   it('enables Crop when alignment status is complete and strict acceptance is true', () => {
     renderSidebar(createProject('complete', true));
+
+    expect(screen.getByTestId('preprocess-step-crop')).toBeEnabled();
+  });
+
+  it('enables Crop when alignment is force-accepted even though strict acceptance is false', () => {
+    renderSidebar(createProject('complete', false, true));
 
     expect(screen.getByTestId('preprocess-step-crop')).toBeEnabled();
   });

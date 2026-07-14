@@ -318,6 +318,7 @@ const createBaseProject = (): PreprocessProject => {
         accepted: true,
       },
       solveAccepted: true,
+      forceAccepted: false,
       failureReason: null,
       transform: null,
       previewDataUrl: null,

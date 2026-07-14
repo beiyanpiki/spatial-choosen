@@ -40,7 +40,7 @@ type CanvasStageProps = {
 };
 
 type CanvasStageLabels = {
-  badgeReady: string;
+  badgeReady: string | null;
   badgeWaiting: string;
   description: string;
   emptyDescription: string;
@@ -97,12 +97,12 @@ const normalizeDegrees = (value: number) => {
 };
 
 const DEFAULT_CANVAS_STAGE_LABELS: CanvasStageLabels = {
-  badgeReady: 'Eosin reference ready',
+  badgeReady: null,
   badgeWaiting: 'Awaiting eosin reference',
-  description: 'Orient the eosin reference image and place the capture area over the chip region.',
+  description: 'Use the controls on the right to adjust the position and orientation of the NATA Align image until the ROI is completely enclosed within the green capture area.',
   emptyDescription: 'Upload the eosin reference image in Source images before placing the capture area.',
   emptyTitle: 'No eosin reference loaded',
-  heading: 'Chip localization canvas',
+  heading: 'Define Capture Area',
   overlayAriaLabel: 'Chip capture area overlay',
   resetAriaLabel: 'Reset localization transform',
   savedHint: 'Saved chip coordinates remain normalized in the eosin source image.',
@@ -501,9 +501,13 @@ export function CanvasStage({
           <Heading size='sm'>{copy.heading}</Heading>
           <Text fontSize='sm' color='gray.500'>{copy.description}</Text>
         </Stack>
-        <Badge colorScheme={image ? 'green' : 'orange'} borderRadius='full'>
-          {image ? copy.badgeReady : copy.badgeWaiting}
-        </Badge>
+        {image ? (
+          copy.badgeReady ? (
+            <Badge colorScheme='green' borderRadius='full'>{copy.badgeReady}</Badge>
+          ) : null
+        ) : (
+          <Badge colorScheme='orange' borderRadius='full'>{copy.badgeWaiting}</Badge>
+        )}
       </Flex>
 
       <Box

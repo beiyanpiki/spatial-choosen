@@ -487,14 +487,14 @@ export function TissueSelectionPanel({
             direction={{ base: 'column', md: 'row' }}
           >
             <Stack spacing={1}>
-              <Text fontSize='lg' fontWeight='semibold'>Tissue spot selection</Text>
+              <Text fontSize='lg' fontWeight='semibold'>Tissue Spot Selection</Text>
               <Text fontSize='sm' color='gray.500'>
-                Review the eosin crop, auto-select tissue-covered spots, then refine the spot matrix with freehand edits.
+                Automatically identify tissue-covered spots and refine the selection manually if needed.
               </Text>
             </Stack>
             <HStack spacing={3} wrap='wrap' justify={{ base: 'flex-start', md: 'flex-end' }}>
               <Text data-testid='tissue-panel-selected-count' fontSize='sm' color='gray.600'>
-                Tissue spots: {selectedSpotIds.length}
+                Number of Tissue Spots: {selectedSpotIds.length}
               </Text>
             </HStack>
           </Flex>

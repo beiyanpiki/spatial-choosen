@@ -8,13 +8,13 @@ export type CropQcPreviewMode = {
 
 const CROP_QC_PREVIEW_MODES: Record<CropQcPreviewModeKey, CropQcPreviewMode> = {
   tissueAlign: {
-    title: 'Checkerboard registration QC',
-    description: 'Alternating eosin reference and registered H&E tiles for checking local alignment.',
+    title: 'Checkerboard View',
+    description: 'Compare the NATA Align image and the registered H&E image in a checkerboard view to verify registration accuracy.',
     emptyState: 'Checkerboard QC appears after registered crop generation.',
   },
   featureMatches: {
-    title: 'Landmark match QC',
-    description: 'Side-by-side landmark montage linking the eosin reference crop to the registered H&E crop.',
+    title: 'Landmark Pair Verification',
+    description: 'Verify that each landmark pair connects the corresponding anatomical feature in both images.',
     emptyState: 'Landmark match QC appears after registered crop generation.',
   },
 };

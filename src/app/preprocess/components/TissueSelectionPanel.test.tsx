@@ -1,5 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { theme } from '../../../theme';
@@ -151,6 +151,10 @@ describe('TissueSelectionPanel', () => {
 			expect(fillStyles).toContain(expectedNeutralFill);
 		});
 		expect(strokeRectMock).not.toHaveBeenCalled();
+
+		expect(screen.getByText('Tissue Spot Selection')).toBeInTheDocument();
+		expect(screen.getByText('Automatically identify tissue-covered spots and refine the selection manually if needed.')).toBeInTheDocument();
+		expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
 	});
 
 	it('skips spot drawing when spot visibility is turned off', async () => {

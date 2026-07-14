@@ -304,6 +304,46 @@ function StageCommitHarness({
 }
 
 describe('CanvasStage', () => {
+	it('omits only the localization ready pill while preserving the waiting status', () => {
+		const commonProps = {
+			boxColor: 'green' as const,
+			imageTransform: createTransform(),
+			onChipBoundsChange: vi.fn(),
+			onFlipHorizontal: vi.fn(),
+			onFlipVertical: vi.fn(),
+			onResetTransform: vi.fn(),
+			onRotationChange: vi.fn(),
+			onRotationDelta: vi.fn(),
+			onScaleChange: vi.fn(),
+			onScaleDelta: vi.fn(),
+		};
+		const { rerender } = render(
+			<ChakraProvider theme={theme}>
+				<CanvasStage
+					{...commonProps}
+					chipBounds={createChipBounds()}
+					image={createImage()}
+				/>
+			</ChakraProvider>,
+		);
+
+		expect(screen.getByText('Define Capture Area')).toBeInTheDocument();
+		expect(screen.getByText('Use the controls on the right to adjust the position and orientation of the NATA Align image until the ROI is completely enclosed within the green capture area.')).toBeInTheDocument();
+		expect(screen.queryByText('Eosin reference ready')).not.toBeInTheDocument();
+
+		rerender(
+			<ChakraProvider theme={theme}>
+				<CanvasStage
+					{...commonProps}
+					chipBounds={null}
+					image={null}
+				/>
+			</ChakraProvider>,
+		);
+
+		expect(screen.getByText('Awaiting eosin reference')).toBeInTheDocument();
+	});
+
 	it('loads the working image URL for interactive previews before falling back to canonical source data', async () => {
 		render(
 			<ChakraProvider theme={theme}>

@@ -46,6 +46,7 @@ const invalidateAlignmentSlice = (slice: AlignmentSlice): AlignmentSlice => ({
     accepted: false,
   },
   solveAccepted: false,
+  forceAccepted: false,
   failureReason: null,
   transform: null,
   previewDataUrl: null,

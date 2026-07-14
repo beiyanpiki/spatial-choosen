@@ -871,9 +871,10 @@ export function migratePreprocessProject(
 	const normalizedAlignment = normalizeAlignmentSlice(
 		normalizeLegacyAlignmentSource(project.alignment),
 	);
-	const strictAlignmentAccepted =
+	const effectiveAlignmentAccepted =
 		normalizedAlignment.solveAccepted &&
-		normalizedAlignment.qualityFlags.accepted;
+		(normalizedAlignment.qualityFlags.accepted ||
+			normalizedAlignment.forceAccepted);
 	const normalizedAlignmentStatus = computeAlignmentStatus({
 		hasReferenceImage: Boolean(
 			project.sourceAssets.images[normalizedAlignment.referenceImage],
@@ -881,7 +882,7 @@ export function migratePreprocessProject(
 		hasMovingImage: Boolean(
 			project.sourceAssets.images[normalizedAlignment.movingImage],
 		),
-		solveAccepted: strictAlignmentAccepted,
+		solveAccepted: effectiveAlignmentAccepted,
 		failureReason: normalizedAlignment.failureReason,
 	});
 	const migratedAlignmentStatus =

@@ -11,44 +11,44 @@ type StepItem = {
 export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
   {
     id: 'sourceAssets',
-    label: 'Source images',
-    description: 'Upload eosin and H&E images',
+    label: 'Upload Images',
+    description: 'Upload the NATA Align image and the corresponding H&E image.',
     testId: 'preprocess-step-source-assets',
   },
   {
     id: 'localization',
-    label: 'Chip localization',
-    description: 'Place the capture area',
+    label: 'Define Capture Area',
+    description: 'Position the capture area on the NATA Align image.',
     testId: 'preprocess-step-localize',
   },
   {
     id: 'heFocus',
-    label: 'H&E focus',
-    description: 'Crop the H&E registration region',
+    label: 'H&E ROI Alignment',
+    description: 'Select the corresponding ROI in the H&E image.',
     testId: 'preprocess-step-he-focus',
   },
   {
     id: 'alignment',
-    label: 'Registration',
-    description: 'Pair landmarks and solve transform',
+    label: 'Image Registration',
+    description: 'Create landmark pairs and register the images.',
     testId: 'preprocess-step-align',
   },
   {
     id: 'cropQc',
-    label: 'Crop QC',
-    description: 'Review registered crop outputs',
+    label: 'Registration Review',
+    description: 'Review the registration results using Checkerboard, Landmark Pair, and Overlay views.',
     testId: 'preprocess-step-crop',
   },
   {
     id: 'tissueSelection',
-    label: 'Tissue spots',
-    description: 'Select tissue-covered spots',
+    label: 'Tissue Spot Selection',
+    description: 'Automatically detect and manually refine tissue spots.',
     testId: 'preprocess-step-tissue',
   },
   {
     id: 'exportState',
-    label: 'Export package',
-    description: 'Download processed outputs',
+    label: 'Export Preprocessing Package',
+    description: 'Download the preprocessing package for downstream analysis in NATA Insight Bioinformatics Software.',
     testId: 'preprocess-step-export',
   },
 ] as const;
@@ -102,7 +102,7 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
     case 'alignment':
       return project.heFocus.status === 'complete';
     case 'cropQc':
-      return project.alignment.status === 'complete' && project.alignment.qualityFlags.accepted;
+      return project.alignment.status === 'complete' && (project.alignment.qualityFlags.accepted || project.alignment.forceAccepted);
     case 'chipConfig':
       return project.cropQc.status === 'complete';
     case 'tissueSelection':
@@ -136,7 +136,7 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
       >
         <Stack spacing={1}>
           <Heading size='sm'>Preprocessing Workflow</Heading>
-          <Text fontSize='sm' color='gray.500'>Complete each stage in order to keep derived outputs valid.</Text>
+          <Text fontSize='sm' color='gray.500'>Complete each step in sequence to generate the preprocessing results required for downstream analysis.</Text>
         </Stack>
       </Box>
       {PREPROCESS_STEP_ITEMS.map((step, index) => {
@@ -171,7 +171,7 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
             isDisabled={!enabled}
             onClick={() => onStepSelect(step.id)}
           >
-            <Stack spacing={1} textAlign='left' flex='1'>
+            <Stack spacing={1} textAlign='left' flex='1' minW={0}>
               <Text fontSize='xs' fontWeight='semibold' letterSpacing='0.12em' textTransform='uppercase' color={isActive ? 'whiteAlpha.800' : 'gray.400'}>
                 Step {index + 1}
               </Text>
@@ -182,6 +182,7 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
             </Stack>
             <Badge
               ml={3}
+              flexShrink={0}
               colorScheme={statusToneByStep[stepState.status] ?? 'gray'}
               textTransform='capitalize'
               borderRadius='full'

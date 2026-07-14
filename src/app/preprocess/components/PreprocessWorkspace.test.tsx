@@ -11,9 +11,7 @@ type MockExportReadinessArgs = {
 };
 
 type CapturedExportPanelProps = {
-  includeAlignedImage: boolean;
   canExport: boolean;
-  onToggleIncludeAlignedImage: (value: boolean) => void;
   onDownload: () => void;
 };
 
@@ -257,7 +255,7 @@ vi.mock('./TissueSelectionPanel', () => ({
   }) => (
     <div data-testid="tissue-selection-panel-mock">
       <div data-testid="tissue-panel-selected-count">
-        Tissue spots: {props.selectedSpotIds.length}
+        Number of Tissue Spots: {props.selectedSpotIds.length}
       </div>
       <button
         type="button"
@@ -487,6 +485,7 @@ const createProject = (): PreprocessProject => ({
       accepted: false,
     },
     solveAccepted: false,
+    forceAccepted: false,
     failureReason: null,
     transform: null,
     previewDataUrl: null,
@@ -650,23 +649,20 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 		mockLoadChipConfigData.mockResolvedValue(null);
 	});
 
-  it('uses HE terminology and avoids repeated local wording in source image copy', () => {
+  it('renders the revised source image copy', () => {
     const initialProject = createProject();
     initialProject.currentStep = 'sourceAssets';
 
     render(<WorkspaceHarness initialProject={initialProject} />);
 
     expect(screen.getByText(
-      'Upload the eosin reference image and the matching HE image for this section. Replacing either source image refreshes downstream registration, crop QC, spot projection, and tissue selection outputs.',
+      'Upload the NATA Align image and the corresponding H&E stained tissue image. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.',
     )).toBeInTheDocument();
-    expect(screen.getByText('HE source image')).toBeInTheDocument();
+    expect(screen.getByText('NATA Align image')).toBeInTheDocument();
+    expect(screen.getByText('H&E stained tissue image')).toBeInTheDocument();
     expect(screen.getByText('Moving image for HE focus, landmark registration, and registered crop generation.')).toBeInTheDocument();
     expect(screen.getByText('Upload HE image')).toBeInTheDocument();
     expect(screen.getByText('No HE source image uploaded yet.')).toBeInTheDocument();
-
-    expect(screen.getByTestId('preprocess-workspace-shell')).not.toHaveTextContent('H&E');
-    expect(screen.getByTestId('preprocess-workspace-shell')).not.toHaveTextContent(/keeps the project local/i);
-    expect(screen.getByTestId('preprocess-workspace-shell')).not.toHaveTextContent(/local export/i);
   });
 
   it('toggles spot visibility locally without changing the selected spot count', async () => {
@@ -677,14 +673,14 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     const panelSelectedCount = screen.getByTestId('tissue-panel-selected-count');
     const toggleButton = screen.getByRole('button', { name: 'Hide spot grid' });
 
-    expect(selectedCount).toHaveTextContent('Tissue spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Tissue spots: 0');
+    expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
 
     await user.click(toggleButton);
 
     expect(screen.getByRole('button', { name: 'Show spot grid' })).toBeInTheDocument();
-    expect(selectedCount).toHaveTextContent('Tissue spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Tissue spots: 0');
+    expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
   });
 
   it('uses edited activation and block thresholds for the next auto-detection run without auto-running on edit', async () => {
@@ -967,13 +963,13 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(runAutoButton).not.toBeDisabled();
     expect(activateButton).not.toBeDisabled();
     expect(deactivateButton).not.toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 0');
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
 
     await user.click(runAutoButton);
 
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 1');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
+      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
 
     await user.selectOptions(thresholdModeSelect, 'gray-max');
@@ -995,8 +991,8 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(runAutoButton).toBeDisabled();
     expect(activateButton).toBeDisabled();
     expect(deactivateButton).toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Tissue spots: 0');
-    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 0');
+    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
   });
 
   it('keeps only the latest auto-detection result when an older request resolves last', async () => {
@@ -1104,7 +1100,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     await waitFor(() => {
       expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
 
     requestA.resolve({
@@ -1133,7 +1129,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     await waitFor(() => {
       expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Tissue spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
   });
 });
@@ -1373,15 +1369,14 @@ describe('PreprocessWorkspace H&E focus bootstrap', () => {
 
     expect(screen.getByText('HE preview ready')).toBeInTheDocument();
     expect(screen.getByText('Awaiting HE image')).toBeInTheDocument();
-    expect(screen.getByText('Adjust the square HE registration region and orientation before landmark pairing.')).toBeInTheDocument();
+    expect(screen.getByText('Using the adjusted NATA Align image as a reference, position and orient the H&E ROI to match the corresponding tissue region before landmark pairing.')).toBeInTheDocument();
     expect(screen.getByText('Upload the HE source image in Source images before defining the registration region.')).toBeInTheDocument();
     expect(screen.getByText('No HE image loaded')).toBeInTheDocument();
-    expect(screen.getByText('HE focus canvas')).toBeInTheDocument();
+    expect(screen.getByText('H&E ROI Alignment')).toBeInTheDocument();
     expect(screen.getByText('HE registration region overlay')).toBeInTheDocument();
     expect(screen.getByText('Reset HE focus transform')).toBeInTheDocument();
     expect(screen.getByText('Saved HE focus bounds stay square and normalized in original HE image coordinates.')).toBeInTheDocument();
 
-    expect(screen.getByTestId('canvas-stage-mock')).not.toHaveTextContent('H&E');
   });
 
   it('seeds the default manual H&E focus bounds', async () => {
@@ -1421,7 +1416,7 @@ describe('PreprocessWorkspace H&E focus bootstrap', () => {
   });
 });
 describe('PreprocessWorkspace export readiness gating', () => {
-  it('threads includeAlignedImage through export readiness and blocks download before export when checkerboard data is missing', async () => {
+  it('always includes the registered HE image and blocks download when checkerboard data is missing', async () => {
     const exportProject = {
       ...createProject(),
       currentStep: 'exportState' as const,
@@ -1430,16 +1425,6 @@ describe('PreprocessWorkspace export readiness gating', () => {
     render(<WorkspaceHarness initialProject={exportProject} />);
 
     await waitFor(() => {
-      expect(capturedExportPanelProps?.canExport).toBe(true);
-    });
-    expect(mockGetPreprocessZipExportReadiness).toHaveBeenLastCalledWith(expect.anything(), { includeAlignedImage: false });
-
-    await act(async () => {
-      capturedExportPanelProps?.onToggleIncludeAlignedImage(true);
-    });
-
-    await waitFor(() => {
-      expect(capturedExportPanelProps?.includeAlignedImage).toBe(true);
       expect(capturedExportPanelProps?.canExport).toBe(false);
     });
     expect(mockGetPreprocessZipExportReadiness).toHaveBeenLastCalledWith(expect.anything(), { includeAlignedImage: true });

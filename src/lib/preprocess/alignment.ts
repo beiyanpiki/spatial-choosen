@@ -1188,6 +1188,7 @@ export function normalizeAlignmentSlice(slice: AlignmentSlice): AlignmentSlice {
       accepted: Boolean(slice.qualityFlags?.accepted),
     },
     solveAccepted: Boolean(slice.solveAccepted),
+    forceAccepted: Boolean(slice.forceAccepted),
     failureReason: slice.failureReason ?? null,
     transform: slice.transform,
     previewDataUrl: slice.previewDataUrl,
