@@ -1270,10 +1270,25 @@ export async function upsertPreprocessProject(
 
   if (mode === 'tissue') {
     const metas = readRawProjects() as PreprocessProjectMeta[];
-    if (!metas.some((entry) => entry.id === project.id)) {
+    const existingMeta = metas.find((entry) => entry.id === project.id);
+    const previousMetadata = window.localStorage.getItem(PREPROCESS_STORAGE_KEY);
+    let metadataUpdated = false;
+    if (!existingMeta || existingMeta.updatedAt <= project.updatedAt) {
       upsertPreprocessProjectMetadata(project);
+      metadataUpdated = true;
     }
-    await syncTissueSelectionStore(project.id, project.tissueSelection);
+    try {
+      await syncTissueSelectionStore(project.id, project.tissueSelection);
+    } catch (error) {
+      if (metadataUpdated) {
+        if (previousMetadata === null) {
+          window.localStorage.removeItem(PREPROCESS_STORAGE_KEY);
+        } else {
+          window.localStorage.setItem(PREPROCESS_STORAGE_KEY, previousMetadata);
+        }
+      }
+      throw error;
+    }
     return;
   }
 

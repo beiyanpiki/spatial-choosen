@@ -36,9 +36,11 @@ import type {
 	LocalizationImageTransform,
 	LocalizationSlice,
 	PreprocessProject,
+	PreprocessPoint,
 	PreprocessRect,
 	PreprocessSourceImage,
 	PreprocessStepId,
+	TissueActivationValue,
 } from "@/types/preprocess";
 import {
 	normalizeAlignmentSlice,
@@ -1875,6 +1877,50 @@ export function PreprocessWorkspace({
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
+	const commitManualTissueSelection = useCallback(
+		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
+			onProjectMutate(
+				(current) => {
+					const projectedSpots = current.chipConfig.projectedSpots ?? [];
+					const updatedAt = new Date().toISOString();
+					const nextValue: TissueActivationValue = tissueTool === "activate" ? 1 : 0;
+					const editArgs = "editArea" in edit
+						? {
+								editArea: edit.editArea,
+								nextValue,
+							}
+						: { spotId: edit.spotId };
+					const nextTissueSelection = buildManualTissueSelectionState({
+						current: current.tissueSelection,
+						projectedSpots,
+						...editArgs,
+						rows: current.chipConfig.rows,
+						columns: current.chipConfig.columns,
+						updatedAt,
+					});
+					if (nextTissueSelection === current.tissueSelection) {
+						return current;
+					}
+
+					return {
+						...current,
+						tissueSelection: nextTissueSelection,
+						exportState: {
+							...current.exportState,
+							status: "stale",
+							isStale: true,
+							updatedAt,
+							lastExportedAt: null,
+							artifacts: [],
+							error: null,
+						},
+					};
+				},
+				{ mode: "tissue", strategy: "debounced" },
+			);
+		},
+		[onProjectMutate, tissueTool],
+	);
 
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
@@ -2522,37 +2568,10 @@ export function PreprocessWorkspace({
 												disabled={isTissueInteractionDisabled}
 												onToolChange={setTissueTool}
 												onEditCommit={(editArea) => {
-													onProjectMutate(
-														(current) => {
-															const projectedSpots =
-																current.chipConfig.projectedSpots ?? [];
-															const updatedAt = new Date().toISOString();
-															return {
-																...current,
-																tissueSelection:
-																	buildManualTissueSelectionState({
-																		current: current.tissueSelection,
-																		projectedSpots,
-																		editArea,
-																		nextValue:
-																			tissueTool === "activate" ? 1 : 0,
-																		rows: current.chipConfig.rows,
-																		columns: current.chipConfig.columns,
-																		updatedAt,
-																	}),
-																exportState: {
-																	...current.exportState,
-																	status: "stale",
-																	isStale: true,
-																	updatedAt,
-																	lastExportedAt: null,
-																	artifacts: [],
-																	error: null,
-																},
-															};
-														},
-														{ mode: "tissue", strategy: "debounced" },
-													);
+													commitManualTissueSelection({ editArea });
+												}}
+												onSpotToggle={(spotId) => {
+													commitManualTissueSelection({ spotId });
 												}}
 											/>
 										</Box>

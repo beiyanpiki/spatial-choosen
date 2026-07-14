@@ -253,6 +253,7 @@ vi.mock('./TissueSelectionPanel', () => ({
   TissueSelectionPanel: (props: {
     selectedSpotIds: string[];
     onEditCommit?: (editArea: Array<{ x: number; y: number }>) => void;
+    onSpotToggle?: (spotId: string) => void;
   }) => (
     <div data-testid="tissue-selection-panel-mock">
       <div data-testid="tissue-panel-selected-count">
@@ -269,6 +270,20 @@ vi.mock('./TissueSelectionPanel', () => ({
         ])}
       >
         Commit manual tissue edit
+      </button>
+      <button
+        type="button"
+        data-testid="tissue-panel-toggle-spot"
+        onClick={() => props.onSpotToggle?.('spot-a')}
+      >
+        Toggle spot
+      </button>
+      <button
+        type="button"
+        data-testid="tissue-panel-toggle-missing-spot"
+        onClick={() => props.onSpotToggle?.('missing-spot')}
+      >
+        Toggle missing spot
       </button>
     </div>
   ),
@@ -374,6 +389,7 @@ function WorkspaceHarness({
 }
 
 const { theme } = await import('../../../theme');
+const { normalizeProjectForWorkspace } = await import('../projectState');
 const { PreprocessWorkspace } = await import('./PreprocessWorkspace');
 const { default: PreprocessPage } = await import('../page.client');
 
@@ -766,6 +782,57 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(manualEditMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
   });
 
+  it('persists a single-click spot toggle with tissue-aware debounced options', async () => {
+    const user = userEvent.setup();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    render(
+      <WorkspaceHarness
+        onProjectMutateCapture={(mutation) => {
+          capturedMutations.push(mutation);
+        }}
+      />,
+    );
+
+    await user.click(screen.getByTestId('tissue-panel-toggle-spot'));
+
+    await waitFor(() => {
+      expect(capturedMutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            persistOptions: { mode: 'tissue', strategy: 'debounced' },
+          }),
+        ]),
+      );
+    });
+
+    const toggleMutation = capturedMutations.find(
+      (mutation) => mutation.persistOptions?.mode === 'tissue'
+        && mutation.persistOptions.strategy === 'debounced',
+    );
+    expect(toggleMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
+    expect(toggleMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
+  });
+
+  it('keeps the current project and export state for a stale spot id', async () => {
+    const user = userEvent.setup();
+    const initialProject = createProject();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectMutateCapture={(mutation) => {
+          capturedMutations.push(mutation);
+        }}
+      />,
+    );
+
+    await user.click(screen.getByTestId('tissue-panel-toggle-missing-spot'));
+
+    expect(capturedMutations).toHaveLength(1);
+    expect(capturedMutations[0]?.project).toBe(initialProject);
+    expect(capturedMutations[0]?.project.exportState.status).toBe('idle');
+  });
+
   it('persists completed auto-detection matrix writes with tissue-aware options', async () => {
     mockRunTissueAutoSelection.mockResolvedValue(createSuccessfulTissueAutoSelectionResult());
     const user = userEvent.setup();
@@ -1071,6 +1138,15 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
   });
 });
 
+const createStoredStepSixProject = () => {
+  const stepSixProject = createProject();
+  const storedProject = normalizeProjectForWorkspace(stepSixProject);
+  storedProject.currentStep = 'tissueSelection';
+  storedProject.chipConfig = stepSixProject.chipConfig;
+  storedProject.tissueSelection = stepSixProject.tissueSelection;
+  return storedProject;
+};
+
 describe('Preprocess page autosave failure handling', () => {
   beforeEach(() => {
     mockSearchParamsState.preprocessId = 'preprocess-project';
@@ -1125,8 +1201,7 @@ describe('Preprocess page autosave failure handling', () => {
 
   it('does not mark tissue autosave saved when the tissue payload write fails', async () => {
     const tissueFailure = new Error('forced tissue payload failure');
-    const storedProject = createProject();
-    storedProject.currentStep = 'tissueSelection';
+    const storedProject = createStoredStepSixProject();
     mockGetPreprocessProject.mockResolvedValue(storedProject);
     mockUpsertPreprocessProject.mockRejectedValue(tissueFailure);
 
@@ -1140,7 +1215,6 @@ describe('Preprocess page autosave failure handling', () => {
     await waitFor(() => {
       expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
     });
-    await user.click(screen.getByTestId('step-sidebar-select-tissue'));
     await waitFor(() => {
       expect(screen.getByTestId('tissue-chip-size-select')).toBeInTheDocument();
     });
@@ -1163,6 +1237,25 @@ describe('Preprocess page autosave failure handling', () => {
       title: 'Autosave failed',
       status: 'error',
     }));
+  });
+
+  it('does not persist tissue metadata alone during pagehide', async () => {
+    const storedProject = createStoredStepSixProject();
+    mockGetPreprocessProject.mockResolvedValue(storedProject);
+    const user = userEvent.setup();
+    render(
+      <ChakraProvider theme={theme}>
+        <PreprocessPage />
+      </ChakraProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tissue-panel-toggle-spot')).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId('tissue-panel-toggle-spot'));
+    window.dispatchEvent(new Event('pagehide'));
+
+    expect(mockUpsertPreprocessProjectMetadata).not.toHaveBeenCalled();
   });
 });
 

@@ -369,9 +369,11 @@ function PreprocessContent() {
 				normalizeProjectForPersistence(pendingSnapshot);
 
 			if (synchronousMetadata) {
-				latestSaveAttemptRef.current += 1;
-				lastSavedProjectRef.current = normalizedSnapshot;
-				upsertPreprocessProjectMetadata(normalizedSnapshot);
+				if (mode === "metadata") {
+					latestSaveAttemptRef.current += 1;
+					lastSavedProjectRef.current = normalizedSnapshot;
+					upsertPreprocessProjectMetadata(normalizedSnapshot);
+				}
 				return;
 			}
 

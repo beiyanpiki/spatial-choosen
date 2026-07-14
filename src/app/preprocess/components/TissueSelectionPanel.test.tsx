@@ -45,7 +45,10 @@ beforeAll(() => {
 	vi.stubGlobal('requestAnimationFrame', requestAnimationFrameMock);
 	vi.stubGlobal('cancelAnimationFrame', cancelAnimationFrameMock);
 
-	HTMLCanvasElement.prototype.getContext = vi.fn(() => contextStub) as typeof HTMLCanvasElement.prototype.getContext;
+	Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+		configurable: true,
+		value: vi.fn(() => contextStub),
+	});
 
 	Object.defineProperty(HTMLDivElement.prototype, 'getBoundingClientRect', {
 		configurable: true,
@@ -98,20 +101,14 @@ afterEach(() => {
 });
 
 describe('TissueSelectionPanel', () => {
-	it('renders active and inactive spots with spatial overlay colors', async () => {
+	it('renders spots without borders and with more transparent fills', async () => {
 		const assignedFill = colorForLabel(1).toLowerCase();
-		const expectedAssignedFill = `${assignedFill}59`;
-		const expectedAssignedStroke = '#1a202c8c';
-		const expectedNeutralFill = '#e5e5e533';
-		const expectedNeutralStroke = '#a0a0a059';
+		const expectedAssignedFill = `${assignedFill}40`;
+		const expectedNeutralFill = '#e5e5e520';
 		const fillStyles: string[] = [];
-		const strokeStyles: string[] = [];
 
 		fillRectMock.mockImplementation(() => {
 			fillStyles.push(String(contextStub.fillStyle).toLowerCase());
-		});
-		strokeRectMock.mockImplementation(() => {
-			strokeStyles.push(String(contextStub.strokeStyle).toLowerCase());
 		});
 
 		render(
@@ -152,9 +149,8 @@ describe('TissueSelectionPanel', () => {
 		await waitFor(() => {
 			expect(fillStyles).toContain(expectedAssignedFill);
 			expect(fillStyles).toContain(expectedNeutralFill);
-			expect(strokeStyles).toContain(expectedAssignedStroke);
-			expect(strokeStyles).toContain(expectedNeutralStroke);
 		});
+		expect(strokeRectMock).not.toHaveBeenCalled();
 	});
 
 	it('skips spot drawing when spot visibility is turned off', async () => {
