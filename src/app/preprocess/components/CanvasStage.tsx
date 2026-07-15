@@ -1,6 +1,6 @@
 'use client';
 
-import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, Button, ButtonGroup, Flex, Heading, HStack, Stack, Text } from '@chakra-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { computeBaseView, getTransform } from '@/lib/canvasViewport';
 import {
@@ -9,6 +9,15 @@ import {
   resizeChipBounds,
   translateChipBounds,
 } from '@/lib/preprocess/localization';
+import {
+  FlipHorizontalIcon,
+  FlipVerticalIcon,
+  ResetIcon,
+  RotateLeftIcon,
+  RotateRightIcon,
+  ZoomInIcon,
+  ZoomOutIcon,
+} from './stageControlsIcons';
 import type {
   LocalizationBoxColor,
   LocalizationImageTransform,
@@ -671,12 +680,28 @@ export function CanvasStage({
                       {(imageTransform.scale * 100).toFixed(0)}%
                     </Text>
                   </Flex>
-                  <ButtonGroup size='sm' isAttached variant='outline'>
-                    <Button aria-label='Zoom out' data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-out')} onClick={() => onScaleDelta(-0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      −
+                  <ButtonGroup size='sm' isAttached variant='outline' w='100%'>
+                    <Button
+                      aria-label='Zoom out'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-out')}
+                      onClick={() => onScaleDelta(-0.01)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <ZoomOutIcon />
                     </Button>
-                    <Button aria-label='Zoom in' data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-in')} onClick={() => onScaleDelta(0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      +
+                    <Button
+                      aria-label='Zoom in'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-in')}
+                      onClick={() => onScaleDelta(0.01)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <ZoomInIcon />
                     </Button>
                   </ButtonGroup>
                 </Stack>
@@ -687,36 +712,115 @@ export function CanvasStage({
                       {imageTransform.rotationDegrees.toFixed(1)}°
                     </Text>
                   </Flex>
-                  <ButtonGroup size='sm' variant='outline' isAttached>
-                    <Button aria-label='Rotate left 90 degrees' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-90')} onClick={() => onRotationDelta(-90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↺90
+                  <ButtonGroup size='sm' variant='outline' isAttached w='100%'>
+                    <Button
+                      aria-label='Rotate left 90 degrees'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-90')}
+                      onClick={() => onRotationDelta(-90)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateLeftIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>90°</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Rotate right 90 degrees' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-90')} onClick={() => onRotationDelta(90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↻90
+                    <Button
+                      aria-label='Rotate right 90 degrees'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-90')}
+                      onClick={() => onRotationDelta(90)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateRightIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>90°</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Rotate left 1 degree' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-1')} onClick={() => onRotationDelta(-1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↺1
+                    <Button
+                      aria-label='Rotate left 1 degree'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-1')}
+                      onClick={() => onRotationDelta(-1)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateLeftIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>1°</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Rotate right 1 degree' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-1')} onClick={() => onRotationDelta(1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↻1
+                    <Button
+                      aria-label='Rotate right 1 degree'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-1')}
+                      onClick={() => onRotationDelta(1)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateRightIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>1°</Text>
+                      </HStack>
                     </Button>
                   </ButtonGroup>
                 </Stack>
                 <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-flip')}>
                   <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Flip</Text>
-                  <ButtonGroup size='sm' variant='outline' isAttached>
-                    <Button aria-label='Flip horizontally' data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-horizontal')} onClick={onFlipHorizontal} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ⇋
+                  <ButtonGroup size='sm' variant='outline' isAttached w='100%'>
+                    <Button
+                      aria-label='Flip horizontally'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-horizontal')}
+                      onClick={onFlipHorizontal}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <FlipHorizontalIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>H</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Flip vertically' data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-vertical')} onClick={onFlipVertical} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ⇅
+                    <Button
+                      aria-label='Flip vertically'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-vertical')}
+                      onClick={onFlipVertical}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <FlipVerticalIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>V</Text>
+                      </HStack>
                     </Button>
                   </ButtonGroup>
                 </Stack>
                 <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-reset')}>
                   <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Reset</Text>
-                  <Button aria-label={copy.resetAriaLabel} size='sm' variant='outline' data-testid={buildTestId(controlTestIdPrefix, 'stage-reset')} onClick={onResetTransform} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                    ⟲
+                  <Button
+                    aria-label={copy.resetAriaLabel}
+                    size='sm'
+                    variant='outline'
+                    w='100%'
+                    data-testid={buildTestId(controlTestIdPrefix, 'stage-reset')}
+                    onClick={onResetTransform}
+                    color='white'
+                    borderColor='whiteAlpha.400'
+                    _hover={{ bg: 'whiteAlpha.200' }}
+                  >
+                    <HStack spacing={1.5}>
+                      <ResetIcon />
+                      <Text as='span' fontSize='xs' fontWeight='semibold'>Reset</Text>
+                    </HStack>
                   </Button>
                 </Stack>
               </Stack>

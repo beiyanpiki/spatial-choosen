@@ -75,7 +75,7 @@ export function PreprocessLanding({
         <Box width='100%' maxW='1200px'>
           <Stack spacing={4} mb={6} align='flex-start' textAlign='left'>
             <Badge colorScheme='brand' variant='subtle'>LOCAL PROCESSING</Badge>
-            <Heading size='lg'>Preprocessing Workspace</Heading>
+            <Heading size='lg'>Spatial Image Preparation</Heading>
             <Text color='gray.600' maxW='760px'>
               Create, manage, and continue preprocessing projects for image registration, tissue spot selection, and downstream analysis in NATA Insight Bioinformatics Software. All project data is processed and stored locally in your browser.
             </Text>
