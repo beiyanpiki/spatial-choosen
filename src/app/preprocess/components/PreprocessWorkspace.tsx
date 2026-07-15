@@ -638,6 +638,7 @@ function SourceAssetUploader({
 			bg="white"
 			px={4}
 			py={4}
+			h="full"
 		>
 			<Stack spacing={3}>
 				<Flex justify="space-between" align="flex-start" gap={3} wrap="wrap">
@@ -2087,14 +2088,15 @@ export function PreprocessWorkspace({
 									<Text color="gray.600" maxW="3xl">
 										{currentCopy.body}
 									</Text>
-									<Flex direction={{ base: "column", xl: "row" }} gap={5}>
+								<Flex direction={{ base: "column", xl: "row" }} gap={5}>
+									<Box flex={1} minW={0}>
 										<SourceAssetUploader
 											label="NATA Align image"
 											description="The NATA Align image uploaded here should be exported from the NATA Align Spatial Instrument and will be used for downstream chip capture area localization and image analysis."
 											buttonLabel={
 												project.sourceAssets.images.eosin
 													? "Replace reference"
-													: "Upload eosin reference"
+													: "Replace reference"
 											}
 											emptyText="No eosin reference image uploaded yet."
 											image={project.sourceAssets.images.eosin}
@@ -2102,6 +2104,8 @@ export function PreprocessWorkspace({
 												void handleUploadEosin(fileList);
 											}}
 										/>
+									</Box>
+									<Box flex={1} minW={0}>
 										<SourceAssetUploader
 											label="H&E stained tissue image"
 											description="Moving image for HE focus, landmark registration, and registered crop generation."
@@ -2116,7 +2120,8 @@ export function PreprocessWorkspace({
 												void handleUploadHe(fileList);
 											}}
 										/>
-									</Flex>
+									</Box>
+								</Flex>
 								</Stack>
 							) : project.currentStep === "localization" ? (
 								<Flex
