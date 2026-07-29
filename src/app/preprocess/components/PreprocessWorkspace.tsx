@@ -2074,7 +2074,7 @@ export function PreprocessWorkspace({
 					</Stack>
 				</Flex>
 
-				<Flex direction={{ base: "column", lg: "row" }} gap={6} align="stretch">
+				<Flex direction={{ base: "column", md: "row" }} gap={6} align="stretch">
 					<StepSidebar
 						currentStep={project.currentStep}
 						onStepSelect={onStepChange}
