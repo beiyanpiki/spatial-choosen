@@ -202,7 +202,10 @@ describe('AlignmentPanel', () => {
     expect(screen.getByRole('button', { name: 'Clear All Pairs' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Review Registration' })).toBeInTheDocument();
     expect(screen.getByTestId('alignment-distribution-warning')).toHaveTextContent(
-      'Landmark spread is narrow. Coverage ratios are 0.9% width and 0.9% height, below the 35% minimum.',
+      'Landmark spread is narrow. Coverage ratios are 0.9% width and 0.9% height, below the 20% minimum.',
+    );
+    expect(screen.getByText(/For genuinely small tissue/)).toHaveTextContent(
+      'If the overlay is correct, choose Force continue to proceed.',
     );
     expect(screen.getByLabelText('Zoom out HE image')).toBeInTheDocument();
     expect(screen.getByLabelText('Zoom in HE image')).toBeInTheDocument();
@@ -454,6 +457,7 @@ describe('AlignmentPanel', () => {
 
 		const forceButton = await screen.findByTestId('alignment-force-accept');
 		expect(forceButton).toBeEnabled();
+		expect(forceButton).toHaveTextContent('Force continue');
 
 		const user = userEvent.setup();
 		await user.click(forceButton);
@@ -471,6 +475,41 @@ describe('AlignmentPanel', () => {
 		expect(next.status).toBe('complete');
 		expect(next.failureReason).toBeNull();
 		expect(next.affineMatrix).toEqual([1, 0, 5, 0, 1, 5]);
+	});
+
+	it('lets the user retry OpenCV initialization after a transient failure', async () => {
+		loadOpenCvMock
+			.mockRejectedValueOnce(new Error('OpenCV runtime initialization timed out'))
+			.mockResolvedValueOnce({ cv: createOpenCvRuntimeStub() });
+
+		render(
+			<ChakraProvider theme={theme}>
+				<AlignmentPanel
+					alignment={createAlignmentSlice()}
+					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+					movingImage={createSourceImage('he')}
+					onSolveAccepted={vi.fn()}
+					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
+					onAlignmentChange={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		const retryButton = await screen.findByTestId('alignment-retry-opencv');
+		expect(retryButton).toHaveTextContent('Retry OpenCV');
+
+		const user = userEvent.setup();
+		await user.click(retryButton);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('alignment-runtime-status-badge')).toHaveAttribute(
+				'data-runtime-status',
+				'ready',
+			);
+		});
+		expect(loadOpenCvMock).toHaveBeenCalledTimes(2);
 	});
 
 });

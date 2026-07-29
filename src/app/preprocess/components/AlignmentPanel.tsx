@@ -558,6 +558,7 @@ export function AlignmentPanel({
 		"idle" | "loading" | "ready" | "error"
 	>("idle");
 	const [runtimeError, setRuntimeError] = useState<string | null>(null);
+	const [runtimeRetryCount, setRuntimeRetryCount] = useState(0);
 
 	const hasBothImages = Boolean(
 		referenceImage?.dataUrl && movingImage?.dataUrl,
@@ -594,7 +595,7 @@ export function AlignmentPanel({
 		return () => {
 			cancelled = true;
 		};
-	}, [hasBothImages]);
+	}, [hasBothImages, runtimeRetryCount]);
 
   const resetSolveState = useCallback(
     (current: AlignmentSlice): AlignmentSlice => ({
@@ -1292,7 +1293,7 @@ export function AlignmentPanel({
 							onClick={handleForceAccept}
 							data-testid="alignment-force-accept"
 						>
-							Force accept
+							Force continue
 						</Button>
 					) : null}
 				</Flex>
@@ -1578,22 +1579,38 @@ export function AlignmentPanel({
 			<Box position="relative" pt={{ base: "416px", xl: 96 }}>
 				{workflowOverlay}
 				{coverage.warning ? (
-					<Text
-						fontSize="sm"
-						color="orange.600"
-						mb={3}
-						data-testid="alignment-distribution-warning"
-					>
-						Landmark spread is narrow. Coverage ratios are{" "}
-						{formatPercent(coverage.coverageRatioX)} width and{" "}
-						{formatPercent(coverage.coverageRatioY)} height, below the{" "}
-						{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
-					</Text>
+					<Stack spacing={1} mb={3}>
+						<Text
+							fontSize="sm"
+							color="orange.600"
+							data-testid="alignment-distribution-warning"
+						>
+							Landmark spread is narrow. Coverage ratios are{" "}
+							{formatPercent(coverage.coverageRatioX)} width and{" "}
+							{formatPercent(coverage.coverageRatioY)} height, below the{" "}
+							{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
+						</Text>
+						<Text fontSize="sm" color="orange.700">
+							For genuinely small tissue, review the registration first. If the
+							overlay is correct, choose Force continue to proceed.
+						</Text>
+					</Stack>
 				) : null}
 				{runtimeError ? (
-					<Text fontSize="sm" color="red.600" mb={3}>
-						{runtimeError}
-					</Text>
+					<Flex gap={3} align={{ base: "flex-start", sm: "center" }} wrap="wrap" mb={3}>
+						<Text fontSize="sm" color="red.600">
+							{runtimeError}
+						</Text>
+						<Button
+							size="xs"
+							colorScheme="red"
+							variant="outline"
+							onClick={() => setRuntimeRetryCount((count) => count + 1)}
+							data-testid="alignment-retry-opencv"
+						>
+							Retry OpenCV
+						</Button>
+					</Flex>
 				) : null}
 				<Flex direction={{ base: "column", xl: "row" }} gap={4} align="stretch">
 					<LandmarkCanvas

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { AlignmentControlPoint } from '@/types/preprocess';
 import {
+	ALIGNMENT_COVERAGE_THRESHOLD,
 	computeAlignmentStatus,
+	computeCoverageWarning,
 	solveAffineAlignment,
 } from './alignment';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
@@ -248,6 +250,51 @@ const createLooseScaleControlPoints = (): AlignmentControlPoint[] => {
 		},
 	}));
 };
+
+describe('computeCoverageWarning', () => {
+	it('accepts landmark coverage matching a small 28.3% by 30.7% tissue area', () => {
+		const coverage = computeCoverageWarning(
+			[
+				{
+					id: 'small-tissue-a',
+					source: { x: 0.1, y: 0.1 },
+					target: { x: 0.12, y: 0.11 },
+				},
+				{
+					id: 'small-tissue-b',
+					source: { x: 0.383, y: 0.407 },
+					target: { x: 0.4, y: 0.42 },
+				},
+			],
+			{ x: 0, y: 0, width: 1, height: 1 },
+		);
+
+		expect(ALIGNMENT_COVERAGE_THRESHOLD).toBe(0.2);
+		expect(coverage.coverageRatioX).toBeCloseTo(0.283, 6);
+		expect(coverage.coverageRatioY).toBeCloseTo(0.307, 6);
+		expect(coverage.warning).toBe(false);
+	});
+
+	it('continues warning when either landmark axis covers less than 20%', () => {
+		const coverage = computeCoverageWarning(
+			[
+				{
+					id: 'narrow-a',
+					source: { x: 0.1, y: 0.1 },
+					target: { x: 0.1, y: 0.1 },
+				},
+				{
+					id: 'narrow-b',
+					source: { x: 0.299, y: 0.6 },
+					target: { x: 0.3, y: 0.6 },
+				},
+			],
+			{ x: 0, y: 0, width: 1, height: 1 },
+		);
+
+		expect(coverage.warning).toBe(true);
+	});
+});
 
 describe('solveAffineAlignment', () => {
 	it('keeps every marked point in all-points mode while strict acceptance rejects the solve', () => {
