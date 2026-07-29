@@ -35,6 +35,114 @@ export class CropQcBlockedError extends Error {
   }
 }
 
+export type CropQcFailureStage =
+  | 'load-reference-image'
+  | 'load-moving-image'
+  | 'resolve-crop-bounds'
+  | 'calculate-output-size'
+  | 'prepare-reference-frame'
+  | 'warp-moving-image'
+  | 'orient-reference-frame'
+  | 'orient-moving-frame'
+  | 'calculate-oriented-crop'
+  | 'crop-reference-image'
+  | 'crop-moving-image'
+  | 'calculate-qc-geometry'
+  | 'encode-reference-assets'
+  | 'encode-moving-assets'
+  | 'generate-checkerboard-preview'
+  | 'generate-feature-matches-preview'
+  | 'finalize-result';
+
+const CROP_QC_STAGE_LABELS: Record<CropQcFailureStage, string> = {
+  'load-reference-image': 'loading the eosin reference image',
+  'load-moving-image': 'loading the H&E moving image',
+  'resolve-crop-bounds': 'resolving the registered ROI bounds',
+  'calculate-output-size': 'calculating the registered output size',
+  'prepare-reference-frame': 'preparing the full-resolution reference frame',
+  'warp-moving-image': 'warping the H&E image with OpenCV',
+  'orient-reference-frame': 'orienting the eosin reference frame',
+  'orient-moving-frame': 'orienting the registered H&E frame',
+  'calculate-oriented-crop': 'calculating the oriented crop bounds',
+  'crop-reference-image': 'cropping the eosin reference image',
+  'crop-moving-image': 'cropping the registered H&E image',
+  'calculate-qc-geometry': 'calculating Crop/QC geometry',
+  'encode-reference-assets': 'encoding eosin crop assets',
+  'encode-moving-assets': 'encoding H&E crop assets',
+  'generate-checkerboard-preview': 'generating the checkerboard preview',
+  'generate-feature-matches-preview': 'generating the feature-match preview',
+  'finalize-result': 'finalizing Crop/QC metadata',
+};
+
+const describeUnknownError = (error: unknown) => {
+  if (error instanceof Error) {
+    return error.message || error.name;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
+export class CropQcGenerationError extends Error {
+  readonly stage: CropQcFailureStage;
+  readonly details: Record<string, unknown>;
+  override readonly cause: unknown;
+
+  constructor(
+    stage: CropQcFailureStage,
+    cause: unknown,
+    details: Record<string, unknown> = {},
+  ) {
+    const reason = describeUnknownError(cause);
+    super(`Crop QC failed while ${CROP_QC_STAGE_LABELS[stage]}: ${reason}`);
+    this.name = 'CropQcGenerationError';
+    this.stage = stage;
+    this.details = details;
+    this.cause = cause;
+  }
+}
+
+const throwCropQcStageError = (
+  stage: CropQcFailureStage,
+  error: unknown,
+  details: Record<string, unknown>,
+): never => {
+  if (error instanceof CropQcBlockedError || error instanceof CropQcGenerationError) {
+    throw error;
+  }
+  throw new CropQcGenerationError(stage, error, details);
+};
+
+const runCropQcStage = <T>(
+  stage: CropQcFailureStage,
+  details: Record<string, unknown>,
+  callback: () => T,
+): T => {
+  try {
+    return callback();
+  } catch (error) {
+    return throwCropQcStageError(stage, error, details);
+  }
+};
+
+const runAsyncCropQcStage = async <T>(
+  stage: CropQcFailureStage,
+  details: Record<string, unknown>,
+  callback: () => Promise<T>,
+): Promise<T> => {
+  try {
+    return await callback();
+  } catch (error) {
+    return throwCropQcStageError(stage, error, details);
+  }
+};
+
 const disposeCanvas = (canvas: HTMLCanvasElement) => {
   canvas.width = 0;
   canvas.height = 0;
@@ -87,11 +195,16 @@ const drawCanvas = (source: CanvasImageSource, size: Size) => {
   canvas.width = size.width;
   canvas.height = size.height;
   const context = canvas.getContext('2d');
-  if (!context) throw new Error('Canvas context unavailable');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(source, 0, 0, size.width, size.height);
-  return canvas;
+  try {
+    if (!context) throw new Error('Canvas context unavailable');
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(source, 0, 0, size.width, size.height);
+    return canvas;
+  } catch (error) {
+    disposeCanvas(canvas);
+    throw error;
+  }
 };
 
 const fillCanvasWhite = (context: CanvasRenderingContext2D, size: Size) => {
@@ -155,24 +268,20 @@ const drawCanvasWithImageOrientation = (
   canvas.width = outputSize.width;
   canvas.height = outputSize.height;
   const context = canvas.getContext('2d');
-  if (!context) throw new Error('Oriented crop canvas context unavailable');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  fillCanvasWhite(context, outputSize);
-  // Localize scale is UI zoom; Crop/QC only needs the saved orientation.
-  context.translate(outputSize.width / 2, outputSize.height / 2);
-  context.scale(transform.flipHorizontal ? -1 : 1, transform.flipVertical ? -1 : 1);
-  context.rotate((transform.rotationDegrees * Math.PI) / 180);
-  context.drawImage(source, -source.width / 2, -source.height / 2, source.width, source.height);
-  return canvas;
-};
-
-const disposeDistinctCanvas = (
-  canvas: HTMLCanvasElement,
-  protectedCanvases: readonly HTMLCanvasElement[],
-) => {
-  if (!protectedCanvases.includes(canvas)) {
+  try {
+    if (!context) throw new Error('Oriented crop canvas context unavailable');
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    fillCanvasWhite(context, outputSize);
+    // Localize scale is UI zoom; Crop/QC only needs the saved orientation.
+    context.translate(outputSize.width / 2, outputSize.height / 2);
+    context.scale(transform.flipHorizontal ? -1 : 1, transform.flipVertical ? -1 : 1);
+    context.rotate((transform.rotationDegrees * Math.PI) / 180);
+    context.drawImage(source, -source.width / 2, -source.height / 2, source.width, source.height);
+    return canvas;
+  } catch (error) {
     disposeCanvas(canvas);
+    throw error;
   }
 };
 
@@ -233,27 +342,32 @@ const cropCanvas = (
   canvas.width = pixelRect.width;
   canvas.height = pixelRect.height;
   const context = canvas.getContext('2d');
-  if (!context) throw new Error('Crop canvas context unavailable');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  fillCanvasWhite(context, { width: pixelRect.width, height: pixelRect.height });
+  try {
+    if (!context) throw new Error('Crop canvas context unavailable');
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    fillCanvasWhite(context, { width: pixelRect.width, height: pixelRect.height });
 
-  const intersection = resolvePixelIntersection(pixelRect, sourceSize);
-  if (intersection) {
-    context.drawImage(
-      source,
-      intersection.sourceRect.x,
-      intersection.sourceRect.y,
-      intersection.sourceRect.width,
-      intersection.sourceRect.height,
-      intersection.destinationOrigin.x,
-      intersection.destinationOrigin.y,
-      intersection.sourceRect.width,
-      intersection.sourceRect.height,
-    );
+    const intersection = resolvePixelIntersection(pixelRect, sourceSize);
+    if (intersection) {
+      context.drawImage(
+        source,
+        intersection.sourceRect.x,
+        intersection.sourceRect.y,
+        intersection.sourceRect.width,
+        intersection.sourceRect.height,
+        intersection.destinationOrigin.x,
+        intersection.destinationOrigin.y,
+        intersection.sourceRect.width,
+        intersection.sourceRect.height,
+      );
+    }
+
+    return canvas;
+  } catch (error) {
+    disposeCanvas(canvas);
+    throw error;
   }
-
-  return canvas;
 };
 
 const getResizeDownOnlyDimensions = (source: Size, targetMaxSide: number): Size => {
@@ -299,27 +413,29 @@ const buildCanonicalAssetSet = (fullresCanvas: HTMLCanvasElement): {
     ? fullresCanvas
     : drawCanvas(fullresCanvas, lowresSize);
 
-  const assets = {
-    fullres: toCanonicalAsset(fullresCanvas),
-    hires: toCanonicalAsset(hiresCanvas),
-    lowres: toCanonicalAsset(lowresCanvas),
-  } satisfies CropQcCanonicalAssetSet;
+  try {
+    const assets = {
+      fullres: toCanonicalAsset(fullresCanvas),
+      hires: toCanonicalAsset(hiresCanvas),
+      lowres: toCanonicalAsset(lowresCanvas),
+    } satisfies CropQcCanonicalAssetSet;
 
-  if (hiresCanvas !== fullresCanvas) {
-    disposeCanvas(hiresCanvas);
+    return {
+      assets,
+      sizes: {
+        fullres: fullresSize,
+        hires: hiresSize,
+        lowres: lowresSize,
+      },
+    };
+  } finally {
+    if (hiresCanvas !== fullresCanvas) {
+      disposeCanvas(hiresCanvas);
+    }
+    if (lowresCanvas !== fullresCanvas && lowresCanvas !== hiresCanvas) {
+      disposeCanvas(lowresCanvas);
+    }
   }
-  if (lowresCanvas !== fullresCanvas && lowresCanvas !== hiresCanvas) {
-    disposeCanvas(lowresCanvas);
-  }
-
-  return {
-    assets,
-    sizes: {
-      fullres: fullresSize,
-      hires: hiresSize,
-      lowres: lowresSize,
-    },
-  };
 };
 
 const getScaleFactor = (assetSize: Size, fullresSize: Size) => {
@@ -354,11 +470,16 @@ const imageToCanvas = async (dataUrl: string) => {
   canvas.width = image.naturalWidth;
   canvas.height = image.naturalHeight;
   const context = canvas.getContext('2d');
-  if (!context) throw new Error('Canvas context unavailable');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(image, 0, 0);
-  return { canvas, context, width: image.naturalWidth, height: image.naturalHeight };
+  try {
+    if (!context) throw new Error('Canvas context unavailable');
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(image, 0, 0);
+    return { canvas, context, width: image.naturalWidth, height: image.naturalHeight };
+  } catch (error) {
+    disposeCanvas(canvas);
+    throw error;
+  }
 };
 
 const normalizeRect = (
@@ -394,27 +515,29 @@ const makeCheckerboard = (
   checker.width = eosinCrop.width;
   checker.height = eosinCrop.height;
   const context = checker.getContext('2d');
-  if (!context) throw new Error('Checkerboard context unavailable');
-  context.imageSmoothingEnabled = false;
+  try {
+    if (!context) throw new Error('Checkerboard context unavailable');
+    context.imageSmoothingEnabled = false;
 
-  const tilesX = 10;
-  const tilesY = 10;
-  const tileWidth = Math.ceil(checker.width / tilesX);
-  const tileHeight = Math.ceil(checker.height / tilesY);
+    const tilesX = 10;
+    const tilesY = 10;
+    const tileWidth = Math.ceil(checker.width / tilesX);
+    const tileHeight = Math.ceil(checker.height / tilesY);
 
-  for (let y = 0; y < checker.height; y += tileHeight) {
-    for (let x = 0; x < checker.width; x += tileWidth) {
-      const useEosin = ((Math.floor(x / tileWidth) + Math.floor(y / tileHeight)) % 2) === 0;
-      const src = useEosin ? eosinCrop : heCrop;
-      const drawWidth = Math.min(tileWidth, checker.width - x);
-      const drawHeight = Math.min(tileHeight, checker.height - y);
-      context.drawImage(src, x, y, drawWidth, drawHeight, x, y, drawWidth, drawHeight);
+    for (let y = 0; y < checker.height; y += tileHeight) {
+      for (let x = 0; x < checker.width; x += tileWidth) {
+        const useEosin = ((Math.floor(x / tileWidth) + Math.floor(y / tileHeight)) % 2) === 0;
+        const src = useEosin ? eosinCrop : heCrop;
+        const drawWidth = Math.min(tileWidth, checker.width - x);
+        const drawHeight = Math.min(tileHeight, checker.height - y);
+        context.drawImage(src, x, y, drawWidth, drawHeight, x, y, drawWidth, drawHeight);
+      }
     }
-  }
 
-  const dataUrl = checker.toDataURL('image/png');
-  disposeCanvas(checker);
-  return dataUrl;
+    return checker.toDataURL('image/png');
+  } finally {
+    disposeCanvas(checker);
+  }
 };
 
 const toPixelPoint = (point: { x: number; y: number }, size: Size): PixelPoint => ({
@@ -648,84 +771,86 @@ const makeFeatureMatchesPreview = (args: {
   preview.width = leftCanvas.width + rightCanvas.width + FEATURE_MATCHES_GAP;
   preview.height = Math.max(leftCanvas.height, rightCanvas.height);
   const context = preview.getContext('2d');
-  if (!context) throw new Error('Feature matches context unavailable');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  context.fillStyle = '#ffffff';
-  context.fillRect(0, 0, preview.width, preview.height);
-  context.drawImage(leftCanvas, 0, 0);
-  context.drawImage(rightCanvas, leftCanvas.width + FEATURE_MATCHES_GAP, 0);
+  try {
+    if (!context) throw new Error('Feature matches context unavailable');
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, preview.width, preview.height);
+    context.drawImage(leftCanvas, 0, 0);
+    context.drawImage(rightCanvas, leftCanvas.width + FEATURE_MATCHES_GAP, 0);
 
-  const separatorX = leftCanvas.width + FEATURE_MATCHES_GAP / 2;
-  context.beginPath();
-  context.moveTo(separatorX, 0);
-  context.lineTo(separatorX, preview.height);
-  context.lineWidth = 1;
-  context.strokeStyle = 'rgba(15, 23, 42, 0.12)';
-  context.stroke();
-
-  const candidates = args.alignmentAccepted
-    ? getFeatureMatchCandidates(args.controlPoints, args.inlierMask)
-    : args.controlPoints;
-  const acceptedScale = {
-    x: args.alignmentAccepted ? leftCanvas.width / Math.max(args.pixelRect.width, 1) : 1,
-    y: args.alignmentAccepted ? leftCanvas.height / Math.max(args.pixelRect.height, 1) : 1,
-  };
-  const fullresScale = {
-    x: args.fullresReferenceSize.width / Math.max(args.referenceSize.width, 1),
-    y: args.fullresReferenceSize.height / Math.max(args.referenceSize.height, 1),
-  };
-  let drawableIndex = 0;
-
-  const toAcceptedCropPoint = (point: PixelPoint) => ({
-    x: toCropLocalPoint(point, args.pixelRect).x * acceptedScale.x,
-    y: toCropLocalPoint(point, args.pixelRect).y * acceptedScale.y,
-  });
-  const toFullresPoint = (point: PixelPoint) => ({
-    x: point.x * fullresScale.x,
-    y: point.y * fullresScale.y,
-  });
-  const toOrientedFullresPoint = (point: PixelPoint) => applyCropLocalImageTransform(
-    toFullresPoint(point),
-    args.imageTransform,
-    args.fullresReferenceSize,
-    args.orientedFullresReferenceSize,
-  );
-
-  for (const candidate of candidates) {
-    const referencePoint = toPixelPoint(candidate.source, args.referenceSize);
-    const movingPoint = toPixelPoint(candidate.target, args.movingSize);
-    const warpedMovingPoint = args.alignmentAccepted
-      ? applyAffineToPoint(movingPoint, args.affineMatrix)
-      : movingPoint;
-
-    const leftPoint = args.alignmentAccepted
-      ? toAcceptedCropPoint(toOrientedFullresPoint(referencePoint))
-      : referencePoint;
-    const rightLocalPoint = args.alignmentAccepted
-      ? toAcceptedCropPoint(toOrientedFullresPoint(warpedMovingPoint))
-      : warpedMovingPoint;
-    const rightPoint = {
-      x: leftCanvas.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
-      y: rightLocalPoint.y,
-    };
-    const color = FEATURE_MATCHES_COLORS[drawableIndex % FEATURE_MATCHES_COLORS.length];
-    drawableIndex += 1;
-
+    const separatorX = leftCanvas.width + FEATURE_MATCHES_GAP / 2;
     context.beginPath();
-    context.moveTo(leftPoint.x, leftPoint.y);
-    context.lineTo(rightPoint.x, rightPoint.y);
-    context.lineWidth = FEATURE_MATCH_VISUAL_SIZE / 2;
-    context.strokeStyle = color;
+    context.moveTo(separatorX, 0);
+    context.lineTo(separatorX, preview.height);
+    context.lineWidth = 1;
+    context.strokeStyle = 'rgba(15, 23, 42, 0.12)';
     context.stroke();
 
-    drawFeatureMatchMarker(context, leftPoint, color);
-    drawFeatureMatchMarker(context, rightPoint, color);
-  }
+    const candidates = args.alignmentAccepted
+      ? getFeatureMatchCandidates(args.controlPoints, args.inlierMask)
+      : args.controlPoints;
+    const acceptedScale = {
+      x: args.alignmentAccepted ? leftCanvas.width / Math.max(args.pixelRect.width, 1) : 1,
+      y: args.alignmentAccepted ? leftCanvas.height / Math.max(args.pixelRect.height, 1) : 1,
+    };
+    const fullresScale = {
+      x: args.fullresReferenceSize.width / Math.max(args.referenceSize.width, 1),
+      y: args.fullresReferenceSize.height / Math.max(args.referenceSize.height, 1),
+    };
+    let drawableIndex = 0;
 
-  const dataUrl = preview.toDataURL('image/png');
-  disposeCanvas(preview);
-  return dataUrl;
+    const toAcceptedCropPoint = (point: PixelPoint) => ({
+      x: toCropLocalPoint(point, args.pixelRect).x * acceptedScale.x,
+      y: toCropLocalPoint(point, args.pixelRect).y * acceptedScale.y,
+    });
+    const toFullresPoint = (point: PixelPoint) => ({
+      x: point.x * fullresScale.x,
+      y: point.y * fullresScale.y,
+    });
+    const toOrientedFullresPoint = (point: PixelPoint) => applyCropLocalImageTransform(
+      toFullresPoint(point),
+      args.imageTransform,
+      args.fullresReferenceSize,
+      args.orientedFullresReferenceSize,
+    );
+
+    for (const candidate of candidates) {
+      const referencePoint = toPixelPoint(candidate.source, args.referenceSize);
+      const movingPoint = toPixelPoint(candidate.target, args.movingSize);
+      const warpedMovingPoint = args.alignmentAccepted
+        ? applyAffineToPoint(movingPoint, args.affineMatrix)
+        : movingPoint;
+
+      const leftPoint = args.alignmentAccepted
+        ? toAcceptedCropPoint(toOrientedFullresPoint(referencePoint))
+        : referencePoint;
+      const rightLocalPoint = args.alignmentAccepted
+        ? toAcceptedCropPoint(toOrientedFullresPoint(warpedMovingPoint))
+        : warpedMovingPoint;
+      const rightPoint = {
+        x: leftCanvas.width + FEATURE_MATCHES_GAP + rightLocalPoint.x,
+        y: rightLocalPoint.y,
+      };
+      const color = FEATURE_MATCHES_COLORS[drawableIndex % FEATURE_MATCHES_COLORS.length];
+      drawableIndex += 1;
+
+      context.beginPath();
+      context.moveTo(leftPoint.x, leftPoint.y);
+      context.lineTo(rightPoint.x, rightPoint.y);
+      context.lineWidth = FEATURE_MATCH_VISUAL_SIZE / 2;
+      context.strokeStyle = color;
+      context.stroke();
+
+      drawFeatureMatchMarker(context, leftPoint, color);
+      drawFeatureMatchMarker(context, rightPoint, color);
+    }
+
+    return preview.toDataURL('image/png');
+  } finally {
+    disposeCanvas(preview);
+  }
 };
 
 const makeWarpedHeCrop = (
@@ -774,11 +899,16 @@ const makeWarpedHeCrop = (
     canvas.width = outputSize.width;
     canvas.height = outputSize.height;
     const warpedContext = canvas.getContext('2d');
-    if (!warpedContext) throw new Error('Warp output context unavailable');
-    warpedContext.imageSmoothingEnabled = true;
-    warpedContext.imageSmoothingQuality = 'high';
-    warpedContext.putImageData(warpedImageData, 0, 0);
-    return canvas;
+    try {
+      if (!warpedContext) throw new Error('Warp output context unavailable');
+      warpedContext.imageSmoothingEnabled = true;
+      warpedContext.imageSmoothingQuality = 'high';
+      warpedContext.putImageData(warpedImageData, 0, 0);
+      return canvas;
+    } catch (error) {
+      disposeCanvas(canvas);
+      throw error;
+    }
   } finally {
     dst?.delete();
     matrix?.delete();
@@ -805,111 +935,243 @@ export async function runCropQc(args: {
     throw new Error('runCropQc() is browser-only and must be run in a browser environment');
   }
 
-  const eosin = await imageToCanvas(args.eosinDataUrl);
-  const he = await imageToCanvas(args.heDataUrl);
-
-  const normalized = resolveCropBounds({
-    chipBounds: args.chipBounds,
-    acceptedChipQuad: args.acceptedChipQuad,
-    acceptedChipBounds: args.acceptedChipBounds,
-    coarseChipBounds: args.coarseChipBounds,
-    referenceSize: { width: eosin.width, height: eosin.height },
-    alignmentAccepted: args.alignmentAccepted,
-    solveAccepted: args.solveAccepted,
-  });
-  const fullReferencePixelRect = { x: 0, y: 0, width: eosin.width, height: eosin.height };
-  const heFullresSize = getOriginalDensityCropSize(fullReferencePixelRect, args.affineMatrix);
-
-  const referenceFullresFrame = heFullresSize.width === eosin.width && heFullresSize.height === eosin.height
-    ? eosin.canvas
-    : drawCanvas(eosin.canvas, heFullresSize);
-  const heCrop = makeWarpedHeCrop(
-    args.cv,
-    he.canvas,
-    args.affineMatrix,
-    fullReferencePixelRect,
-    heFullresSize,
-  );
-  const orientedEosinFullFrame = drawCanvasWithImageOrientation(referenceFullresFrame, args.imageTransform);
-  const orientedHeFullFrame = drawCanvasWithImageOrientation(heCrop, args.imageTransform);
-  const sourceCropBounds = normalizeRectForSize(
-    normalized.rect,
-    { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
-  );
-  const orientedCropPixelRect = transformPixelRect(
-    sourceCropBounds.pixelRect,
-    args.imageTransform,
-    { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
-    { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },
-  );
-  const orientedCropBounds = {
-    rect: {
-      x: orientedCropPixelRect.x / orientedEosinFullFrame.width,
-      y: orientedCropPixelRect.y / orientedEosinFullFrame.height,
-      width: orientedCropPixelRect.width / orientedEosinFullFrame.width,
-      height: orientedCropPixelRect.height / orientedEosinFullFrame.height,
-    },
-    pixelRect: orientedCropPixelRect,
+  const trackedCanvases = new Set<HTMLCanvasElement>();
+  const trackCanvas = (canvas: HTMLCanvasElement) => {
+    trackedCanvases.add(canvas);
+    return canvas;
   };
-  const orientedEosinFrame = cropCanvas(
-    orientedEosinFullFrame,
-    { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },
-    orientedCropBounds.pixelRect,
-  );
-  const orientedHeCrop = cropCanvas(
-    orientedHeFullFrame,
-    { width: orientedHeFullFrame.width, height: orientedHeFullFrame.height },
-    orientedCropBounds.pixelRect,
-  );
-  const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
-
   try {
-    const eosinReferenceGeometry = toCanonicalCropQcGeometry(orientedCropBounds);
-    const orientedHeFullFrameGeometry = orientCropLocalGeometry(
-      resolveHeQcGeometry({
+    const eosin = await runAsyncCropQcStage(
+      'load-reference-image',
+      { encodedBytes: args.eosinDataUrl.length },
+      () => imageToCanvas(args.eosinDataUrl),
+    );
+    trackCanvas(eosin.canvas);
+    const he = await runAsyncCropQcStage(
+      'load-moving-image',
+      { encodedBytes: args.heDataUrl.length },
+      () => imageToCanvas(args.heDataUrl),
+    );
+    trackCanvas(he.canvas);
+
+    const normalized = runCropQcStage(
+      'resolve-crop-bounds',
+      {
+        referenceSize: { width: eosin.width, height: eosin.height },
+        chipBounds: args.chipBounds,
+        acceptedChipBounds: args.acceptedChipBounds,
+        hasAcceptedChipQuad: Boolean(args.acceptedChipQuad),
+        solveAccepted: args.solveAccepted,
+        alignmentAccepted: args.alignmentAccepted,
+      },
+      () => resolveCropBounds({
+        chipBounds: args.chipBounds,
         acceptedChipQuad: args.acceptedChipQuad,
         acceptedChipBounds: args.acceptedChipBounds,
+        coarseChipBounds: args.coarseChipBounds,
+        referenceSize: { width: eosin.width, height: eosin.height },
+        alignmentAccepted: args.alignmentAccepted,
+        solveAccepted: args.solveAccepted,
+      }),
+    );
+    const fullReferencePixelRect = { x: 0, y: 0, width: eosin.width, height: eosin.height };
+    const heFullresSize = runCropQcStage(
+      'calculate-output-size',
+      {
+        referenceSize: { width: eosin.width, height: eosin.height },
         movingSize: { width: he.width, height: he.height },
         affineMatrix: args.affineMatrix,
-        cropPixelRect: { x: 0, y: 0, width: eosin.width, height: eosin.height },
-      }),
-      args.imageTransform,
-      heFullresSize,
-      { width: orientedHeFullFrame.width, height: orientedHeFullFrame.height },
+      },
+      () => getOriginalDensityCropSize(fullReferencePixelRect, args.affineMatrix),
     );
-    const heQcGeometry = orientedHeFullFrameGeometry
-      ? toCropLocalGeometry(
-        toRectCornerPoints(
-          orientedHeFullFrameGeometry.rect,
+
+    const referenceFullresFrame = trackCanvas(runCropQcStage(
+      'prepare-reference-frame',
+      {
+        referenceSize: { width: eosin.width, height: eosin.height },
+        outputSize: heFullresSize,
+      },
+      () => (
+        heFullresSize.width === eosin.width && heFullresSize.height === eosin.height
+          ? eosin.canvas
+          : drawCanvas(eosin.canvas, heFullresSize)
+      ),
+    ));
+    const heCrop = trackCanvas(runCropQcStage(
+      'warp-moving-image',
+      {
+        referenceSize: { width: eosin.width, height: eosin.height },
+        movingSize: { width: he.width, height: he.height },
+        outputSize: heFullresSize,
+        outputPixels: heFullresSize.width * heFullresSize.height,
+        affineMatrix: args.affineMatrix,
+      },
+      () => makeWarpedHeCrop(
+        args.cv,
+        he.canvas,
+        args.affineMatrix,
+        fullReferencePixelRect,
+        heFullresSize,
+      ),
+    ));
+    const orientedEosinFullFrame = trackCanvas(runCropQcStage(
+      'orient-reference-frame',
+      {
+        inputSize: { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
+        imageTransform: args.imageTransform,
+      },
+      () => drawCanvasWithImageOrientation(referenceFullresFrame, args.imageTransform),
+    ));
+    const orientedHeFullFrame = trackCanvas(runCropQcStage(
+      'orient-moving-frame',
+      {
+        inputSize: { width: heCrop.width, height: heCrop.height },
+        imageTransform: args.imageTransform,
+      },
+      () => drawCanvasWithImageOrientation(heCrop, args.imageTransform),
+    ));
+    const orientedCropBounds = runCropQcStage(
+      'calculate-oriented-crop',
+      {
+        normalizedBounds: normalized.rect,
+        fullresReferenceSize: {
+          width: referenceFullresFrame.width,
+          height: referenceFullresFrame.height,
+        },
+        orientedReferenceSize: {
+          width: orientedEosinFullFrame.width,
+          height: orientedEosinFullFrame.height,
+        },
+        imageTransform: args.imageTransform,
+      },
+      () => {
+        const sourceCropBounds = normalizeRectForSize(
+          normalized.rect,
+          { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
+        );
+        const orientedCropPixelRect = transformPixelRect(
+          sourceCropBounds.pixelRect,
+          args.imageTransform,
+          { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
+          { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },
+        );
+        return {
+          rect: {
+            x: orientedCropPixelRect.x / orientedEosinFullFrame.width,
+            y: orientedCropPixelRect.y / orientedEosinFullFrame.height,
+            width: orientedCropPixelRect.width / orientedEosinFullFrame.width,
+            height: orientedCropPixelRect.height / orientedEosinFullFrame.height,
+          },
+          pixelRect: orientedCropPixelRect,
+        };
+      },
+    );
+    const orientedEosinFrame = trackCanvas(runCropQcStage(
+      'crop-reference-image',
+      {
+        inputSize: { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },
+        cropPixelRect: orientedCropBounds.pixelRect,
+      },
+      () => cropCanvas(
+        orientedEosinFullFrame,
+        { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },
+        orientedCropBounds.pixelRect,
+      ),
+    ));
+    const orientedHeCrop = trackCanvas(runCropQcStage(
+      'crop-moving-image',
+      {
+        inputSize: { width: orientedHeFullFrame.width, height: orientedHeFullFrame.height },
+        cropPixelRect: orientedCropBounds.pixelRect,
+      },
+      () => cropCanvas(
+        orientedHeFullFrame,
+        { width: orientedHeFullFrame.width, height: orientedHeFullFrame.height },
+        orientedCropBounds.pixelRect,
+      ),
+    ));
+    const useAcceptedFeatureMatchesPreview = args.solveAccepted ?? args.alignmentAccepted ?? true;
+
+    const { eosinReferenceGeometry, heQcGeometry } = runCropQcStage(
+      'calculate-qc-geometry',
+      {
+        referenceSize: { width: eosin.width, height: eosin.height },
+        movingSize: { width: he.width, height: he.height },
+        cropPixelRect: orientedCropBounds.pixelRect,
+      },
+      () => {
+        const eosinReferenceGeometry = toCanonicalCropQcGeometry(orientedCropBounds);
+        const orientedHeFullFrameGeometry = orientCropLocalGeometry(
+          resolveHeQcGeometry({
+            acceptedChipQuad: args.acceptedChipQuad,
+            acceptedChipBounds: args.acceptedChipBounds,
+            movingSize: { width: he.width, height: he.height },
+            affineMatrix: args.affineMatrix,
+            cropPixelRect: { x: 0, y: 0, width: eosin.width, height: eosin.height },
+          }),
+          args.imageTransform,
+          heFullresSize,
           { width: orientedHeFullFrame.width, height: orientedHeFullFrame.height },
-        ).map((point) => toCropLocalPoint(point, orientedCropBounds.pixelRect)),
-        { width: orientedHeCrop.width, height: orientedHeCrop.height },
-      )
-      : null;
-    const eosinAssetSet = buildCanonicalAssetSet(orientedEosinFrame);
-    const heAssetSet = buildCanonicalAssetSet(orientedHeCrop);
+        );
+        const heQcGeometry = orientedHeFullFrameGeometry
+          ? toCropLocalGeometry(
+            toRectCornerPoints(
+              orientedHeFullFrameGeometry.rect,
+              { width: orientedHeFullFrame.width, height: orientedHeFullFrame.height },
+            ).map((point) => toCropLocalPoint(point, orientedCropBounds.pixelRect)),
+            { width: orientedHeCrop.width, height: orientedHeCrop.height },
+          )
+          : null;
+        return { eosinReferenceGeometry, heQcGeometry };
+      },
+    );
+    const eosinAssetSet = runCropQcStage(
+      'encode-reference-assets',
+      { cropSize: { width: orientedEosinFrame.width, height: orientedEosinFrame.height } },
+      () => buildCanonicalAssetSet(orientedEosinFrame),
+    );
+    const heAssetSet = runCropQcStage(
+      'encode-moving-assets',
+      { cropSize: { width: orientedHeCrop.width, height: orientedHeCrop.height } },
+      () => buildCanonicalAssetSet(orientedHeCrop),
+    );
     const cropAssets = {
       eosin: eosinAssetSet.assets,
       he: heAssetSet.assets,
     };
 
-    const checkerboardDataUrl = makeCheckerboard(orientedEosinFrame, orientedHeCrop);
-    const featureMatchesDataUrl = makeFeatureMatchesPreview({
-      alignmentAccepted: useAcceptedFeatureMatchesPreview,
-      eosinFull: eosin.canvas,
-      eosinCrop: orientedEosinFrame,
-      heFull: he.canvas,
-      heCrop: orientedHeCrop,
-      pixelRect: orientedCropBounds.pixelRect,
-      referenceSize: { width: eosin.width, height: eosin.height },
-      fullresReferenceSize: heFullresSize,
-      orientedFullresReferenceSize: { width: orientedEosinFullFrame.width, height: orientedEosinFullFrame.height },
-      movingSize: { width: he.width, height: he.height },
-      affineMatrix: args.affineMatrix,
-      controlPoints: args.controlPoints ?? [],
-      inlierMask: args.inlierMask ?? null,
-      imageTransform: args.imageTransform,
-    });
+    const checkerboardDataUrl = runCropQcStage(
+      'generate-checkerboard-preview',
+      { cropSize: { width: orientedHeCrop.width, height: orientedHeCrop.height } },
+      () => makeCheckerboard(orientedEosinFrame, orientedHeCrop),
+    );
+    const featureMatchesDataUrl = runCropQcStage(
+      'generate-feature-matches-preview',
+      {
+        controlPointCount: args.controlPoints?.length ?? 0,
+        inlierCount: args.inlierMask?.filter(Boolean).length ?? null,
+        cropPixelRect: orientedCropBounds.pixelRect,
+      },
+      () => makeFeatureMatchesPreview({
+        alignmentAccepted: useAcceptedFeatureMatchesPreview,
+        eosinFull: eosin.canvas,
+        eosinCrop: orientedEosinFrame,
+        heFull: he.canvas,
+        heCrop: orientedHeCrop,
+        pixelRect: orientedCropBounds.pixelRect,
+        referenceSize: { width: eosin.width, height: eosin.height },
+        fullresReferenceSize: heFullresSize,
+        orientedFullresReferenceSize: {
+          width: orientedEosinFullFrame.width,
+          height: orientedEosinFullFrame.height,
+        },
+        movingSize: { width: he.width, height: he.height },
+        affineMatrix: args.affineMatrix,
+        controlPoints: args.controlPoints ?? [],
+        inlierMask: args.inlierMask ?? null,
+        imageTransform: args.imageTransform,
+      }),
+    );
     const checkerboardPreview = {
       dataUrl: checkerboardDataUrl,
     };
@@ -917,8 +1179,14 @@ export async function runCropQc(args: {
       dataUrl: featureMatchesDataUrl,
     };
     const fullresSize = heAssetSet.sizes.fullres;
-    const tissue_hires_scalef = getScaleFactor(heAssetSet.sizes.hires, fullresSize);
-    const tissue_lowres_scalef = getScaleFactor(heAssetSet.sizes.lowres, fullresSize);
+    const { tissue_hires_scalef, tissue_lowres_scalef } = runCropQcStage(
+      'finalize-result',
+      { fullresSize },
+      () => ({
+        tissue_hires_scalef: getScaleFactor(heAssetSet.sizes.hires, fullresSize),
+        tissue_lowres_scalef: getScaleFactor(heAssetSet.sizes.lowres, fullresSize),
+      }),
+    );
     // Exact spot square side length depends on chip projection inputs that are not available in Crop/QC yet.
     // Leave it pending here so chip projection can perform the first authoritative write.
     const spot_diameter_fullres = null;
@@ -942,15 +1210,8 @@ export async function runCropQc(args: {
       featureMatchesDataUrl,
     } satisfies CropQcResult;
   } finally {
-    disposeCanvas(eosin.canvas);
-    disposeCanvas(he.canvas);
-    if (referenceFullresFrame !== eosin.canvas) {
-      disposeCanvas(referenceFullresFrame);
+    for (const canvas of trackedCanvases) {
+      disposeCanvas(canvas);
     }
-    disposeCanvas(heCrop);
-    disposeDistinctCanvas(orientedEosinFullFrame, [referenceFullresFrame]);
-    disposeDistinctCanvas(orientedHeFullFrame, [heCrop]);
-    disposeDistinctCanvas(orientedEosinFrame, [orientedEosinFullFrame]);
-    disposeDistinctCanvas(orientedHeCrop, [heCrop]);
   }
 }

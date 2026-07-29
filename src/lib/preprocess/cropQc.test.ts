@@ -5,7 +5,7 @@ import type {
   LocalizationImageTransform,
   PreprocessRect,
 } from '@/types/preprocess';
-import { CropQcBlockedError, runCropQc } from './cropQc';
+import { CropQcBlockedError, CropQcGenerationError, runCropQc } from './cropQc';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
 
 type CanvasOperation =
@@ -636,6 +636,7 @@ const expectGeometryToBeCloseTo = (
 
 const runCropQcWithArgs = async (args: {
   affineMatrix: AlignmentAffineMatrix;
+  cv?: OpenCvRuntime;
   alignmentAccepted?: boolean;
   acceptedChipQuad?: readonly [
     PreprocessPoint,
@@ -652,7 +653,7 @@ const runCropQcWithArgs = async (args: {
   imageTransform?: LocalizationImageTransform;
 }) => {
   const request = {
-    cv: createOpenCvRuntime(),
+    cv: args.cv ?? createOpenCvRuntime(),
     eosinDataUrl: 'data:image/png;base64,eosin',
     heDataUrl: 'data:image/png;base64,he',
     chipBounds: args.chipBounds ?? CHIP_BOUNDS,
@@ -677,6 +678,39 @@ afterEach(() => {
 });
 
 describe('runCropQc feature match preview', () => {
+  it('preserves the failing stage, original cause, and processing dimensions', async () => {
+    installBrowserStubs();
+    const cv = createOpenCvRuntime();
+    const rootCause = new RangeError('OpenCV could not allocate the destination matrix');
+    cv.warpAffine = () => {
+      throw rootCause;
+    };
+
+    const cropError = await runCropQcWithArgs({
+      cv,
+      affineMatrix: [0.5, 0, 0, 0, 0.5, 0],
+      controlPoints: [],
+      inlierMask: null,
+    }).catch((error: unknown) => error);
+
+    expect(cropError).toBeInstanceOf(CropQcGenerationError);
+    expect(cropError).toMatchObject({
+      name: 'CropQcGenerationError',
+      stage: 'warp-moving-image',
+      cause: rootCause,
+      details: {
+        referenceSize: IMAGE_SIZE,
+        movingSize: IMAGE_SIZE,
+        outputSize: { width: 200, height: 200 },
+        outputPixels: 40000,
+        affineMatrix: [0.5, 0, 0, 0, 0.5, 0],
+      },
+    });
+    expect((cropError as Error).message).toContain(
+      'OpenCV could not allocate the destination matrix',
+    );
+  });
+
   it('limits feature-match markers to inlier control points', async () => {
     installBrowserStubs();
 
