@@ -711,6 +711,43 @@ describe('runCropQc feature match preview', () => {
     );
   });
 
+  it('warps only the ROI when a right-angle full-frame allocation would exceed the memory limit', async () => {
+    installBrowserStubs();
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [0.005, 0, 20, 0, 0.005, 30],
+      chipBounds: {
+        x: 0.2,
+        y: 0.3,
+        width: 0.04,
+        height: 0.04,
+      },
+      imageTransform: {
+        rotationDegrees: 90,
+        flipHorizontal: false,
+        flipVertical: false,
+        scale: 1,
+      },
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    expect(getLastWarpAffineCall()).toMatchObject({
+      size: { width: 800, height: 800 },
+      matrix: [1, 0, 0, 0, 1, 0],
+    });
+    expect(result.cropWidth).toBe(800);
+    expect(result.cropHeight).toBe(800);
+    expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, {
+      width: 800,
+      height: 800,
+    });
+    expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, {
+      width: 800,
+      height: 800,
+    });
+  });
+
   it('limits feature-match markers to inlier control points', async () => {
     installBrowserStubs();
 
@@ -970,6 +1007,8 @@ describe('runCropQc feature match preview', () => {
     expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 2500, height: 2500 });
     expectAssetCanvasSize(result.cropAssets.he.hires.dataUrl, { width: 2000, height: 2000 });
     expectAssetCanvasSize(result.cropAssets.he.lowres.dataUrl, { width: 800, height: 800 });
+    expectAssetCanvasSize(result.checkerboardDataUrl, { width: 2000, height: 2000 });
+    expectAssetCanvasSize(result.featureMatchesDataUrl, { width: 4024, height: 2000 });
     expect(result.eosinReferenceGeometry.width).toBe(2500);
     expect(result.eosinReferenceGeometry.height).toBe(2500);
     expect(result.cropWidth).toBe(2500);
