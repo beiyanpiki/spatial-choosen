@@ -44,7 +44,6 @@ export type CropQcFailureStage =
   | 'warp-moving-image'
   | 'orient-reference-frame'
   | 'orient-moving-frame'
-  | 'calculate-oriented-crop'
   | 'crop-reference-image'
   | 'crop-moving-image'
   | 'calculate-qc-geometry'
@@ -63,7 +62,6 @@ const CROP_QC_STAGE_LABELS: Record<CropQcFailureStage, string> = {
   'warp-moving-image': 'warping the H&E image with OpenCV',
   'orient-reference-frame': 'orienting the eosin reference frame',
   'orient-moving-frame': 'orienting the registered H&E frame',
-  'calculate-oriented-crop': 'calculating the oriented crop bounds',
   'crop-reference-image': 'cropping the eosin reference image',
   'crop-moving-image': 'cropping the registered H&E image',
   'calculate-qc-geometry': 'calculating Crop/QC geometry',
@@ -264,12 +262,12 @@ const applyCropLocalImageTransform = (
 const drawCanvasWithImageOrientation = (
   source: HTMLCanvasElement,
   transform: LocalizationImageTransform,
+  outputSize = getOrientedCropSize(source, transform),
 ) => {
   if (isIdentityImageOrientation(transform)) {
     return source;
   }
 
-  const outputSize = getOrientedCropSize(source, transform);
   const canvas = document.createElement('canvas');
   canvas.width = outputSize.width;
   canvas.height = outputSize.height;
@@ -575,11 +573,31 @@ const toPixelBounds = (points: readonly PixelPoint[]): PixelRect => {
   };
 };
 
-const transformPixelRect = (
+const applyInverseCropLocalImageTransform = (
+  point: PixelPoint,
+  transform: LocalizationImageTransform,
+  sourceSize: Size,
+  outputSize: Size,
+): PixelPoint => {
+  const outputDeltaX = (point.x - outputSize.width / 2)
+    * (transform.flipHorizontal ? -1 : 1);
+  const outputDeltaY = (point.y - outputSize.height / 2)
+    * (transform.flipVertical ? -1 : 1);
+  const radians = (-transform.rotationDegrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  return {
+    x: sourceSize.width / 2 + outputDeltaX * cos - outputDeltaY * sin,
+    y: sourceSize.height / 2 + outputDeltaX * sin + outputDeltaY * cos,
+  };
+};
+
+const inverseTransformPixelRect = (
   pixelRect: PixelRect,
   transform: LocalizationImageTransform,
   sourceSize: Size,
-  outputSize = getOrientedCropSize(sourceSize, transform),
+  outputSize: Size,
 ): PixelRect => {
   if (isIdentityImageOrientation(transform)) {
     return pixelRect;
@@ -590,7 +608,12 @@ const transformPixelRect = (
     { x: pixelRect.x + pixelRect.width, y: pixelRect.y },
     { x: pixelRect.x + pixelRect.width, y: pixelRect.y + pixelRect.height },
     { x: pixelRect.x, y: pixelRect.y + pixelRect.height },
-  ].map((point) => applyCropLocalImageTransform(point, transform, sourceSize, outputSize)));
+  ].map((point) => applyInverseCropLocalImageTransform(
+    point,
+    transform,
+    sourceSize,
+    outputSize,
+  )));
 };
 
 const applyAffineToPoint = (
@@ -1004,36 +1027,47 @@ export async function runCropQc(args: {
       () => getOriginalDensityCropSize(fullReferencePixelRect, args.affineMatrix),
     );
 
-    const sourceCropBounds = normalizeRectForSize(normalized.rect, heFullresSize);
-    const orientedFullresReferenceSize = getOrientedCropSize(
-      heFullresSize,
-      args.imageTransform,
-    );
-    const orientedCropPixelRect = transformPixelRect(
-      sourceCropBounds.pixelRect,
+    // CanvasStage stores capture bounds in the fixed, canvas-axis coordinate system.
+    // Rotating those bounds again would move Registration Review to a different region.
+    const orientedFullresReferenceSize = heFullresSize;
+    const orientedCropBounds = normalizeRectForSize(normalized.rect, heFullresSize);
+    const fullFrameOutputPixels = heFullresSize.width * heFullresSize.height;
+    const useRoiFirstWarp = fullFrameOutputPixels > FULL_FRAME_WARP_MAX_PIXELS
+      && isRightAngleImageOrientation(args.imageTransform);
+    const sourceRoiPixelRect = inverseTransformPixelRect(
+      orientedCropBounds.pixelRect,
       args.imageTransform,
       heFullresSize,
       orientedFullresReferenceSize,
     );
-    const orientedCropBounds = {
-      rect: {
-        x: orientedCropPixelRect.x / orientedFullresReferenceSize.width,
-        y: orientedCropPixelRect.y / orientedFullresReferenceSize.height,
-        width: orientedCropPixelRect.width / orientedFullresReferenceSize.width,
-        height: orientedCropPixelRect.height / orientedFullresReferenceSize.height,
-      },
-      pixelRect: orientedCropPixelRect,
+    const roundedSourceRoiPixelRect = {
+      x: Math.round(sourceRoiPixelRect.x),
+      y: Math.round(sourceRoiPixelRect.y),
+      width: Math.max(1, Math.round(sourceRoiPixelRect.width)),
+      height: Math.max(1, Math.round(sourceRoiPixelRect.height)),
     };
-    const fullFrameOutputPixels = heFullresSize.width * heFullresSize.height;
-    const useRoiFirstWarp = fullFrameOutputPixels > FULL_FRAME_WARP_MAX_PIXELS
-      && isRightAngleImageOrientation(args.imageTransform);
+    const fullresToReferenceScale = {
+      x: eosin.width / heFullresSize.width,
+      y: eosin.height / heFullresSize.height,
+    };
     const warpReferencePixelRect = useRoiFirstWarp
-      ? normalized.pixelRect
+      ? {
+        x: Math.round(roundedSourceRoiPixelRect.x * fullresToReferenceScale.x),
+        y: Math.round(roundedSourceRoiPixelRect.y * fullresToReferenceScale.y),
+        width: Math.max(
+          1,
+          Math.round(roundedSourceRoiPixelRect.width * fullresToReferenceScale.x),
+        ),
+        height: Math.max(
+          1,
+          Math.round(roundedSourceRoiPixelRect.height * fullresToReferenceScale.y),
+        ),
+      }
       : fullReferencePixelRect;
     const warpOutputSize = useRoiFirstWarp
       ? {
-        width: sourceCropBounds.pixelRect.width,
-        height: sourceCropBounds.pixelRect.height,
+        width: roundedSourceRoiPixelRect.width,
+        height: roundedSourceRoiPixelRect.height,
       }
       : heFullresSize;
     const referenceInputFrame = useRoiFirstWarp
@@ -1041,13 +1075,13 @@ export async function runCropQc(args: {
         'crop-reference-image',
         {
           inputSize: { width: eosin.width, height: eosin.height },
-          cropPixelRect: normalized.pixelRect,
+          cropPixelRect: warpReferencePixelRect,
           strategy: 'roi-first',
         },
         () => cropCanvas(
           eosin.canvas,
           { width: eosin.width, height: eosin.height },
-          normalized.pixelRect,
+          warpReferencePixelRect,
         ),
       ))
       : eosin.canvas;
@@ -1074,7 +1108,13 @@ export async function runCropQc(args: {
         inputSize: { width: referenceFullresFrame.width, height: referenceFullresFrame.height },
         imageTransform: args.imageTransform,
       },
-      () => drawCanvasWithImageOrientation(referenceFullresFrame, args.imageTransform),
+      () => drawCanvasWithImageOrientation(
+        referenceFullresFrame,
+        args.imageTransform,
+        useRoiFirstWarp
+          ? getOrientedCropSize(referenceFullresFrame, args.imageTransform)
+          : orientedFullresReferenceSize,
+      ),
     ));
     releaseTrackedCanvas(referenceFullresFrame, [
       eosin.canvas,
@@ -1110,7 +1150,13 @@ export async function runCropQc(args: {
         inputSize: { width: heCrop.width, height: heCrop.height },
         imageTransform: args.imageTransform,
       },
-      () => drawCanvasWithImageOrientation(heCrop, args.imageTransform),
+      () => drawCanvasWithImageOrientation(
+        heCrop,
+        args.imageTransform,
+        useRoiFirstWarp
+          ? getOrientedCropSize(heCrop, args.imageTransform)
+          : orientedFullresReferenceSize,
+      ),
     ));
     releaseTrackedCanvas(heCrop, [he.canvas, orientedHeFullFrame]);
     const orientedEosinFrame = useRoiFirstWarp
