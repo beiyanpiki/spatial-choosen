@@ -150,6 +150,69 @@ const METADATA_DEBOUNCED_PERSIST_OPTIONS = {
 	strategy: "debounced",
 } satisfies ProjectPersistOptions;
 
+const serializeCropQcFailure = (
+	error: unknown,
+	seen = new Set<unknown>(),
+): unknown => {
+	if (!(error instanceof Error)) {
+		return {
+			type: typeof error,
+			value: error,
+		};
+	}
+	if (seen.has(error)) {
+		return {
+			name: error.name,
+			message: error.message,
+			circular: true,
+		};
+	}
+	seen.add(error);
+
+	const extendedError = error as Error & {
+		cause?: unknown;
+		code?: unknown;
+		details?: unknown;
+		errors?: unknown;
+		stage?: unknown;
+	};
+	const aggregateErrors = Array.isArray(extendedError.errors)
+		? extendedError.errors.map((item) => serializeCropQcFailure(item, seen))
+		: undefined;
+
+	return {
+		name: error.name,
+		message: error.message,
+		stack: error.stack,
+		stage: extendedError.stage,
+		code: extendedError.code,
+		details: extendedError.details,
+		cause:
+			extendedError.cause === undefined
+				? undefined
+				: serializeCropQcFailure(extendedError.cause, seen),
+		errors: aggregateErrors,
+	};
+};
+
+const summarizeCropQcImage = (image: PreprocessSourceImage | null) =>
+	image
+		? {
+				id: image.id,
+				fileName: image.fileName,
+				mimeType: image.mimeType,
+				sourceDimensions: {
+					width: image.width,
+					height: image.height,
+				},
+				workingDimensions: {
+					width: image.workingWidth ?? null,
+					height: image.workingHeight ?? null,
+				},
+				encodedBytes: image.dataUrl?.length ?? null,
+		  }
+		: null;
+
 const hasCropQcPersistentPayload = (cropQc: CropQcSlice) => Boolean(
 	cropQc.cropAssets?.eosin?.fullres.dataUrl ||
 		cropQc.cropAssets?.he?.fullres.dataUrl ||
@@ -1370,6 +1433,7 @@ export function PreprocessWorkspace({
 
 	const runCropQcStep = useCallback(async () => {
 		if (!project) return;
+		let activeStage = "opencv-runtime-initialization";
 		const acceptedHeChipBounds = project.heFocus.chipBounds ?? undefined;
 		if (
 			!alignmentReferenceImage?.dataUrl ||
@@ -1398,6 +1462,7 @@ export function PreprocessWorkspace({
 		try {
 			const { cv } = await loadOpenCv();
 
+			activeStage = "registered-roi-generation";
 			const result = await runCropQc({
 				cv,
 				eosinDataUrl: alignmentReferenceImage.dataUrl,
@@ -1441,6 +1506,36 @@ export function PreprocessWorkspace({
 				{ invalidateDownstream: false },
 			);
 		} catch (error) {
+			const structuredError = serializeCropQcFailure(error);
+			const errorStage =
+				error instanceof Error &&
+				"stage" in error &&
+				typeof error.stage === "string"
+					? error.stage
+					: activeStage;
+			console.error(
+				"[Crop QC] Registered ROI generation failed",
+				{
+					stage: errorStage,
+					error: structuredError,
+					context: {
+						projectId: project.id,
+						referenceImage: summarizeCropQcImage(alignmentReferenceImage),
+						movingImage: summarizeCropQcImage(alignmentMovingImage),
+						chipBounds: project.localization.chipBounds,
+						acceptedHeChipBounds,
+						imageTransform: project.localization.imageTransform,
+						affineMatrix: project.alignment.affineMatrix,
+						alignmentSource: project.alignment.source,
+						solveAccepted: project.alignment.solveAccepted,
+						forceAccepted: project.alignment.forceAccepted,
+						controlPointCount: project.alignment.controlPoints.length,
+						inlierCount:
+							project.alignment.inlierMask?.filter(Boolean).length ?? null,
+					},
+				},
+				error,
+			);
 			applyCropQcUpdate(
 				(current) => ({
 					...current,
@@ -2074,7 +2169,7 @@ export function PreprocessWorkspace({
 					</Stack>
 				</Flex>
 
-				<Flex direction={{ base: "column", lg: "row" }} gap={6} align="stretch">
+				<Flex direction={{ base: "column", md: "row" }} gap={6} align="stretch">
 					<StepSidebar
 						currentStep={project.currentStep}
 						onStepSelect={onStepChange}
