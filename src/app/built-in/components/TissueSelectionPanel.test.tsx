@@ -165,6 +165,11 @@ describe('TissueSelectionPanel', () => {
 	});
 
 	it('skips spot drawing when spot visibility is turned off but still draws the placement outline', async () => {
+		const fillStyles: string[] = [];
+		fillRectMock.mockImplementation(() => {
+			fillStyles.push(String(contextStub.fillStyle).toLowerCase());
+		});
+
 		render(
 			<ChakraProvider theme={theme}>
 				<TissueSelectionPanel
@@ -195,8 +200,12 @@ describe('TissueSelectionPanel', () => {
 
 		await waitFor(() => {
 			expect(drawImageMock).toHaveBeenCalled();
+			// The white output-padding fill for the box is drawn even without spots.
+			expect(fillStyles).toContain('#ffffff');
 		});
 
-		expect(fillRectMock).not.toHaveBeenCalled();
+		// Spot (non-white) fills are skipped when the grid is hidden.
+		expect(fillStyles).not.toContain(`${colorForLabel(1).toLowerCase()}e6`);
+		expect(fillStyles).not.toContain('#cbd5e026');
 	});
 });

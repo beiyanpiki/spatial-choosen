@@ -192,16 +192,13 @@ export function TissueSelectionPanel({
 
   const clampPlacement = useCallback(
     (next: ChipPlacement): ChipPlacement => {
-      if (!heWidth || !heHeight) return next;
-      const maxDim = Math.max(heWidth, heHeight);
-      const size = Math.min(Math.max(next.size, MIN_PLACEMENT_SIZE_PX), maxDim);
-      const maxX = Math.max(0, heWidth - size);
-      const maxY = Math.max(0, heHeight - size);
-      return {
-        size,
-        x: Math.min(Math.max(next.x, 0), maxX),
-        y: Math.min(Math.max(next.y, 0), maxY),
-      };
+      // The grid may extend beyond the HE image; the out-of-image area becomes
+      // white padding in the output. Only enforce a sane size range and leave
+      // the position free (including beyond the image bounds).
+      const dimMax = Math.max(heWidth ?? 0, heHeight ?? 0);
+      const maxSize = dimMax > 0 ? dimMax * 4 : next.size;
+      const size = Math.min(Math.max(next.size, MIN_PLACEMENT_SIZE_PX), maxSize);
+      return { size, x: next.x, y: next.y };
     },
     [heWidth, heHeight],
   );
@@ -350,6 +347,16 @@ export function TissueSelectionPanel({
 
     const transform = getTransformCb();
     if (!transform) return;
+
+    // Pre-fill the placement box with white: the opaque HE draw covers the
+    // in-image part, so any box area outside the image stays white — matching
+    // the white padding used in the final output when the box exceeds the image.
+    if (placement && hasPlacementSpace) {
+      const tl = heToCanvas(cornerHE(placement, 'tl'), transform);
+      const br = heToCanvas(cornerHE(placement, 'br'), transform);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+    }
 
     const image = loadedImageRef.current;
     if (image) {
