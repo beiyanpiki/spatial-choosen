@@ -4,10 +4,10 @@ import {
 	Badge,
 	Box,
 	Button,
-	ButtonGroup,
 	Flex,
 	Heading,
 	HStack,
+	SimpleGrid,
 	Stack,
 	Text,
 } from "@chakra-ui/react";
@@ -26,7 +26,6 @@ import {
 	ALIGNMENT_TARGET_PAIRS,
 	computeAlignmentStatus,
 	computeCoverageWarning,
-	normalizeAlignmentSlice,
 	solveAffineAlignment,
 } from "@/lib/preprocess/alignment";
 import {
@@ -34,7 +33,6 @@ import {
 	invertImageDisplayTransform,
 } from "@/lib/preprocess/imageTransforms";
 import { loadOpenCv } from "@/lib/preprocess/loadOpenCv";
-import { DEFAULT_LOCALIZATION_IMAGE_TRANSFORM } from "@/lib/preprocess/localization";
 import type {
 	AlignmentControlPoint,
 	AlignmentSlice,
@@ -558,6 +556,7 @@ export function AlignmentPanel({
 		"idle" | "loading" | "ready" | "error"
 	>("idle");
 	const [runtimeError, setRuntimeError] = useState<string | null>(null);
+	const [runtimeRetryCount, setRuntimeRetryCount] = useState(0);
 
 	const hasBothImages = Boolean(
 		referenceImage?.dataUrl && movingImage?.dataUrl,
@@ -594,7 +593,7 @@ export function AlignmentPanel({
 		return () => {
 			cancelled = true;
 		};
-	}, [hasBothImages]);
+	}, [hasBothImages, runtimeRetryCount]);
 
   const resetSolveState = useCallback(
     (current: AlignmentSlice): AlignmentSlice => ({
@@ -1027,13 +1026,9 @@ export function AlignmentPanel({
 		);
 	}
 
-	const workflowOverlay = (
+	const workflowCard = (
 		<Box
-			position="absolute"
-			top={4}
-			left={4}
-			right={4}
-			zIndex={3}
+			w="100%"
 			bg="rgba(255, 255, 255, 0.94)"
 			color="gray.800"
 			border="1px solid"
@@ -1112,8 +1107,7 @@ export function AlignmentPanel({
 						<Badge
 							colorScheme={
 								alignment.solveAccepted
-									? alignment.forceAccepted &&
-										  !alignment.qualityFlags.accepted
+									? alignment.forceAccepted && !alignment.qualityFlags.accepted
 										? "orange"
 										: "green"
 									: alignment.failureReason
@@ -1129,8 +1123,7 @@ export function AlignmentPanel({
 							data-failure-reason={alignment.failureReason ?? ""}
 						>
 							{alignment.solveAccepted
-								? alignment.forceAccepted &&
-									  !alignment.qualityFlags.accepted
+								? alignment.forceAccepted && !alignment.qualityFlags.accepted
 									? "Force accepted"
 									: "Accepted"
 								: alignment.failureReason
@@ -1153,483 +1146,260 @@ export function AlignmentPanel({
 						) : null}
 					</Flex>
 				</Flex>
-				<Flex gap={2} wrap="wrap" align="center">
-					<Button
-						size="sm"
-						variant="outline"
-						color="gray.700"
-						borderColor="gray.300"
-						bg="whiteAlpha.800"
-						_hover={{ bg: "white" }}
-						onClick={() => {
-							if (!selectedPairId) return;
-							setPendingSourcePoint(null);
-							setRepositionPairId(selectedPairId);
-							setInteractionMode("reposition-source");
-						}}
-						isDisabled={!selectedPairId}
-						data-testid="alignment-select-reposition-source"
+				<Flex gap={3} wrap="wrap" align="center" justify="space-between">
+					<Flex
+						role="group"
+						aria-label="Selected landmark controls"
+						gap={2}
+						wrap="wrap"
+						data-testid="alignment-pair-actions"
 					>
-						Move NATA Align Image Point
-					</Button>
-					<Button
-						size="sm"
-						variant="outline"
-						color="gray.700"
-						borderColor="gray.300"
-						bg="whiteAlpha.800"
-						_hover={{ bg: "white" }}
-						onClick={() => {
-							if (!selectedPairId) return;
-							setPendingSourcePoint(null);
-							setRepositionPairId(selectedPairId);
-							setInteractionMode("reposition-target");
-						}}
-						isDisabled={!selectedPairId}
-						data-testid="alignment-select-reposition-target"
-					>
-						Move HE point
-					</Button>
-					<Button
-						size="sm"
-						variant="outline"
-						colorScheme="red"
-						onClick={() => {
-							if (!selectedPairId) return;
-							setPendingSourcePoint(null);
-							setRepositionPairId(null);
-							mutateControlPoints(
-								(controlPoints) =>
-									controlPoints.filter((point) => point.id !== selectedPairId),
-								{ afterApply: clearLocalInteractionState },
-							);
-						}}
-						isDisabled={!selectedPairId}
-						data-testid="alignment-select-delete-pair"
-					>
-						Delete pair
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						color="gray.700"
-						_hover={{ bg: "gray.100" }}
-						onClick={clearLocalInteractionState}
-						isDisabled={
-							interactionMode === "awaiting-source" && !pendingSourcePoint
-						}
-						data-testid="alignment-select-cancel"
-					>
-						Cancel
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						color="gray.700"
-						_hover={{ bg: "gray.100" }}
-						onClick={() => setShowDiagnostics((current) => !current)}
-						data-testid="alignment-diagnostics-toggle"
-					>
-						Registration Preview
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						color="gray.700"
-						_hover={{ bg: "gray.100" }}
-						onClick={() => {
-							setPendingSourcePoint(null);
-							setRepositionPairId(null);
-							mutateControlPoints(
-								(controlPoints) => controlPoints.slice(0, -1),
-								{ afterApply: clearLocalInteractionState },
-							);
-						}}
-						isDisabled={alignment.controlPoints.length === 0}
-						data-testid="alignment-undo-last-point"
-					>
-						Undo last point
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						color="gray.700"
-						_hover={{ bg: "gray.100" }}
-						onClick={() => {
-							setPendingSourcePoint(null);
-							setRepositionPairId(null);
-							if (alignment.controlPoints.length > 0) {
-								mutateControlPoints(() => [], {
-									afterApply: clearLocalInteractionState,
-								});
-								return;
-							}
-
-							onAlignmentChange((current) => resetSolveState(current));
-							clearLocalInteractionState();
-						}}
-						isDisabled={alignment.controlPoints.length === 0}
-						data-testid="alignment-reset"
-					>
-						Clear All Pairs
-					</Button>
-					<Button
-						size="sm"
-						colorScheme="brand"
-						boxShadow="sm"
-						onClick={() => void solveAlignment()}
-						isDisabled={!canSolve}
-						data-testid="alignment-run-solve"
-					>
-						Review Registration
-					</Button>
-					{canForceAccept ? (
 						<Button
 							size="sm"
-							colorScheme="orange"
-							variant="solid"
-							boxShadow="sm"
-							onClick={handleForceAccept}
-							data-testid="alignment-force-accept"
+							variant="outline"
+							color="gray.700"
+							borderColor="gray.300"
+							bg="whiteAlpha.800"
+							_hover={{ bg: "white" }}
+							onClick={() => {
+								if (!selectedPairId) return;
+								setPendingSourcePoint(null);
+								setRepositionPairId(selectedPairId);
+								setInteractionMode("reposition-source");
+							}}
+							isDisabled={!selectedPairId}
+							data-testid="alignment-select-reposition-source"
 						>
-							Force accept
+							Move NATA Align Image Point
 						</Button>
-					) : null}
-				</Flex>
-			</Stack>
-		</Box>
-	);
+						<Button
+							size="sm"
+							variant="outline"
+							color="gray.700"
+							borderColor="gray.300"
+							bg="whiteAlpha.800"
+							_hover={{ bg: "white" }}
+							onClick={() => {
+								if (!selectedPairId) return;
+								setPendingSourcePoint(null);
+								setRepositionPairId(selectedPairId);
+								setInteractionMode("reposition-target");
+							}}
+							isDisabled={!selectedPairId}
+							data-testid="alignment-select-reposition-target"
+						>
+							Move HE point
+						</Button>
+						<Button
+							size="sm"
+							variant="outline"
+							colorScheme="red"
+							onClick={() => {
+								if (!selectedPairId) return;
+								setPendingSourcePoint(null);
+								setRepositionPairId(null);
+								mutateControlPoints(
+									(controlPoints) =>
+										controlPoints.filter(
+											(point) => point.id !== selectedPairId,
+										),
+									{ afterApply: clearLocalInteractionState },
+								);
+							}}
+							isDisabled={!selectedPairId}
+							data-testid="alignment-select-delete-pair"
+						>
+							Delete pair
+						</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							color="gray.700"
+							_hover={{ bg: "gray.100" }}
+							onClick={clearLocalInteractionState}
+							isDisabled={
+								interactionMode === "awaiting-source" && !pendingSourcePoint
+							}
+							data-testid="alignment-select-cancel"
+						>
+							Cancel
+						</Button>
+					</Flex>
+					<Flex
+						role="group"
+						aria-label="Workspace controls"
+						gap={2}
+						wrap="wrap"
+						data-testid="alignment-workspace-actions"
+					>
+						<Button
+							size="sm"
+							variant="ghost"
+							color="gray.700"
+							_hover={{ bg: "gray.100" }}
+							onClick={() => setShowDiagnostics((current) => !current)}
+							data-testid="alignment-diagnostics-toggle"
+						>
+							Registration Preview
+						</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							color="gray.700"
+							_hover={{ bg: "gray.100" }}
+							onClick={() => {
+								setPendingSourcePoint(null);
+								setRepositionPairId(null);
+								mutateControlPoints(
+									(controlPoints) => controlPoints.slice(0, -1),
+									{ afterApply: clearLocalInteractionState },
+								);
+							}}
+							isDisabled={alignment.controlPoints.length === 0}
+							data-testid="alignment-undo-last-point"
+						>
+							Undo last point
+						</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							color="gray.700"
+							_hover={{ bg: "gray.100" }}
+							onClick={() => {
+								setPendingSourcePoint(null);
+								setRepositionPairId(null);
+								if (alignment.controlPoints.length > 0) {
+									mutateControlPoints(() => [], {
+										afterApply: clearLocalInteractionState,
+									});
+									return;
+								}
 
-	const movingViewControls = (
-		<Box
-			bg="blackAlpha.700"
-			color="whiteAlpha.950"
-			border="1px solid"
-			borderColor="whiteAlpha.300"
-			borderRadius="xl"
-			px={3}
-			py={3}
-			backdropFilter="blur(12px)"
-			data-testid="alignment-moving-view-controls"
-		>
-			<Stack spacing={3} minW="220px">
-				<Stack spacing={2} data-testid="alignment-he-section-scale">
-					<Flex justify="space-between" align="center" gap={3}>
-						<Text
-							fontSize="xs"
-							textTransform="uppercase"
-							letterSpacing="0.12em"
-							color="whiteAlpha.700"
+								onAlignmentChange((current) => resetSolveState(current));
+								clearLocalInteractionState();
+							}}
+							isDisabled={alignment.controlPoints.length === 0}
+							data-testid="alignment-reset"
 						>
-							Zoom
-						</Text>
-						<Text fontSize="sm" fontWeight="semibold">
-							{(alignment.movingImageTransform.scale * 100).toFixed(0)}%
-						</Text>
+							Clear All Pairs
+						</Button>
 					</Flex>
-					<ButtonGroup size="sm" isAttached variant="outline">
+					<Flex
+						role="group"
+						aria-label="Registration decision controls"
+						gap={2}
+						wrap="wrap"
+						justify={{ base: "flex-start", lg: "flex-end" }}
+						data-testid="alignment-decision-actions"
+					>
 						<Button
-							aria-label="Zoom out HE image"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												scale: Math.max(
-													0.5,
-													slice.movingImageTransform.scale - 0.05,
-												),
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
+							size="sm"
+							colorScheme="brand"
+							boxShadow="sm"
+							onClick={() => void solveAlignment()}
+							isDisabled={!canSolve}
+							data-testid="alignment-run-solve"
 						>
-							−
+							Review Registration
 						</Button>
-						<Button
-							aria-label="Zoom in HE image"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												scale: Math.min(
-													4,
-													slice.movingImageTransform.scale + 0.05,
-												),
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
-						>
-							+
-						</Button>
-					</ButtonGroup>
-				</Stack>
-				<Stack spacing={2} data-testid="alignment-he-section-rotation">
-					<Flex justify="space-between" align="center" gap={3}>
-						<Text
-							fontSize="xs"
-							textTransform="uppercase"
-							letterSpacing="0.12em"
-							color="whiteAlpha.700"
-						>
-							Rotation
-						</Text>
-						<Text fontSize="sm" fontWeight="semibold">
-							{alignment.movingImageTransform.rotationDegrees.toFixed(1)}°
-						</Text>
+						{canForceAccept ? (
+							<Button
+								size="sm"
+								colorScheme="orange"
+								variant="solid"
+								boxShadow="sm"
+								onClick={handleForceAccept}
+								data-testid="alignment-force-accept"
+							>
+								Force continue
+							</Button>
+						) : null}
 					</Flex>
-					<ButtonGroup size="sm" variant="outline" isAttached flexWrap="wrap">
-						<Button
-							aria-label="Rotate HE left 90 degrees"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												rotationDegrees:
-													slice.movingImageTransform.rotationDegrees - 90,
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
-						>
-							↺90
-						</Button>
-						<Button
-							aria-label="Rotate HE right 90 degrees"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												rotationDegrees:
-													slice.movingImageTransform.rotationDegrees + 90,
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
-						>
-							↻90
-						</Button>
-						<Button
-							aria-label="Rotate HE left 1 degree"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												rotationDegrees:
-													slice.movingImageTransform.rotationDegrees - 1,
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
-						>
-							↺1
-						</Button>
-						<Button
-							aria-label="Rotate HE right 1 degree"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												rotationDegrees:
-													slice.movingImageTransform.rotationDegrees + 1,
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
-						>
-							↻1
-						</Button>
-					</ButtonGroup>
-				</Stack>
-				<Stack spacing={2} data-testid="alignment-he-section-flip">
-					<Text
-						fontSize="xs"
-						textTransform="uppercase"
-						letterSpacing="0.12em"
-						color="whiteAlpha.700"
-					>
-						Flip
-					</Text>
-					<ButtonGroup size="sm" variant="outline" isAttached>
-						<Button
-							aria-label="Flip HE horizontally"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							data-testid="alignment-he-flip-horizontal"
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												flipHorizontal:
-													!slice.movingImageTransform.flipHorizontal,
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
-						>
-							⇋
-						</Button>
-						<Button
-							aria-label="Flip HE vertically"
-							color="white"
-							borderColor="whiteAlpha.400"
-							_hover={{ bg: "whiteAlpha.200" }}
-							data-testid="alignment-he-flip-vertical"
-							onClick={() => {
-								onAlignmentChange(
-									(slice) =>
-										normalizeAlignmentSlice({
-											...slice,
-											movingImageTransform: {
-												...slice.movingImageTransform,
-												flipVertical: !slice.movingImageTransform.flipVertical,
-											},
-										}),
-									{ invalidateDownstream: false },
-								);
-							}}
-						>
-							⇅
-						</Button>
-					</ButtonGroup>
-				</Stack>
-				<Stack spacing={2} data-testid="alignment-he-section-reset">
-					<Text
-						fontSize="xs"
-						textTransform="uppercase"
-						letterSpacing="0.12em"
-						color="whiteAlpha.700"
-					>
-						Reset
-					</Text>
-					<Button
-						size="sm"
-						variant="outline"
-						color="white"
-						borderColor="whiteAlpha.400"
-						_hover={{ bg: "whiteAlpha.200" }}
-						onClick={() => {
-							onAlignmentChange(
-								(slice) =>
-									normalizeAlignmentSlice({
-										...slice,
-										movingImageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-									}),
-								{ invalidateDownstream: false },
-							);
-						}}
-					>
-						⟲
-					</Button>
-				</Stack>
+				</Flex>
 			</Stack>
 		</Box>
 	);
 
 	return (
-		<Stack spacing={5}>
-			<Box position="relative" pt={{ base: "416px", xl: 96 }}>
-				{workflowOverlay}
-				{coverage.warning ? (
-					<Text
-						fontSize="sm"
-						color="orange.600"
-						mb={3}
-						data-testid="alignment-distribution-warning"
-					>
-						Landmark spread is narrow. Coverage ratios are{" "}
-						{formatPercent(coverage.coverageRatioX)} width and{" "}
-						{formatPercent(coverage.coverageRatioY)} height, below the{" "}
-						{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
-					</Text>
-				) : null}
-				{runtimeError ? (
-					<Text fontSize="sm" color="red.600" mb={3}>
-						{runtimeError}
-					</Text>
-				) : null}
-				<Flex direction={{ base: "column", xl: "row" }} gap={4} align="stretch">
-					<LandmarkCanvas
-						image={referenceImage}
-						imageKey="source"
-						imageTransform={referenceImageTransform}
-						points={sourcePoints}
-						pendingPoint={pendingSourcePoint}
-						title="Eosin landmarks (reference)"
-						interactionMode={interactionMode}
-						selectedPairId={selectedPairId}
-						onBackgroundPoint={handleBackgroundPoint}
-						onBackgroundFallback={clearLocalInteractionState}
-						onSelectPoint={handleSelectPair}
-						onRepositionPoint={handleRepositionPoint}
-						testIdPrefix="alignment-source"
-					/>
-					<LandmarkCanvas
-						image={movingImage}
-						imageKey="target"
-						imageTransform={alignment.movingImageTransform}
-						points={targetPoints}
-						pendingPoint={null}
-						title="HE landmarks (moving)"
-						interactionMode={interactionMode}
-						selectedPairId={selectedPairId}
-						showImageBoundary={showMovingImagePaddingBoundary}
-						panelContent={movingViewControls}
-						onBackgroundPoint={handleBackgroundPoint}
-						onBackgroundFallback={clearLocalInteractionState}
-						onSelectPoint={handleSelectPair}
-						onRepositionPoint={handleRepositionPoint}
-						testIdPrefix="alignment-target"
-					/>
-				</Flex>
-			</Box>
+		<Stack spacing={4} w="100%" data-testid="alignment-layout">
+			{workflowCard}
+			{coverage.warning || runtimeError ? (
+				<Stack spacing={2} w="100%" data-testid="alignment-messages">
+					{coverage.warning ? (
+						<Stack spacing={1}>
+							<Text
+								fontSize="sm"
+								color="orange.600"
+								data-testid="alignment-distribution-warning"
+							>
+								Landmark spread is narrow. Coverage ratios are{" "}
+								{formatPercent(coverage.coverageRatioX)} width and{" "}
+								{formatPercent(coverage.coverageRatioY)} height, below the{" "}
+								{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
+							</Text>
+							<Text fontSize="sm" color="orange.700">
+								For genuinely small tissue, review the registration first. If
+								the overlay is correct, choose Force continue to proceed.
+							</Text>
+						</Stack>
+					) : null}
+					{runtimeError ? (
+						<Flex gap={3} align={{ base: "flex-start", sm: "center" }} wrap="wrap">
+							<Text fontSize="sm" color="red.600">
+								{runtimeError}
+							</Text>
+							<Button
+								size="xs"
+								colorScheme="red"
+								variant="outline"
+								onClick={() => setRuntimeRetryCount((count) => count + 1)}
+								data-testid="alignment-retry-opencv"
+							>
+								Retry OpenCV
+							</Button>
+						</Flex>
+					) : null}
+				</Stack>
+			) : null}
+			<SimpleGrid
+				columns={{ base: 1, lg: 2 }}
+				gap={4}
+				w="100%"
+				minW={0}
+				data-testid="alignment-canvas-grid"
+			>
+				<LandmarkCanvas
+					image={referenceImage}
+					imageKey="source"
+					imageTransform={referenceImageTransform}
+					points={sourcePoints}
+					pendingPoint={pendingSourcePoint}
+					title="Eosin landmarks (reference)"
+					interactionMode={interactionMode}
+					selectedPairId={selectedPairId}
+					onBackgroundPoint={handleBackgroundPoint}
+					onBackgroundFallback={clearLocalInteractionState}
+					onSelectPoint={handleSelectPair}
+					onRepositionPoint={handleRepositionPoint}
+					testIdPrefix="alignment-source"
+				/>
+				<LandmarkCanvas
+					image={movingImage}
+					imageKey="target"
+					imageTransform={alignment.movingImageTransform}
+					points={targetPoints}
+					pendingPoint={null}
+					title="HE landmarks (moving)"
+					interactionMode={interactionMode}
+					selectedPairId={selectedPairId}
+					showImageBoundary={showMovingImagePaddingBoundary}
+					onBackgroundPoint={handleBackgroundPoint}
+					onBackgroundFallback={clearLocalInteractionState}
+					onSelectPoint={handleSelectPair}
+					onRepositionPoint={handleRepositionPoint}
+					testIdPrefix="alignment-target"
+				/>
+			</SimpleGrid>
 			{showDiagnostics ? (
 				<Stack spacing={2} fontSize="sm">
 					<HStack justify="space-between">
