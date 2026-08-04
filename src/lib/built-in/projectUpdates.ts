@@ -1,6 +1,7 @@
 import type {
   PreprocessPoint,
   ProjectedSpot,
+  TissueActivationMatrix,
   TissueActivationValue,
   TissueSelectionSlice,
 } from '@/types/built-in';
@@ -10,6 +11,7 @@ import {
   invertTissueActivationMatrix,
   matrixFromSelectedSpotIds,
   selectedSpotIdsFromMatrix,
+  validateTissueActivationMatrix,
 } from './tissueMatrix';
 import { applyTissueMatrixEdit } from './tissueMatrixEdits';
 
@@ -175,6 +177,55 @@ export function buildInvertedTissueSelectionState(
     status: 'complete',
     isStale: false,
     updatedAt: args.updatedAt,
+    warning: null,
+    error: null,
+  };
+}
+
+type ImportedTissueSelectionArgs = {
+  current: TissueSelectionSlice;
+  matrix: TissueActivationMatrix;
+  projectedSpots?: ProjectedSpot[] | null;
+  updatedAt: string;
+};
+
+/**
+ * Build a `TissueSelectionSlice` from a precomputed activation matrix (e.g. one
+ * imported from a CSV), rather than from manual edits or pixel-based auto
+ * detection. The matrix is recorded verbatim with `mode: 'imported'`. Spot-id
+ * parity is derived from the matrix + projected spots when spots are available,
+ * otherwise left `null` to be recomputed once projection exists.
+ */
+export function buildImportedTissueSelectionState(
+  args: ImportedTissueSelectionArgs,
+): TissueSelectionSlice {
+  const { current, matrix, projectedSpots, updatedAt } = args;
+  const validated = validateTissueActivationMatrix(matrix);
+  const total = validated.rows * validated.columns;
+  const selectedCount = validated.values.reduce<number>(
+    (count, value) => (value === 1 ? count + 1 : count),
+    0,
+  );
+  const selectedPercent = total > 0 ? (selectedCount / total) * 100 : 0;
+  const selectedSpotIds = projectedSpots
+    ? selectedSpotIdsFromMatrix(validated, projectedSpots)
+    : null;
+
+  return {
+    ...current,
+    mode: 'imported',
+    matrix: validated,
+    autoSelectedSpotIds: [],
+    selectedSpotIds,
+    paritySummary: {
+      selectedCount,
+      selectedPercent,
+      maskCoverage: selectedPercent,
+    },
+    overrideNotice: null,
+    status: 'complete',
+    isStale: false,
+    updatedAt,
     warning: null,
     error: null,
   };

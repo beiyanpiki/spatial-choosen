@@ -11,8 +11,8 @@ type StepItem = {
 export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
   {
     id: 'sourceAssets',
-    label: 'Upload Images',
-    description: 'Upload the NATA Align image and the corresponding H&E image.',
+    label: 'HE Image & CSV',
+    description: 'Upload the H&E image and a tissue activation CSV.',
     testId: 'preprocess-step-source-assets',
   },
   {

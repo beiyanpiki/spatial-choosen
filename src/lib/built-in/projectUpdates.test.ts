@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import type { PreprocessPoint, ProjectedSpot, TissueSelectionSlice } from '@/types/built-in';
+import type {
+  PreprocessPoint,
+  ProjectedSpot,
+  TissueActivationMatrix,
+  TissueSelectionSlice,
+} from '@/types/built-in';
 
 import {
+  buildImportedTissueSelectionState,
   buildManualTissueSelectionState,
   buildUpdatedProjectSnapshot,
 } from './projectUpdates';
@@ -94,6 +100,45 @@ const createTissueSelection = (
   overrideNotice: 'legacy override notice',
   previewDataUrl: 'data:image/png;base64,legacy',
   ...overrides,
+});
+
+describe('buildImportedTissueSelectionState', () => {
+  it('records the imported matrix with mode "imported" and a complete status', () => {
+    const matrix: TissueActivationMatrix = { rows: 2, columns: 2, values: [1, 0, 0, 1] };
+
+    const result = buildImportedTissueSelectionState({
+      current: createTissueSelection(),
+      matrix,
+      updatedAt: '2026-04-13T00:05:00.000Z',
+    });
+
+    expect(result.mode).toBe('imported');
+    expect(result.status).toBe('complete');
+    expect(result.isStale).toBe(false);
+    expect(result.matrix).toEqual(matrix);
+    expect(result.autoSelectedSpotIds).toEqual([]);
+    expect(result.selectedSpotIds).toBeNull();
+    expect(result.paritySummary).toEqual({
+      selectedCount: 2,
+      selectedPercent: 50,
+      maskCoverage: 50,
+    });
+    expect(result.warning).toBeNull();
+    expect(result.error).toBeNull();
+  });
+
+  it('derives selectedSpotIds when projected spots are provided', () => {
+    const matrix: TissueActivationMatrix = { rows: 2, columns: 2, values: [1, 0, 0, 0] };
+
+    const result = buildImportedTissueSelectionState({
+      current: createTissueSelection(),
+      matrix,
+      projectedSpots: PROJECTED_SPOTS,
+      updatedAt: '2026-04-13T00:05:00.000Z',
+    });
+
+    expect(result.selectedSpotIds).toEqual(['spot-a']);
+  });
 });
 
 describe('projectUpdates helpers', () => {
