@@ -152,8 +152,8 @@ export function TissueSelectionPanel({
   }, [imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
-  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}40`, []);
-  const neutralSpotFillColor = '#e5e5e520';
+  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}E6`, []);
+  const neutralSpotFillColor = '#cbd5e026';
 
   const getTransformCb = useCallback(
     () => getTransform(computeBaseView(hostRect, ratio), 1, { x: 0, y: 0 }),

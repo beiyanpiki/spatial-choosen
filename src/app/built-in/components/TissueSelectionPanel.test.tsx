@@ -105,8 +105,8 @@ afterEach(() => {
 describe('TissueSelectionPanel', () => {
 	it('renders the placement grid with colored spots and the active-spot count', async () => {
 		const assignedFill = colorForLabel(1).toLowerCase();
-		const expectedAssignedFill = `${assignedFill}40`;
-		const expectedNeutralFill = '#e5e5e520';
+		const expectedAssignedFill = `${assignedFill}e6`;
+		const expectedNeutralFill = '#cbd5e026';
 		const fillStyles: string[] = [];
 
 		fillRectMock.mockImplementation(() => {
