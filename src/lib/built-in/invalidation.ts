@@ -8,6 +8,7 @@ import type {
 export const PREPROCESS_INVALIDATION_GRAPH: Record<PreprocessStepId, readonly PreprocessStepId[]> = {
   sourceAssets: [],
   tissueSelection: [],
+  exportState: [],
 };
 
 const markStale = <T extends PreprocessSliceBase>(slice: T): T => ({

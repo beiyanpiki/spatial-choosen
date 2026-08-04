@@ -44,6 +44,7 @@ const describeSources = (project: PreprocessProjectSummary) => {
 const STEP_LABELS: Record<PreprocessStepId, string> = {
   sourceAssets: 'Source images',
   tissueSelection: 'Tissue spot selection',
+  exportState: 'Export package',
 };
 
 export function PreprocessLanding({

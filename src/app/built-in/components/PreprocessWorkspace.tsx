@@ -28,6 +28,7 @@ import type {
 	PreprocessStepId,
 } from "@/types/built-in";
 import { loadChipConfigManifest } from "@/lib/built-in/chipConfigs";
+import { exportBuiltInZip, getBuiltInZipExportReadiness } from "@/lib/built-in/exportBundle";
 import { invalidateOnSourceAssetsChange } from "@/lib/built-in/invalidation";
 import { parseTissueActivationCsv } from "@/lib/built-in/tissueCsvImport";
 import { buildImportedTissueSelectionState } from "@/lib/built-in/projectUpdates";
@@ -36,6 +37,7 @@ import { projectSpotsForPlacement } from "@/lib/built-in/spotProjection";
 import type { PreprocessPersistMode } from "@/lib/built-in/storage";
 import { selectedSpotIdsFromMatrix } from "@/lib/built-in/tissueMatrix";
 import { resolveTissueSelectionSupport } from "@/lib/built-in/tissueSupport";
+import { ExportPanel } from "./ExportPanel";
 import { StepSidebar } from "./StepSidebar";
 import { TissueSelectionControls } from "./TissueSelectionControls";
 import { TissueSelectionPanel } from "./TissueSelectionPanel";
@@ -85,6 +87,10 @@ const placeholderCopyByStep: Record<
 	tissueSelection: {
 		title: "Tissue spot selection",
 		body: "Refine the imported tissue spot matrix over the H&E image. Mark spots as tissue or background, or invert the whole selection.",
+	},
+	exportState: {
+		title: "Export package",
+		body: "Download the tissue image pyramid, scalefactors, spot positions, and tissue matrix for downstream analysis.",
 	},
 };
 
@@ -271,6 +277,7 @@ export function PreprocessWorkspace({
 	const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 	const [projectNameDraft, setProjectNameDraft] = useState("");
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
+	const [isExporting, setIsExporting] = useState(false);
 
 	const handleUploadHe = useCallback(
 		async (fileList: FileList | null) => {
@@ -368,6 +375,7 @@ export function PreprocessWorkspace({
 							placement: null,
 							excludedRows: [],
 							excludedColumns: [],
+							barcodesByPosition: parsed.barcodesByPosition,
 							projectedSpots: null,
 							status: "ready",
 							isStale: false,
@@ -504,6 +512,10 @@ export function PreprocessWorkspace({
 			heHeight: he.height,
 		});
 	}, [project]);
+
+	const exportReadiness = project
+		? getBuiltInZipExportReadiness(project, tissueProjectedSpots)
+		: { canExport: false as const, reason: "Project unavailable." };
 
 	const tissueSelectedSpotIds = useMemo(() => {
 		if (!project) return [];
@@ -982,6 +994,83 @@ export function PreprocessWorkspace({
 										</Card>
 									</Stack>
 								</Flex>
+							) : project.currentStep === "exportState" ? (
+								<Stack spacing={5}>
+									<Text color="gray.600" maxW="3xl">
+										{currentCopy.body}
+									</Text>
+									<ExportPanel
+										isExporting={isExporting}
+										canExport={exportReadiness.canExport}
+										onDownload={() => {
+											const currentExportReadiness = getBuiltInZipExportReadiness(
+												project,
+												tissueProjectedSpots,
+											);
+											if (!currentExportReadiness.canExport) {
+												toast({
+													title: "Export blocked",
+													description: currentExportReadiness.reason,
+													status: "warning",
+												});
+												return;
+											}
+											void (async () => {
+												setIsExporting(true);
+												try {
+													const output = await exportBuiltInZip({
+														project,
+														projectedSpots: tissueProjectedSpots,
+													});
+													const url = URL.createObjectURL(output.blob);
+													const anchor = document.createElement("a");
+													anchor.href = url;
+													anchor.download = output.fileName;
+													document.body.appendChild(anchor);
+													anchor.click();
+													document.body.removeChild(anchor);
+													URL.revokeObjectURL(url);
+													onProjectMutate((current) => ({
+														...current,
+														exportState: {
+															...current.exportState,
+															status: "complete",
+															isStale: false,
+															updatedAt: new Date().toISOString(),
+															lastExportedAt: new Date().toISOString(),
+															error: null,
+														},
+													}));
+												} catch (error) {
+													console.error(error);
+													toast({
+														title: "Export failed",
+														description:
+															error instanceof Error
+																? error.message
+																: "ZIP export failed",
+															status: "error",
+														});
+													onProjectMutate((current) => ({
+														...current,
+														exportState: {
+															...current.exportState,
+															status: "error",
+															isStale: false,
+															updatedAt: new Date().toISOString(),
+															error:
+																error instanceof Error
+																	? error.message
+																	: "Export failed",
+														},
+													}));
+												} finally {
+													setIsExporting(false);
+												}
+											})();
+										}}
+									/>
+								</Stack>
 							) : (
 								<Box
 									border="1px solid"

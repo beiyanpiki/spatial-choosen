@@ -66,6 +66,37 @@ vi.mock('../../../lib/built-in/chipConfigs', async () => {
   };
 });
 
+const mockGetBuiltInZipExportReadiness = vi.fn();
+const mockExportBuiltInZip = vi.fn();
+
+vi.mock('@/lib/built-in/exportBundle', () => ({
+  getBuiltInZipExportReadiness: (...args: unknown[]) => mockGetBuiltInZipExportReadiness(...args),
+  exportBuiltInZip: (...args: unknown[]) => mockExportBuiltInZip(...args),
+}));
+
+let mockExportPanelProps: {
+  isExporting?: boolean;
+  canExport?: boolean;
+  onDownload?: () => void;
+} | null = null;
+
+vi.mock('./ExportPanel', () => ({
+  ExportPanel: (props: {
+    isExporting?: boolean;
+    canExport?: boolean;
+    onDownload?: () => void;
+  }) => {
+    mockExportPanelProps = props;
+    return (
+      <div data-testid="export-panel-mock">
+        <button type="button" data-testid="export-download-zip" onClick={props.onDownload}>
+          Download
+        </button>
+      </div>
+    );
+  },
+}));
+
 vi.mock('./StepSidebar', () => ({
   StepSidebar: (props: {
     currentStep: PreprocessProject['currentStep'];
@@ -179,6 +210,7 @@ const createProject = (): PreprocessProject => ({
     placement: { x: 10, y: 10, scale: 1 },
     excludedRows: [],
     excludedColumns: [],
+    barcodesByPosition: {},
     projectedSpots: [
       createProjectedSpot('spot-a', 0.25, 0.25, 1, 1),
       createProjectedSpot('spot-b', 0.75, 0.25, 1, 2),
@@ -212,6 +244,13 @@ const createProject = (): PreprocessProject => ({
     },
     warning: null,
   },
+  exportState: {
+    status: 'idle',
+    isStale: false,
+    updatedAt: null,
+    error: null,
+    lastExportedAt: null,
+  },
 });
 
 beforeEach(() => {
@@ -229,6 +268,10 @@ beforeEach(() => {
   mockLoadChipConfigData.mockReset();
   mockLoadChipConfigData.mockResolvedValue(null);
   mockLoadChipConfigManifest.mockReset();
+  mockGetBuiltInZipExportReadiness.mockReset();
+  mockGetBuiltInZipExportReadiness.mockReturnValue({ canExport: false, reason: 'Not ready.' });
+  mockExportBuiltInZip.mockReset();
+  mockExportPanelProps = null;
   mockLoadChipConfigManifest.mockResolvedValue({
     id: '15um',
     label: '15um',
@@ -471,5 +514,120 @@ describe('Preprocess page autosave handling', () => {
       title: 'Autosave failed',
       status: 'error',
     }));
+  });
+});
+
+describe('PreprocessWorkspace export step', () => {
+  it('renders the export panel on the export step', () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'exportState';
+    mockGetBuiltInZipExportReadiness.mockReturnValue({ canExport: true, data: {} });
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByTestId('export-panel-mock')).toBeInTheDocument();
+    expect(screen.getByText('Download the tissue image pyramid, scalefactors, spot positions, and tissue matrix for downstream analysis.')).toBeInTheDocument();
+    expect(mockExportPanelProps?.canExport).toBe(true);
+  });
+
+  it('shows a warning toast and skips export when readiness blocks the download', async () => {
+    const user = userEvent.setup();
+    const initialProject = createProject();
+    initialProject.currentStep = 'exportState';
+    mockGetBuiltInZipExportReadiness.mockReturnValue({ canExport: false, reason: 'Not ready.' });
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    await user.click(screen.getByTestId('export-download-zip'));
+
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Export blocked',
+      description: 'Not ready.',
+      status: 'warning',
+    }));
+    expect(mockExportBuiltInZip).not.toHaveBeenCalled();
+  });
+
+  it('downloads the zip and marks exportState complete on success', async () => {
+    const user = userEvent.setup();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    const initialProject = createProject();
+    initialProject.currentStep = 'exportState';
+    mockGetBuiltInZipExportReadiness.mockReturnValue({ canExport: true, data: {} });
+    mockExportBuiltInZip.mockResolvedValue({
+      fileName: 'Preprocessing project-preprocess.zip',
+      blob: new Blob(['zip-bytes'], { type: 'application/zip' }),
+    });
+
+    const createObjectURL = vi.fn(() => 'blob:export-url');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectMutateCapture={(mutation) => capturedMutations.push(mutation)}
+      />,
+    );
+
+    await user.click(screen.getByTestId('export-download-zip'));
+
+    await waitFor(() => {
+      expect(mockExportBuiltInZip).toHaveBeenCalledWith({
+        project: expect.objectContaining({ id: initialProject.id }),
+        projectedSpots: expect.any(Array),
+      });
+    });
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(anchorClick).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:export-url');
+
+    await waitFor(() => {
+      const exportMutation = capturedMutations.find(
+        (mutation) => mutation.project.exportState.status === 'complete',
+      );
+      expect(exportMutation).toBeDefined();
+      expect(typeof exportMutation?.project.exportState.lastExportedAt).toBe('string');
+    });
+
+    anchorClick.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it('surfaces export failures and marks exportState error', async () => {
+    const user = userEvent.setup();
+    const capturedMutations: CapturedProjectMutation[] = [];
+    const initialProject = createProject();
+    initialProject.currentStep = 'exportState';
+    mockGetBuiltInZipExportReadiness.mockReturnValue({ canExport: true, data: {} });
+    mockExportBuiltInZip.mockRejectedValue(new Error('Canvas export failed'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectMutateCapture={(mutation) => capturedMutations.push(mutation)}
+      />,
+    );
+
+    await user.click(screen.getByTestId('export-download-zip'));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Export failed',
+        description: 'Canvas export failed',
+        status: 'error',
+      }));
+    });
+    await waitFor(() => {
+      const errorMutation = capturedMutations.find(
+        (mutation) => mutation.project.exportState.status === 'error',
+      );
+      expect(errorMutation).toBeDefined();
+      expect(errorMutation?.project.exportState.error).toBe('Canvas export failed');
+    });
+
+    consoleErrorSpy.mockRestore();
   });
 });

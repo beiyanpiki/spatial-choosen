@@ -22,11 +22,11 @@ describe('preprocess project state normalization', () => {
 	it('preserves the project through persistence and workspace normalization', () => {
 		const project = buildEmptyPreprocessProject('Round trip');
 		// normalizeProjectForWorkspace runs the migrator, which floors
-		// workflowVersion up to the current version (3) and storageVersion to the
+		// workflowVersion up to the current version (4) and storageVersion to the
 		// current schema version; persistence is a passthrough.
 		const expectedWorkspace = {
 			...project,
-			workflowVersion: Math.max(project.workflowVersion, 3),
+			workflowVersion: Math.max(project.workflowVersion, 4),
 		};
 
 		expect(normalizeProjectForPersistence(project)).toEqual(project);

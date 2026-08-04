@@ -13,7 +13,7 @@ import { migratePreprocessProject } from './migrations';
 // Mirrors CURRENT_WORKFLOW_VERSION inside migrations.ts. The migrator floors
 // workflowVersion at this value, so aligning the canonical input lets a full
 // round-trip be deeply equal.
-const CURRENT_WORKFLOW_VERSION = 3;
+const CURRENT_WORKFLOW_VERSION = 4;
 
 const buildCanonicalProject = (): PreprocessProject => {
 	const project = buildEmptyPreprocessProject('Canonical Project');
@@ -39,6 +39,7 @@ describe('migratePreprocessProject', () => {
 		expect(migrated.sourceAssets).toEqual(project.sourceAssets);
 		expect(migrated.chipConfig).toEqual(project.chipConfig);
 		expect(migrated.tissueSelection).toEqual(project.tissueSelection);
+		expect(migrated.exportState).toEqual(project.exportState);
 	});
 
 	it('bumps older workflow/storage versions up to the current schema', () => {
@@ -80,7 +81,6 @@ describe('migratePreprocessProject', () => {
 			'heFocus',
 			'alignment',
 			'cropQc',
-			'exportState',
 		] as const;
 
 		for (const step of removedSteps) {
@@ -100,6 +100,10 @@ describe('migratePreprocessProject', () => {
 		const sourceInput: PreprocessProject = { ...buildCanonicalProject() };
 		sourceInput.currentStep = 'sourceAssets';
 		expect(migratePreprocessProject(sourceInput).currentStep).toBe('sourceAssets');
+
+		const exportInput: PreprocessProject = { ...buildCanonicalProject() };
+		exportInput.currentStep = 'exportState';
+		expect(migratePreprocessProject(exportInput).currentStep).toBe('exportState');
 	});
 
 	it('normalizes chipConfig.projectedSpots to null even when populated', () => {
@@ -137,6 +141,64 @@ describe('migratePreprocessProject', () => {
 		expect(migrated.chipConfig.rows).toBe(96);
 		expect(migrated.chipConfig.columns).toBe(96);
 		expect(migrated.chipConfig.rotationDegrees).toBe(12.5);
+	});
+
+	it('normalizes missing barcodesByPosition to an empty map', () => {
+		const project = buildCanonicalProject();
+		const raw = { ...project, chipConfig: { ...project.chipConfig } } as unknown as Record<string, unknown>;
+		delete (raw.chipConfig as Record<string, unknown>).barcodesByPosition;
+
+		const migrated = migratePreprocessProject(raw as unknown as PreprocessProject);
+
+		expect(migrated.chipConfig.barcodesByPosition).toEqual({});
+	});
+
+	it('keeps valid barcodesByPosition entries and drops non-string values', () => {
+		const project = buildCanonicalProject();
+		project.chipConfig = {
+			...project.chipConfig,
+			barcodesByPosition: {
+				'96:1': 'BC-TOP-LEFT',
+				'1:96': 'BC-BOTTOM-RIGHT',
+				'1:1': 42 as unknown as string,
+				'1:2': '',
+			},
+		};
+
+		const migrated = migratePreprocessProject(project);
+
+		expect(migrated.chipConfig.barcodesByPosition).toEqual({
+			'96:1': 'BC-TOP-LEFT',
+			'1:96': 'BC-BOTTOM-RIGHT',
+		});
+	});
+
+	it('normalizes a missing exportState slice to its default', () => {
+		const project = buildCanonicalProject();
+		const raw = { ...project } as unknown as Record<string, unknown>;
+		delete raw.exportState;
+
+		const migrated = migratePreprocessProject(raw as unknown as PreprocessProject);
+
+		expect(migrated.exportState.status).toBe('idle');
+		expect(migrated.exportState.lastExportedAt).toBeNull();
+		expect(migrated.exportState.error).toBeNull();
+	});
+
+	it('preserves a completed exportState slice', () => {
+		const project = buildCanonicalProject();
+		project.exportState = {
+			status: 'complete',
+			isStale: false,
+			updatedAt: '2026-08-04T00:00:00.000Z',
+			error: null,
+			lastExportedAt: '2026-08-04T00:00:00.000Z',
+		};
+
+		const migrated = migratePreprocessProject(project);
+
+		expect(migrated.exportState.status).toBe('complete');
+		expect(migrated.exportState.lastExportedAt).toBe('2026-08-04T00:00:00.000Z');
 	});
 
 	it('drops eosin images and forces he-only sourceAssets', () => {

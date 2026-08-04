@@ -48,7 +48,7 @@ const disposeCanvas = (canvas: HTMLCanvasElement) => {
   canvas.height = 0;
 };
 
-const getDownsampledDimensions = (sourceWidth: number, sourceHeight: number, maxEdge: number) => {
+export const getDownsampledDimensions = (sourceWidth: number, sourceHeight: number, maxEdge: number) => {
   const longestEdge = Math.max(sourceWidth, sourceHeight);
   const scale = longestEdge > 0 ? Math.min(1, maxEdge / longestEdge) : 1;
 
@@ -181,6 +181,25 @@ const createThumbnailBlob = async (src: string, maxEdge: number = PREPROCESS_NUM
     }
 
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return await canvasToBlob(canvas, 'image/png');
+  } finally {
+    disposeCanvas(canvas);
+  }
+};
+
+const reencodeImageAsPngBlob = async (src: string): Promise<Blob> => {
+  const image = await loadImageElement(src);
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+
+  try {
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Canvas 2D context unavailable for PNG encoding');
+    }
+
+    context.drawImage(image, 0, 0);
     return await canvasToBlob(canvas, 'image/png');
   } finally {
     disposeCanvas(canvas);
@@ -334,4 +353,4 @@ export async function buildSourceImage(file: File, kind: PreprocessImageKind): P
   };
 }
 
-export { createDownsampledBlobFromSource, createThumbnailBlob, createWorkingProxyBlobFromSource, isTiffFile, loadImageElement };
+export { createDownsampledBlobFromSource, createThumbnailBlob, createWorkingProxyBlobFromSource, isTiffFile, loadImageElement, reencodeImageAsPngBlob };

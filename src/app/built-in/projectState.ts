@@ -7,7 +7,7 @@ import type {
 	PreprocessSliceBase,
 } from "@/types/built-in";
 
-const WORKFLOW_VERSION = 2;
+const WORKFLOW_VERSION = 4;
 
 const createSlice = (
 	status: PreprocessSliceBase["status"],
@@ -67,6 +67,7 @@ export const buildEmptyPreprocessProject = (
 			placement: null,
 			excludedRows: [],
 			excludedColumns: [],
+			barcodesByPosition: {},
 			projectedSpots: null,
 		},
 		tissueSelection: {
@@ -81,6 +82,10 @@ export const buildEmptyPreprocessProject = (
 			paritySummary: null,
 			warning: null,
 			selectedSpotIds: null,
+		},
+		exportState: {
+			...createSlice("idle"),
+			lastExportedAt: null,
 		},
 	};
 };

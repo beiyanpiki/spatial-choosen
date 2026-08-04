@@ -1,4 +1,4 @@
-export type PreprocessStepId = "sourceAssets" | "tissueSelection";
+export type PreprocessStepId = "sourceAssets" | "tissueSelection" | "exportState";
 
 export type PreprocessStepStatus =
   | "idle"
@@ -123,6 +123,10 @@ export type ChipConfigSlice = PreprocessSliceBase & {
   placement: ChipPlacement | null;
   excludedRows: number[];
   excludedColumns: number[];
+  /** Barcodes from the user-imported tissue activation CSV, keyed by in-memory
+   *  position `${arrayRow}:${arrayCol}` (bottom-left 1-based, post row-flip).
+   *  Absent entries fall back to the `${row}:${col}` placeholder at export. */
+  barcodesByPosition: Record<string, string>;
   projectedSpots: ProjectedSpot[] | null;
 };
 
@@ -209,6 +213,10 @@ export type LegacyTissueSelectionSlice = Omit<CanonicalTissueSelectionSlice, 'mo
     unsupportedReason?: string | null;
   };
 
+export type ExportStateSlice = PreprocessSliceBase & {
+  lastExportedAt: string | null;
+};
+
 export type PreprocessProject = {
   id: string;
   name: string;
@@ -220,6 +228,7 @@ export type PreprocessProject = {
   sourceAssets: SourceAssetsSlice;
   chipConfig: ChipConfigSlice;
   tissueSelection: TissueSelectionSlice;
+  exportState: ExportStateSlice;
 };
 
 export type LegacyPreprocessProject = Omit<PreprocessProject, "chipConfig" | "tissueSelection"> & {

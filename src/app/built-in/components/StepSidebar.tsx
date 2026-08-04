@@ -21,6 +21,12 @@ export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
     description: 'Refine the tissue spot matrix over the H&E image.',
     testId: 'preprocess-step-tissue',
   },
+  {
+    id: 'exportState',
+    label: 'Export Package',
+    description: 'Download the tissue export ZIP for downstream analysis.',
+    testId: 'preprocess-step-export',
+  },
 ] as const;
 
 const statusToneByStep: Record<string, string> = {
@@ -38,6 +44,8 @@ const stepStateFor = (project: PreprocessProject, stepId: PreprocessStepId) => {
       return project.sourceAssets;
     case 'tissueSelection':
       return project.tissueSelection;
+    case 'exportState':
+      return project.exportState;
     default:
       return project.sourceAssets;
   }
@@ -55,6 +63,8 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
       return true;
     case 'tissueSelection':
       return Boolean(project.sourceAssets.images.he) && project.chipConfig.chipType !== null;
+    case 'exportState':
+      return project.tissueSelection.status === 'complete';
     default:
       return false;
   }

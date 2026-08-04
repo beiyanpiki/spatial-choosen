@@ -8,6 +8,9 @@ export type ParsedTissueActivation = {
   rows: number;
   columns: number;
   matrix: TissueActivationMatrix;
+  /** Barcodes from the optional `barcode` column, keyed by in-memory position
+   *  `${arrayRow}:${arrayCol}` (bottom-left 1-based, post row-flip). */
+  barcodesByPosition: Record<string, string>;
 };
 
 /**
@@ -51,6 +54,7 @@ type ParsedRow = {
   csvRow: number;
   csvCol: number;
   tissue: TissueActivationValue;
+  barcode: string;
 };
 
 const parseTissueValue = (raw: string | undefined): TissueActivationValue => {
@@ -72,7 +76,10 @@ const parseTissueValue = (raw: string | undefined): TissueActivationValue => {
  *   - activation: `tissue` (or `in_tissue`) — `0`/`1`
  *   - chip row:    `row` (or `array_row`) — 1-based
  *   - chip col:    `col` (or `array_col`) — 1-based
- * Other columns (e.g. `barcode`, `Log2_nGene_Spatial`) are ignored.
+ *   - barcode:     `barcode` (optional) — captured per position for export; a
+ *     missing column or empty cells produce no entries (export falls back to
+ *     the `${row}:${col}` placeholder).
+ * Other columns (e.g. `Log2_nGene_Spatial`) are ignored.
  *
  * Chip type is inferred from the grid extent (max row × max col): 64×64 → 50um,
  * 96×96 → 15um. Grid cells absent from the CSV are treated as inactive (`0`).
@@ -87,6 +94,7 @@ export const parseTissueActivationCsv = (csvText: string): ParsedTissueActivatio
   const tissueIndex = findColumnIndex(header, ['tissue', 'in_tissue']);
   const rowIndex = findColumnIndex(header, ['row', 'array_row']);
   const colIndex = findColumnIndex(header, ['col', 'array_col']);
+  const barcodeIndex = findColumnIndex(header, ['barcode']);
   if (tissueIndex < 0 || rowIndex < 0 || colIndex < 0) {
     throw new Error(
       'Tissue activation CSV is missing required columns (tissue, row, col).',
@@ -104,7 +112,8 @@ export const parseTissueActivationCsv = (csvText: string): ParsedTissueActivatio
       throw new Error('Tissue activation CSV has a non-integer row/col coordinate.');
     }
     const tissue = parseTissueValue(columns[tissueIndex]);
-    parsedRows.push({ csvRow, csvCol, tissue });
+    const barcode = barcodeIndex >= 0 ? (columns[barcodeIndex]?.trim() ?? '') : '';
+    parsedRows.push({ csvRow, csvCol, tissue, barcode });
     if (csvRow > maxRow) maxRow = csvRow;
     if (csvCol > maxCol) maxCol = csvCol;
   }
@@ -121,7 +130,8 @@ export const parseTissueActivationCsv = (csvText: string): ParsedTissueActivatio
   const columns = maxCol;
 
   const matrix = createEmptyMatrix(rows, columns);
-  for (const { csvRow, csvCol, tissue } of parsedRows) {
+  const barcodesByPosition: Record<string, string> = {};
+  for (const { csvRow, csvCol, tissue, barcode } of parsedRows) {
     if (csvRow < 1 || csvRow > rows || csvCol < 1 || csvCol > columns) {
       continue;
     }
@@ -133,9 +143,12 @@ export const parseTissueActivationCsv = (csvText: string): ParsedTissueActivatio
     const matrixArrayRow = rows + 1 - csvRow;
     const index = (matrixArrayRow - 1) * columns + (csvCol - 1);
     matrix.values[index] = tissue;
+    if (barcode) {
+      barcodesByPosition[`${matrixArrayRow}:${csvCol}`] = barcode;
+    }
   }
 
   validateTissueActivationMatrix(matrix);
 
-  return { chipType, rows, columns, matrix };
+  return { chipType, rows, columns, matrix, barcodesByPosition };
 };

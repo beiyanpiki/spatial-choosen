@@ -199,7 +199,7 @@ const assertString = (value: unknown, fieldName: string) => {
 };
 
 const assertPreprocessStepId = (value: unknown, fieldName: string) => {
-  const allowedStepIds: readonly PreprocessStepId[] = ['sourceAssets', 'tissueSelection'];
+  const allowedStepIds: readonly PreprocessStepId[] = ['sourceAssets', 'tissueSelection', 'exportState'];
   if (typeof value !== 'string' || !allowedStepIds.includes(value as PreprocessStepId)) {
     throw new Error(`Project field "${fieldName}" is invalid or missing`);
   }

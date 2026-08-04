@@ -1,5 +1,6 @@
 import type {
 	ChipConfigSlice,
+	ExportStateSlice,
 	LegacyPreprocessProject,
 	PreprocessProject,
 	PreprocessSliceBase,
@@ -15,7 +16,7 @@ import {
 } from "./constants";
 import { DEFAULT_TISSUE_PARAMS, normalizeTissueParams } from "./tissueThresholds";
 
-const CURRENT_WORKFLOW_VERSION = 3;
+const CURRENT_WORKFLOW_VERSION = 4;
 
 const VALID_STEP_IDS = new Set<PreprocessStepId>(
 	PREPROCESS_STEP_IDS as readonly PreprocessStepId[],
@@ -55,7 +56,13 @@ const createDefaultChipConfigSlice = (): ChipConfigSlice => ({
 	placement: null,
 	excludedRows: [],
 	excludedColumns: [],
+	barcodesByPosition: {},
 	projectedSpots: null,
+});
+
+const createDefaultExportStateSlice = (): ExportStateSlice => ({
+	...createSliceBase("idle"),
+	lastExportedAt: null,
 });
 
 const normalizeMatrix = (
@@ -267,6 +274,7 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		placement,
 		excludedRows,
 		excludedColumns,
+		barcodesByPosition,
 	} = value as Record<string, unknown>;
 
 	const allowedStatuses = new Set([
@@ -306,6 +314,18 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 	const normalizedExcludedRows = normalizeExclusionList(excludedRows);
 	const normalizedExcludedColumns = normalizeExclusionList(excludedColumns);
 
+	const normalizeBarcodesByPosition = (value: unknown): Record<string, string> => {
+		if (!isRecord(value)) return {};
+		const result: Record<string, string> = {};
+		for (const [key, entry] of Object.entries(value)) {
+			if (typeof entry === "string" && entry.length > 0) {
+				result[key] = entry;
+			}
+		}
+		return result;
+	};
+	const normalizedBarcodesByPosition = normalizeBarcodesByPosition(barcodesByPosition);
+
 	const normalizedOrigin = isRecord(origin)
 		&& typeof (origin as Record<string, unknown>).x === "number"
 		&& typeof (origin as Record<string, unknown>).y === "number"
@@ -333,10 +353,46 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		placement: normalizedPlacement,
 		excludedRows: normalizedExcludedRows,
 		excludedColumns: normalizedExcludedColumns,
+		barcodesByPosition: normalizedBarcodesByPosition,
 		rotationDegrees:
 			typeof rotationDegrees === "number" ? rotationDegrees : 0,
 		// projectedSpots are recomputed in the UI after load; never persist them.
 		projectedSpots: null,
+	};
+};
+
+const normalizeExportStateSlice = (value: unknown): ExportStateSlice => {
+	if (!isRecord(value)) {
+		return createDefaultExportStateSlice();
+	}
+
+	const { status, isStale, updatedAt, error, lastExportedAt } =
+		value as Record<string, unknown>;
+
+	const allowedStatuses = new Set([
+		"idle",
+		"ready",
+		"processing",
+		"complete",
+		"stale",
+		"error",
+	]);
+	const normalizedStatus =
+		typeof status === "string" && allowedStatuses.has(status)
+			? (status as PreprocessSliceBase["status"])
+			: "idle";
+
+	return {
+		...createSliceBase("idle"),
+		status: normalizedStatus,
+		isStale: Boolean(isStale),
+		updatedAt:
+			typeof updatedAt === "string" || updatedAt === null ? updatedAt : null,
+		error: typeof error === "string" || error === null ? error : null,
+		lastExportedAt:
+			typeof lastExportedAt === "string" || lastExportedAt === null
+				? lastExportedAt
+				: null,
 	};
 };
 
@@ -416,6 +472,7 @@ export function migratePreprocessProject(
 	const sourceAssets = normalizeSourceAssetsSlice(input.sourceAssets);
 	const chipConfig = normalizeChipConfigSlice(input.chipConfig);
 	const tissueSelection = normalizeTissueSelectionSlice(input.tissueSelection);
+	const exportState = normalizeExportStateSlice(input.exportState);
 
 	return {
 		id: typeof input.id === "string" ? input.id : "",
@@ -430,5 +487,6 @@ export function migratePreprocessProject(
 		sourceAssets,
 		chipConfig,
 		tissueSelection,
+		exportState,
 	};
 }

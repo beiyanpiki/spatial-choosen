@@ -142,7 +142,12 @@ describe('preprocess package serialization', () => {
 		expect(surplus.heFocus).toBeUndefined();
 		expect(surplus.alignment).toBeUndefined();
 		expect(surplus.cropQc).toBeUndefined();
-		expect(surplus.exportState).toBeUndefined();
+		// exportState is now a real slice; a legacy junk payload normalizes to
+		// its default rather than being dropped.
+		expect(surplus.exportState).toMatchObject({
+			status: 'idle',
+			lastExportedAt: null,
+		});
 	});
 
 	it('imports a non-zip JSON blob via deserializePreprocessImport', async () => {

@@ -15,6 +15,7 @@ describe('preprocess invalidation contract', () => {
 		expect(PREPROCESS_INVALIDATION_GRAPH).toEqual({
 			sourceAssets: [],
 			tissueSelection: [],
+			exportState: [],
 		});
 	});
 

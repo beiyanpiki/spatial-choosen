@@ -123,4 +123,56 @@ describe('parseTissueActivationCsv', () => {
 		const csv = ['barcode,tissue,row,col', 'BC,1,abc,1', 'BC2,0,96,96'].join('\n');
 		expect(() => parseTissueActivationCsv(csv)).toThrow(/non-integer row\/col/);
 	});
+
+	it('captures barcodes keyed by the flipped in-memory position', () => {
+		const csv = [
+			'barcode,Log2_nGene_Spatial,tissue,row,col',
+			'BC-TL,9.5,1,1,1',
+			'BC-BR,10.1,1,96,96',
+		].join('\n');
+
+		const { barcodesByPosition } = parseTissueActivationCsv(csv);
+
+		// csv (1,1) is the TOP-left cell; after the flip its in-memory position
+		// is arrayRow 96 (bottom row), so the key is '96:1'.
+		expect(barcodesByPosition['96:1']).toBe('BC-TL');
+		// csv (96,96) is the BOTTOM-right cell -> in-memory position '1:96'.
+		expect(barcodesByPosition['1:96']).toBe('BC-BR');
+		expect(Object.keys(barcodesByPosition)).toHaveLength(2);
+	});
+
+	it('returns an empty barcode map when the barcode column is absent', () => {
+		const csv = ['tissue,row,col', '1,1,1', '0,96,96'].join('\n');
+
+		const { barcodesByPosition } = parseTissueActivationCsv(csv);
+
+		expect(barcodesByPosition).toEqual({});
+	});
+
+	it('skips empty barcode cells', () => {
+		const csv = [
+			'barcode,tissue,row,col',
+			'BC-TL,1,1,1',
+			',0,96,96',
+		].join('\n');
+
+		const { barcodesByPosition } = parseTissueActivationCsv(csv);
+
+		expect(barcodesByPosition['96:1']).toBe('BC-TL');
+		expect(barcodesByPosition['1:96']).toBeUndefined();
+	});
+
+	it('captures barcodes for duplicate positions with the last value winning', () => {
+		const csv = [
+			'barcode,tissue,row,col',
+			'BC-OTHER,0,96,96',
+			'BC-FIRST,1,1,1',
+			'BC-SECOND,1,1,1',
+		].join('\n');
+
+		const { barcodesByPosition } = parseTissueActivationCsv(csv);
+
+		expect(barcodesByPosition['96:1']).toBe('BC-SECOND');
+		expect(barcodesByPosition['1:96']).toBe('BC-OTHER');
+	});
 });

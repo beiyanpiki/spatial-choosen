@@ -53,6 +53,7 @@ const createProject = (
     placement: null,
     excludedRows: [],
     excludedColumns: [],
+    barcodesByPosition: {},
     projectedSpots: [
       {
         id: 'spot-a',
@@ -88,6 +89,13 @@ const createProject = (
     paritySummary: null,
     warning: null,
   },
+  exportState: {
+    status: 'idle',
+    isStale: false,
+    updatedAt: null,
+    error: null,
+    lastExportedAt: null,
+  },
   ...overrides,
 });
 
@@ -99,7 +107,7 @@ const renderSidebar = (project: PreprocessProject, currentStep: PreprocessProjec
   );
 
 describe('StepSidebar', () => {
-  it('renders the revised two-step workflow copy', () => {
+  it('renders the three-step workflow copy', () => {
     renderSidebar(createProject());
 
     expect(screen.getByText('Complete each step in sequence to generate the preprocessing results required for downstream analysis.')).toBeInTheDocument();
@@ -107,11 +115,29 @@ describe('StepSidebar', () => {
     expect(screen.getByText('Upload the H&E image and a tissue activation CSV.')).toBeInTheDocument();
     expect(screen.getByText('Tissue Spot Selection')).toBeInTheDocument();
     expect(screen.getByText('Refine the tissue spot matrix over the H&E image.')).toBeInTheDocument();
+    expect(screen.getByText('Export Package')).toBeInTheDocument();
+    expect(screen.getByText('Download the tissue export ZIP for downstream analysis.')).toBeInTheDocument();
 
     // Removed steps no longer appear in the rail.
     expect(screen.queryByTestId('preprocess-step-crop')).not.toBeInTheDocument();
     expect(screen.queryByTestId('preprocess-step-align')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('preprocess-step-export')).not.toBeInTheDocument();
+  });
+
+  it('keeps the export step disabled until tissue selection completes', () => {
+    renderSidebar(createProject());
+
+    expect(screen.getByTestId('preprocess-step-export')).toBeDisabled();
+  });
+
+  it('enables the export step once tissue selection is complete', () => {
+    const completed = createProject();
+    completed.tissueSelection = {
+      ...completed.tissueSelection,
+      status: 'complete',
+    };
+    renderSidebar(completed);
+
+    expect(screen.getByTestId('preprocess-step-export')).toBeEnabled();
   });
 
   it('keeps tissue selection disabled when the HE image is missing', () => {
