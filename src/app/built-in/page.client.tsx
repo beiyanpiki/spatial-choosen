@@ -3,20 +3,20 @@
 import { useToast } from "@chakra-ui/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { deserializePreprocessImport } from "@/lib/preprocess/package";
-import { buildUpdatedProjectSnapshot } from "@/lib/preprocess/projectUpdates";
+import { deserializePreprocessImport } from "@/lib/built-in/package";
+import { buildUpdatedProjectSnapshot } from "@/lib/built-in/projectUpdates";
 import type {
 	PreprocessPersistMode,
 	PreprocessProjectSummary,
-} from "@/lib/preprocess/storage";
+} from "@/lib/built-in/storage";
 import {
 	deletePreprocessProject,
 	getPreprocessProject,
 	readPreprocessProjectSummaries,
 	upsertPreprocessProject,
 	upsertPreprocessProjectMetadata,
-} from "@/lib/preprocess/storage";
-import type { PreprocessProject, PreprocessStepId } from "@/types/preprocess";
+} from "@/lib/built-in/storage";
+import type { PreprocessProject, PreprocessStepId } from "@/types/built-in";
 import { PreprocessLanding } from "./components/PreprocessLanding";
 import { PreprocessWorkspace } from "./components/PreprocessWorkspace";
 import {
@@ -95,7 +95,7 @@ function PreprocessContent() {
 	const toast = useToast();
 	const router = useRouter();
 	const searchParams = useSearchParams();
-	const preprocessId = searchParams.get("preprocess_id");
+	const preprocessId = searchParams.get("built_in_id");
 	const [projectName, setProjectName] = useState("");
 	const [projects, setProjects] = useState<PreprocessProjectSummary[]>([]);
 	const [project, setProject] = useState<PreprocessProject | null>(null);
@@ -450,7 +450,7 @@ function PreprocessContent() {
 
 	const openProject = useCallback(
 		(projectId: string) => {
-			router.push(`/built-in?preprocess_id=${encodeURIComponent(projectId)}`);
+			router.push(`/built-in?built_in_id=${encodeURIComponent(projectId)}`);
 		},
 		[router],
 	);

@@ -1,8 +1,8 @@
 'use client';
 
 import { Box, Stack, Text } from '@chakra-ui/react';
-import type { ChipConfigManifest } from '@/lib/preprocess/chipConfigs';
-import type { ProjectedSpot } from '@/types/preprocess';
+import type { ChipConfigManifest } from '@/lib/built-in/chipConfigs';
+import type { ProjectedSpot } from '@/types/built-in';
 
 type ChipConfigPanelProps = {
   manifests: ChipConfigManifest[];

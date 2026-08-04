@@ -8,7 +8,7 @@ import {
   LOCALIZATION_BOX_COLOR_SWATCHS,
   resizeChipBounds,
   translateChipBounds,
-} from '@/lib/preprocess/localization';
+} from '@/lib/built-in/localization';
 import {
   FlipHorizontalIcon,
   FlipVerticalIcon,
@@ -25,7 +25,7 @@ import type {
   PreprocessPoint,
   PreprocessRect,
   PreprocessSourceImage,
-} from '@/types/preprocess';
+} from '@/types/built-in';
 
 type CanvasStageProps = {
   allowOutOfBoundsChipBounds?: boolean;

@@ -3,7 +3,7 @@ import { act, render, waitFor } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PreprocessProject } from '@/types/preprocess';
+import type { PreprocessProject } from '@/types/built-in';
 
 const mockRunCropQc = vi.fn();
 const mockLoadOpenCv = vi.fn();
@@ -14,20 +14,20 @@ type CapturedCropQcPanelProps = {
 };
 let capturedCropQcPanelProps: CapturedCropQcPanelProps | null = null;
 
-vi.mock('../../../lib/preprocess/alignment', () => ({
+vi.mock('../../../lib/built-in/alignment', () => ({
   normalizeAlignmentSlice: (value: unknown) => value,
 }));
 
-vi.mock('../../../lib/preprocess/cropQc', () => ({
+vi.mock('../../../lib/built-in/cropQc', () => ({
   runCropQc: (...args: unknown[]) => mockRunCropQc(...args),
 }));
 
-vi.mock('../../../lib/preprocess/exportBundle', () => ({
+vi.mock('../../../lib/built-in/exportBundle', () => ({
   exportPreprocessZip: vi.fn(),
   getPreprocessZipExportReadiness: () => ({ canExport: false, reason: 'Not used in this test.' }),
 }));
 
-vi.mock('../../../lib/preprocess/invalidation', () => ({
+vi.mock('../../../lib/built-in/invalidation', () => ({
   invalidateOnAlignmentChange: (project: unknown) => project,
   invalidateOnCropQcChange: (project: unknown) => project,
   invalidateOnHeFocusChange: (project: unknown) => project,
@@ -35,11 +35,11 @@ vi.mock('../../../lib/preprocess/invalidation', () => ({
   invalidateOnSourceAssetsChange: (project: unknown) => project,
 }));
 
-vi.mock('../../../lib/preprocess/loadOpenCv', () => ({
+vi.mock('../../../lib/built-in/loadOpenCv', () => ({
   loadOpenCv: (...args: unknown[]) => mockLoadOpenCv(...args),
 }));
 
-vi.mock('../../../lib/preprocess/localization', () => ({
+vi.mock('../../../lib/built-in/localization', () => ({
   buildLocalizationHandles: () => [],
   clampNormalizedSquareRect: (value: unknown) => value,
   computeLocalizationStatus: () => 'complete',
@@ -54,22 +54,22 @@ vi.mock('../../../lib/preprocess/localization', () => ({
   normalizeLocalizationSlice: (value: unknown) => value,
 }));
 
-vi.mock('../../../lib/preprocess/sourceImage', () => ({
+vi.mock('../../../lib/built-in/sourceImage', () => ({
   buildSourceImage: vi.fn(),
   createThumbnailBlob: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/spotProjection', () => ({
+vi.mock('../../../lib/built-in/spotProjection', () => ({
   projectSpotsForCrop: vi.fn(),
   resolveAuthoritativeSpotDiameterFullres: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/tissuePipeline', () => ({
+vi.mock('../../../lib/built-in/tissuePipeline', () => ({
   runTissueAutoSelection: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/chipConfigs', async () => {
-  const actual = await vi.importActual<typeof import('../../../lib/preprocess/chipConfigs')>('../../../lib/preprocess/chipConfigs');
+vi.mock('../../../lib/built-in/chipConfigs', async () => {
+  const actual = await vi.importActual<typeof import('../../../lib/built-in/chipConfigs')>('../../../lib/built-in/chipConfigs');
   return {
     ...actual,
     loadAllChipConfigManifests: vi.fn(async () => []),

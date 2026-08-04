@@ -3,13 +3,13 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { clampNormalizedSquareRect, resizeChipBounds, translateChipBounds } from '../../../lib/preprocess/localization';
+import { clampNormalizedSquareRect, resizeChipBounds, translateChipBounds } from '../../../lib/built-in/localization';
 import { theme } from '../../../theme';
 import type {
 	LocalizationImageTransform,
 	PreprocessRect,
 	PreprocessSourceImage,
-} from '../../../types/preprocess';
+} from '../../../types/built-in';
 import { CanvasStage } from './CanvasStage';
 
 const HOST_WIDTH = 800;

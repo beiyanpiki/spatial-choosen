@@ -9,7 +9,7 @@ import type {
   AlignmentSlice,
   LocalizationImageTransform,
   PreprocessSourceImage,
-} from '../../../types/preprocess';
+} from '../../../types/built-in';
 import { AlignmentPanel } from './AlignmentPanel';
 
 const loadOpenCvMock = vi.fn();
@@ -17,9 +17,9 @@ const { solveAffineAlignmentMock } = vi.hoisted(() => ({
   solveAffineAlignmentMock: vi.fn(),
 }));
 
-vi.mock('@/lib/preprocess/alignment', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/preprocess/alignment')>(
-    '@/lib/preprocess/alignment',
+vi.mock('@/lib/built-in/alignment', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/built-in/alignment')>(
+    '@/lib/built-in/alignment',
   );
 
   return {
@@ -29,7 +29,7 @@ vi.mock('@/lib/preprocess/alignment', async () => {
   };
 });
 
-vi.mock('@/lib/preprocess/loadOpenCv', () => ({
+vi.mock('@/lib/built-in/loadOpenCv', () => ({
   loadOpenCv: (...args: unknown[]) => loadOpenCvMock(...args),
 }));
 
@@ -76,8 +76,8 @@ beforeEach(() => {
 });
 
 beforeEach(async () => {
-  const actual = await vi.importActual<typeof import('@/lib/preprocess/alignment')>(
-    '@/lib/preprocess/alignment',
+  const actual = await vi.importActual<typeof import('@/lib/built-in/alignment')>(
+    '@/lib/built-in/alignment',
   );
 
   solveAffineAlignmentMock.mockReset();

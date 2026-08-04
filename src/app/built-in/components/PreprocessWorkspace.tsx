@@ -41,21 +41,21 @@ import type {
 	PreprocessSourceImage,
 	PreprocessStepId,
 	TissueActivationValue,
-} from "@/types/preprocess";
+} from "@/types/built-in";
 import {
 	normalizeAlignmentSlice,
-} from "@/lib/preprocess/alignment";
+} from "@/lib/built-in/alignment";
 import {
 	type ChipConfigData,
 	type ChipConfigManifest,
 	loadAllChipConfigManifests,
 	loadChipConfigData,
-} from "@/lib/preprocess/chipConfigs";
-import { runCropQc } from "@/lib/preprocess/cropQc";
+} from "@/lib/built-in/chipConfigs";
+import { runCropQc } from "@/lib/built-in/cropQc";
 import {
 	exportPreprocessZip,
 	getPreprocessZipExportReadiness,
-} from "@/lib/preprocess/exportBundle";
+} from "@/lib/built-in/exportBundle";
 import {
 	invalidateOnAlignmentChange,
 	invalidateOnCropQcChange,
@@ -64,8 +64,8 @@ import {
 	invalidateOnHeFocusCommit,
 	invalidateOnLocalizationChange,
 	invalidateOnSourceAssetsChange,
-} from "@/lib/preprocess/invalidation";
-import { loadOpenCv } from "@/lib/preprocess/loadOpenCv";
+} from "@/lib/built-in/invalidation";
+import { loadOpenCv } from "@/lib/built-in/loadOpenCv";
 import {
 	buildLocalizationHandles,
 	buildPermissiveHeFocusHandles,
@@ -75,24 +75,24 @@ import {
 	DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
-} from "@/lib/preprocess/localization";
-import { getOrientedChipBoundsPixelRect } from "@/lib/preprocess/imageTransforms";
+} from "@/lib/built-in/localization";
+import { getOrientedChipBoundsPixelRect } from "@/lib/built-in/imageTransforms";
 import {
 	buildInvertedTissueSelectionState,
 	buildManualTissueSelectionState,
-} from "@/lib/preprocess/projectUpdates";
+} from "@/lib/built-in/projectUpdates";
 import {
 	buildSourceImage,
 	createThumbnailBlob,
-} from "@/lib/preprocess/sourceImage";
+} from "@/lib/built-in/sourceImage";
 import {
 	projectSpotsForCrop,
 	resolveAuthoritativeSpotDiameterFullres,
-} from "@/lib/preprocess/spotProjection";
-import type { PreprocessPersistMode } from "@/lib/preprocess/storage";
-import { selectedSpotIdsFromMatrix } from "@/lib/preprocess/tissueMatrix";
-import { runTissueAutoSelection } from "@/lib/preprocess/tissuePipeline";
-import { resolveTissueSelectionSupport } from "@/lib/preprocess/tissueSupport";
+} from "@/lib/built-in/spotProjection";
+import type { PreprocessPersistMode } from "@/lib/built-in/storage";
+import { selectedSpotIdsFromMatrix } from "@/lib/built-in/tissueMatrix";
+import { runTissueAutoSelection } from "@/lib/built-in/tissuePipeline";
+import { resolveTissueSelectionSupport } from "@/lib/built-in/tissueSupport";
 import { AlignmentPanel } from "./AlignmentPanel";
 import { CanvasStage } from "./CanvasStage";
 import { CropQcPanel } from "./CropQcPanel";

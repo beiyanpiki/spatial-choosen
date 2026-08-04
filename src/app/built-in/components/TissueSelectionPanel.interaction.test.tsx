@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { theme } from '../../../theme';
-import type { PreprocessPoint, ProjectedSpot } from '@/types/preprocess';
+import type { PreprocessPoint, ProjectedSpot } from '@/types/built-in';
 import { TissueSelectionPanel } from './TissueSelectionPanel';
 
 const PROJECTED_SPOTS: ProjectedSpot[] = [

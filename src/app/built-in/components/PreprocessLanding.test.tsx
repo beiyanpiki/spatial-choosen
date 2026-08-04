@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { theme } from '../../../theme';
-import type { PreprocessProjectSummary } from '@/lib/preprocess/storage';
+import type { PreprocessProjectSummary } from '@/lib/built-in/storage';
 import { PreprocessLanding } from './PreprocessLanding';
 
 const createProjectSummary = (): PreprocessProjectSummary => ({

@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { theme } from '../../../theme';
-import type { PreprocessProject, PreprocessStepStatus } from '@/types/preprocess';
+import type { PreprocessProject, PreprocessStepStatus } from '@/types/built-in';
 import { StepSidebar } from './StepSidebar';
 
 const createProjectedSpot = (id: string) => ({

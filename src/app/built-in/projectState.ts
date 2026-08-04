@@ -1,12 +1,12 @@
-import { normalizeAlignmentSlice } from "@/lib/preprocess/alignment";
-import { PREPROCESS_STORAGE_SCHEMA_VERSION } from "@/lib/preprocess/constants";
+import { normalizeAlignmentSlice } from "@/lib/built-in/alignment";
+import { PREPROCESS_STORAGE_SCHEMA_VERSION } from "@/lib/built-in/constants";
 import {
 	DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
-} from "@/lib/preprocess/localization";
-import { migratePreprocessProject } from "@/lib/preprocess/migrations";
-import { DEFAULT_TISSUE_PARAMS } from "@/lib/preprocess/tissueThresholds";
+} from "@/lib/built-in/localization";
+import { migratePreprocessProject } from "@/lib/built-in/migrations";
+import { DEFAULT_TISSUE_PARAMS } from "@/lib/built-in/tissueThresholds";
 import type {
 	AlignmentSlice,
 	CanonicalCropQcGeometry,
@@ -16,7 +16,7 @@ import type {
 	PreprocessProject,
 	PreprocessRect,
 	PreprocessSliceBase,
-} from "@/types/preprocess";
+} from "@/types/built-in";
 
 const WORKFLOW_VERSION = 2;
 

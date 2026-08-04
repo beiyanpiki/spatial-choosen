@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PreprocessProject, PreprocessRect } from '@/types/preprocess';
+import type { PreprocessProject, PreprocessRect } from '@/types/built-in';
 
 type MockExportReadinessArgs = {
   includeAlignedImage?: boolean;
@@ -96,11 +96,11 @@ vi.mock('@chakra-ui/react', async () => {
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockRouterPush }),
   useSearchParams: () => ({
-    get: (key: string) => (key === 'preprocess_id' ? mockSearchParamsState.preprocessId : null),
+    get: (key: string) => (key === 'built_in_id' ? mockSearchParamsState.preprocessId : null),
   }),
 }));
 
-vi.mock('../../../lib/preprocess/storage', () => ({
+vi.mock('../../../lib/built-in/storage', () => ({
   deletePreprocessProject: (...args: unknown[]) => mockDeletePreprocessProject(...args),
   getPreprocessProject: (...args: unknown[]) => mockGetPreprocessProject(...args),
   readPreprocessProjectSummaries: (...args: unknown[]) => mockReadPreprocessProjectSummaries(...args),
@@ -108,21 +108,21 @@ vi.mock('../../../lib/preprocess/storage', () => ({
   upsertPreprocessProjectMetadata: (...args: unknown[]) => mockUpsertPreprocessProjectMetadata(...args),
 }));
 
-vi.mock('../../../lib/preprocess/alignment', () => ({
+vi.mock('../../../lib/built-in/alignment', () => ({
   computeAlignmentStatus: () => 'ready',
   normalizeAlignmentSlice: (value: Record<string, unknown>) => value,
 }));
 
-vi.mock('../../../lib/preprocess/cropQc', () => ({
+vi.mock('../../../lib/built-in/cropQc', () => ({
   runCropQc: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/exportBundle', () => ({
+vi.mock('../../../lib/built-in/exportBundle', () => ({
   exportPreprocessZip: (...args: unknown[]) => mockExportPreprocessZip(...args),
   getPreprocessZipExportReadiness: mockGetPreprocessZipExportReadinessProxy,
 }));
 
-vi.mock('../../../lib/preprocess/invalidation', () => ({
+vi.mock('../../../lib/built-in/invalidation', () => ({
   invalidateOnAlignmentChange: (project: unknown) => project,
   invalidateOnCropQcChange: (project: unknown) => project,
   invalidateOnHeFocusChange: (project: unknown) => project,
@@ -131,11 +131,11 @@ vi.mock('../../../lib/preprocess/invalidation', () => ({
   invalidateOnSourceAssetsChange: (project: unknown) => project,
 }));
 
-vi.mock('../../../lib/preprocess/loadOpenCv', () => ({
+vi.mock('../../../lib/built-in/loadOpenCv', () => ({
   loadOpenCv: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/localization', () => ({
+vi.mock('../../../lib/built-in/localization', () => ({
   buildLocalizationHandles: () => [],
   buildPermissiveHeFocusHandles: () => [],
   clampNormalizedSquareRect: (value: unknown) => value,
@@ -151,12 +151,12 @@ vi.mock('../../../lib/preprocess/localization', () => ({
   normalizeLocalizationSlice: (value: unknown) => value,
 }));
 
-vi.mock('../../../lib/preprocess/sourceImage', () => ({
+vi.mock('../../../lib/built-in/sourceImage', () => ({
   buildSourceImage: vi.fn(),
   createThumbnailBlob: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/spotProjection', () => ({
+vi.mock('../../../lib/built-in/spotProjection', () => ({
   projectSpotsForCrop: vi.fn(),
   resolveAuthoritativeSpotDiameterFullres: vi.fn(),
 }));
@@ -165,12 +165,12 @@ const mockRunTissueAutoSelection = vi.fn();
 const mockLoadAllChipConfigManifests = vi.fn();
 const mockLoadChipConfigData = vi.fn();
 
-vi.mock('../../../lib/preprocess/tissuePipeline', () => ({
+vi.mock('../../../lib/built-in/tissuePipeline', () => ({
   runTissueAutoSelection: (...args: unknown[]) => mockRunTissueAutoSelection(...args),
 }));
 
-vi.mock('../../../lib/preprocess/chipConfigs', async () => {
-  const actual = await vi.importActual<typeof import('../../../lib/preprocess/chipConfigs')>('../../../lib/preprocess/chipConfigs');
+vi.mock('../../../lib/built-in/chipConfigs', async () => {
+  const actual = await vi.importActual<typeof import('../../../lib/built-in/chipConfigs')>('../../../lib/built-in/chipConfigs');
 
   return {
     ...actual,

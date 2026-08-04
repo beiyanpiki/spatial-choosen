@@ -14,8 +14,8 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { useRef } from 'react';
-import type { PreprocessProjectSummary } from '@/lib/preprocess/storage';
-import type { PreprocessStepId } from '@/types/preprocess';
+import type { PreprocessProjectSummary } from '@/lib/built-in/storage';
+import type { PreprocessStepId } from '@/types/built-in';
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
   year: 'numeric',

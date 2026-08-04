@@ -27,12 +27,12 @@ import {
 	computeAlignmentStatus,
 	computeCoverageWarning,
 	solveAffineAlignment,
-} from "@/lib/preprocess/alignment";
+} from "@/lib/built-in/alignment";
 import {
 	applyImageDisplayTransform,
 	invertImageDisplayTransform,
-} from "@/lib/preprocess/imageTransforms";
-import { loadOpenCv } from "@/lib/preprocess/loadOpenCv";
+} from "@/lib/built-in/imageTransforms";
+import { loadOpenCv } from "@/lib/built-in/loadOpenCv";
 import type {
 	AlignmentControlPoint,
 	AlignmentSlice,
@@ -40,7 +40,7 @@ import type {
 	PreprocessPoint,
 	PreprocessRect,
 	PreprocessSourceImage,
-} from "@/types/preprocess";
+} from "@/types/built-in";
 
 type AlignmentPanelProps = {
 	alignment: AlignmentSlice;

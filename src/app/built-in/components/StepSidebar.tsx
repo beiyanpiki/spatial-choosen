@@ -1,5 +1,5 @@
 import { Badge, Box, Button, Heading, Stack, Text } from '@chakra-ui/react';
-import type { PreprocessProject, PreprocessStepId } from '@/types/preprocess';
+import type { PreprocessProject, PreprocessStepId } from '@/types/built-in';
 
 type StepItem = {
   id: PreprocessStepId;

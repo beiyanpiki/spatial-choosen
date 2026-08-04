@@ -21,7 +21,7 @@ import {
   relativeToImage,
 } from '../../../lib/canvasViewport';
 import type { Point } from '@/types/project';
-import type { PreprocessPoint, ProjectedSpot } from '@/types/preprocess';
+import type { PreprocessPoint, ProjectedSpot } from '@/types/built-in';
 
 export type ToolMode = 'activate' | 'deactivate';
 
