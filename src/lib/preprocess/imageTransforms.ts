@@ -153,61 +153,22 @@ export function getLowerLeftMarkerPoints(
   ] as const;
 }
 
-export function transformImagePixelPoint(
-  point: PixelPoint,
-  transform: LocalizationImageTransform,
-  sourceSize: PixelSize,
-  outputSize: PixelSize,
-): PixelPoint {
-  const sourceCenter = {
-    x: sourceSize.width / 2,
-    y: sourceSize.height / 2,
-  };
-  const outputCenter = {
-    x: outputSize.width / 2,
-    y: outputSize.height / 2,
-  };
-  const radians = degreesToRadians(normalizeRotationDegrees(transform.rotationDegrees));
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-  const sourceDeltaX = point.x - sourceCenter.x;
-  const sourceDeltaY = point.y - sourceCenter.y;
-  const flippedDeltaX = sourceDeltaX * (transform.flipHorizontal ? -1 : 1);
-  const flippedDeltaY = sourceDeltaY * (transform.flipVertical ? -1 : 1);
-  const rotatedDeltaX = flippedDeltaX * cos - flippedDeltaY * sin;
-  const rotatedDeltaY = flippedDeltaX * sin + flippedDeltaY * cos;
-
-  return {
-    x: outputCenter.x + rotatedDeltaX,
-    y: outputCenter.y + rotatedDeltaY,
-  };
-}
-
-export function getOrientedChipBoundsPixelRect(
+// Chip bounds are captured in the fixed canvas-axis coordinate system: the
+// stage draws the overlay at raw normalized positions while the image rotates
+// underneath it, so the bounds are source-normalized positions of the *display
+// frame* (aspect = source aspect). The oriented output is the source with the
+// transform already applied, so the crop region is the box mapped directly at
+// source-pixel offsets from the output center — applying the transform again
+// would crop a different region than the box covers.
+export function getCanvasAxisChipBoundsPixelRect(
   rect: PreprocessRect,
-  transform: LocalizationImageTransform,
   sourceSize: PixelSize,
   outputSize: PixelSize,
 ): PixelPoint & PixelSize {
-  const sourceX = rect.x * sourceSize.width;
-  const sourceY = rect.y * sourceSize.height;
-  const sourceWidth = rect.width * sourceSize.width;
-  const sourceHeight = rect.height * sourceSize.height;
-  const points = [
-    { x: sourceX, y: sourceY },
-    { x: sourceX + sourceWidth, y: sourceY },
-    { x: sourceX + sourceWidth, y: sourceY + sourceHeight },
-    { x: sourceX, y: sourceY + sourceHeight },
-  ].map((point) => transformImagePixelPoint(point, transform, sourceSize, outputSize));
-  const minX = Math.min(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const maxY = Math.max(...points.map((point) => point.y));
-
   return {
-    x: Math.round(minX),
-    y: Math.round(minY),
-    width: Math.max(1, Math.round(maxX - minX)),
-    height: Math.max(1, Math.round(maxY - minY)),
+    x: Math.round(outputSize.width / 2 + (rect.x - 0.5) * sourceSize.width),
+    y: Math.round(outputSize.height / 2 + (rect.y - 0.5) * sourceSize.height),
+    width: Math.max(1, Math.round(rect.width * sourceSize.width)),
+    height: Math.max(1, Math.round(rect.height * sourceSize.height)),
   };
 }

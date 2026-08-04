@@ -76,7 +76,7 @@ import {
 	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
 } from "@/lib/preprocess/localization";
-import { getOrientedChipBoundsPixelRect } from "@/lib/preprocess/imageTransforms";
+import { getCanvasAxisChipBoundsPixelRect } from "@/lib/preprocess/imageTransforms";
 import {
 	buildInvertedTissueSelectionState,
 	buildManualTissueSelectionState,
@@ -365,9 +365,11 @@ export const generateFocusedHeDataUrl = async (args: {
 				sourceHeight * Math.abs(Math.cos(radians)),
 		),
 	);
-	const orientedChipBounds = getOrientedChipBoundsPixelRect(
+	// Chip bounds are captured in the canvas-axis (display frame) coordinate
+	// system; the oriented output already carries the transform, so the crop
+	// region is the box mapped directly at source-pixel offsets.
+	const orientedChipBounds = getCanvasAxisChipBoundsPixelRect(
 		args.chipBounds,
-		args.imageTransform,
 		{ width: sourceWidth, height: sourceHeight },
 		{ width: orientedWidth, height: orientedHeight },
 	);

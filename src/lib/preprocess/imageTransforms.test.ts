@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LocalizationImageTransform, PreprocessPoint, PreprocessRect } from '@/types/preprocess';
 import {
 	applyImageDisplayTransform,
+	getCanvasAxisChipBoundsPixelRect,
 	getLowerLeftMarkerPoints,
 	getTransformedRectCorners,
 	invertDisplayRectPointToSource,
@@ -116,6 +117,30 @@ describe('imageTransforms', () => {
 			invertDisplayRectPointToSource(displayPoint, transform, displayRect),
 			sourcePoint,
 		);
+	});
+
+	it('maps canvas-axis chip bounds directly into the oriented output (crop matches the box content)', () => {
+		// Step 2 scenario: eosin rotated 90° with a committed capture box. The
+		// box is drawn at raw canvas-axis positions, so the oriented crop must
+		// be the box mapped at source-pixel offsets from the output center —
+		// independent of the transform that is already baked into the output.
+		const sourceSize = { width: 2048, height: 2248 };
+		const outputSize = { width: 2248, height: 2048 };
+		const chipBounds = {
+			x: 0.3682958199356913,
+			y: 0.33427888608963446,
+			width: 0.28290443666636905,
+			height: 0.2577350027992544,
+		};
+
+		const pixelRect = getCanvasAxisChipBoundsPixelRect(chipBounds, sourceSize, outputSize);
+
+		expect(pixelRect).toEqual({
+			x: 854,
+			y: 651,
+			width: 579,
+			height: 579,
+		});
 	});
 
 	it('keeps the visual rotation direction independent of flips (rotate-left after vertical flip)', () => {
