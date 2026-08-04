@@ -238,6 +238,24 @@ function TissueCsvUploader({
 	);
 }
 
+const centeredPlacement = (
+	heWidth: number,
+	heHeight: number,
+	rows: number,
+	columns: number,
+	spotDiameter: number,
+	spotGap: number,
+): ChipPlacement => {
+	const fullW = columns * spotDiameter + (columns + 1) * spotGap;
+	const fullH = rows * spotDiameter + (rows + 1) * spotGap;
+	const scale = (Math.min(heWidth, heHeight) * 0.9) / Math.max(fullW, fullH);
+	return {
+		scale,
+		x: (heWidth - scale * fullW) / 2,
+		y: (heHeight - scale * fullH) / 2,
+	};
+};
+
 export function PreprocessWorkspace({
 	autosaveStatus,
 	autosaveDetail,
@@ -348,6 +366,8 @@ export function PreprocessWorkspace({
 							origin: { x: 0, y: 0 },
 							rotationDegrees: 0,
 							placement: null,
+							excludedRows: [],
+							excludedColumns: [],
 							projectedSpots: null,
 							status: "ready",
 							isStale: false,
@@ -402,12 +422,16 @@ export function PreprocessWorkspace({
 
 		const heWidth = he.width;
 		const heHeight = he.height;
-		const size = Math.min(heWidth, heHeight) * 0.9;
-		const placement: ChipPlacement = {
-			size,
-			x: (heWidth - size) / 2,
-			y: (heHeight - size) / 2,
-		};
+		const { rows, columns, spotDiameter, pitchX } = project.chipConfig;
+		if (
+			typeof rows !== "number"
+			|| typeof columns !== "number"
+			|| typeof spotDiameter !== "number"
+			|| typeof pitchX !== "number"
+		) {
+			return;
+		}
+		const placement = centeredPlacement(heWidth, heHeight, rows, columns, spotDiameter, pitchX);
 		const timestamp = new Date().toISOString();
 
 		onProjectMutate(
@@ -474,6 +498,8 @@ export function PreprocessWorkspace({
 			spotDiameter: chipConfig.spotDiameter,
 			spotGap: chipConfig.pitchX,
 			placement,
+			excludedRows: chipConfig.excludedRows,
+			excludedColumns: chipConfig.excludedColumns,
 			heWidth: he.width,
 			heHeight: he.height,
 		});
@@ -489,6 +515,47 @@ export function PreprocessWorkspace({
 		}
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+
+	const tissueUnitExtent = useMemo(() => {
+		if (
+			!project
+			|| typeof project.chipConfig.rows !== "number"
+			|| typeof project.chipConfig.columns !== "number"
+			|| typeof project.chipConfig.spotDiameter !== "number"
+			|| typeof project.chipConfig.pitchX !== "number"
+		) {
+			return { w: 0, h: 0 };
+		}
+		const { rows, columns, spotDiameter, pitchX, excludedRows, excludedColumns } = project.chipConfig;
+		const visibleCols = Math.max(0, columns - excludedColumns.length);
+		const visibleRows = Math.max(0, rows - excludedRows.length);
+		return {
+			w: visibleCols * spotDiameter + (visibleCols + 1) * pitchX,
+			h: visibleRows * spotDiameter + (visibleRows + 1) * pitchX,
+		};
+	}, [project]);
+
+	const tissueScaleRange = useMemo(() => {
+		const he = project?.sourceAssets.images.he;
+		const spotDiameter = project?.chipConfig.spotDiameter;
+		if (
+			!he
+			|| typeof he.width !== "number"
+			|| typeof he.height !== "number"
+			|| typeof spotDiameter !== "number"
+			|| spotDiameter <= 0
+		) {
+			return { min: 0, max: 1 };
+		}
+		const maxDim = Math.max(he.width, he.height);
+		return { min: 8 / spotDiameter, max: (4 * maxDim) / spotDiameter };
+	}, [project]);
+
+	const tissueBlockRect = useMemo<{ width: number; height: number } | null>(() => {
+		const placement = project?.chipConfig.placement;
+		if (!placement || tissueUnitExtent.w <= 0 || tissueUnitExtent.h <= 0) return null;
+		return { width: placement.scale * tissueUnitExtent.w, height: placement.scale * tissueUnitExtent.h };
+	}, [project?.chipConfig.placement, tissueUnitExtent]);
 
 	const isTissueInteractionDisabled = tissueSupport.supportState === "unsupported";
 	const tissueDetectionStatusMessage =
@@ -517,23 +584,23 @@ export function PreprocessWorkspace({
 		onProjectMutate(
 			(current) => {
 				const he = current.sourceAssets.images.he;
+				const { rows, columns, spotDiameter, pitchX } = current.chipConfig;
 				if (
 					!he ||
 					typeof he.width !== "number" ||
-					typeof he.height !== "number"
+					typeof he.height !== "number" ||
+					typeof rows !== "number" ||
+					typeof columns !== "number" ||
+					typeof spotDiameter !== "number" ||
+					typeof pitchX !== "number"
 				) {
 					return current;
 				}
-				const size = Math.min(he.width, he.height) * 0.9;
 				return {
 					...current,
 					chipConfig: {
 						...current.chipConfig,
-						placement: {
-							size,
-							x: (he.width - size) / 2,
-							y: (he.height - size) / 2,
-						},
+						placement: centeredPlacement(he.width, he.height, rows, columns, spotDiameter, pitchX),
 						updatedAt: new Date().toISOString(),
 					},
 				};
@@ -541,6 +608,77 @@ export function PreprocessWorkspace({
 			METADATA_DEBOUNCED_PERSIST_OPTIONS,
 		);
 	}, [onProjectMutate]);
+
+	const handleExcludeRowsChange = useCallback(
+		(next: number[]) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						excludedRows: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	const handleExcludeColumnsChange = useCallback(
+		(next: number[]) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						excludedColumns: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	// Arrow-key nudge: move the placement by one spot pitch per press while on
+	// the tissue step. Ignored when focus is in a form field (exclusion UI, etc.).
+	useEffect(() => {
+		if (!project || project.currentStep !== "tissueSelection") return;
+		const placement = project.chipConfig.placement;
+		const { spotDiameter, pitchX } = project.chipConfig;
+		if (!placement || typeof spotDiameter !== "number" || typeof pitchX !== "number") return;
+		const step = (spotDiameter + pitchX) * placement.scale;
+		const onKeyDown = (event: KeyboardEvent) => {
+			const target = event.target as HTMLElement | null;
+			const tag = target?.tagName ?? "";
+			if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+			let dx = 0;
+			let dy = 0;
+			switch (event.key) {
+				case "ArrowLeft":
+					dx = -step;
+					break;
+				case "ArrowRight":
+					dx = step;
+					break;
+				case "ArrowUp":
+					dy = -step;
+					break;
+				case "ArrowDown":
+					dy = step;
+					break;
+				default:
+					return;
+			}
+			event.preventDefault();
+			handlePlacementChange({ scale: placement.scale, x: placement.x + dx, y: placement.y + dy });
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [project, handlePlacementChange]);
 
 	// The editable name draft is only displayed while editing, so it only needs to
 	// be seeded from the persisted name when editing begins (see
@@ -773,6 +911,8 @@ export function PreprocessWorkspace({
 											projectedSpots={tissueProjectedSpots}
 											selectedSpotIds={tissueSelectedSpotIds}
 											placement={project.chipConfig.placement}
+											unitExtent={tissueUnitExtent}
+											scaleRange={tissueScaleRange}
 											heWidth={project.sourceAssets.images.he?.width ?? null}
 											heHeight={project.sourceAssets.images.he?.height ?? null}
 											showSpots={showTissueSpots}
@@ -795,7 +935,13 @@ export function PreprocessWorkspace({
 											showSpots={showTissueSpots}
 											onShowSpotsChange={setShowTissueSpots}
 											onResetPlacement={handleResetPlacement}
-											placement={project.chipConfig.placement}
+											blockRect={tissueBlockRect}
+											rows={project.chipConfig.rows ?? 0}
+											columns={project.chipConfig.columns ?? 0}
+											excludedRows={project.chipConfig.excludedRows}
+											excludedColumns={project.chipConfig.excludedColumns}
+											onExcludeRowsChange={handleExcludeRowsChange}
+											onExcludeColumnsChange={handleExcludeColumnsChange}
 										/>
 
 										<Card

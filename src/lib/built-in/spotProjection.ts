@@ -111,12 +111,14 @@ export function projectSpotsForCrop(args: {
 }
 
 /**
- * Project the full chip spot grid into a user-placed square region on the HE
- * image, returning spots in HE-normalized [0,1] coordinates. Unlike
- * `projectSpotsForCrop` (which fits+centers the grid in a frame), this lays the
- * grid out inside `placement` (a square in full-HE pixel space) so the caller
- * can move/scale the grid over the image. Activation is looked up downstream by
- * `(arrayRow, arrayCol)`, so spot ids are synthetic coordinates.
+ * Project the chip spot grid into a user-placed region on the HE image,
+ * returning spots in HE-normalized [0,1] coordinates. The placement carries a
+ * `scale` (HE-px per chip unit); spot/gap HE sizes derive from it, so the pitch
+ * stays constant while excluded rows/columns are dropped and the remaining
+ * spots compact (the block shrinks). Spots keep their ORIGINAL arrayRow/arrayCol
+ * (activation is looked up by those); only the visual position compacts.
+ * Coordinates are intentionally unclamped so spots outside the HE render in the
+ * white-padded area.
  */
 export function projectSpotsForPlacement(args: {
   rows: number;
@@ -124,6 +126,8 @@ export function projectSpotsForPlacement(args: {
   spotDiameter: number;
   spotGap: number;
   placement: ChipPlacement;
+  excludedRows?: number[];
+  excludedColumns?: number[];
   heWidth: number;
   heHeight: number;
 }): ProjectedSpot[] {
@@ -133,6 +137,8 @@ export function projectSpotsForPlacement(args: {
     spotDiameter,
     spotGap,
     placement,
+    excludedRows,
+    excludedColumns,
     heWidth,
     heHeight,
   } = args;
@@ -140,7 +146,7 @@ export function projectSpotsForPlacement(args: {
   if (
     !heWidth
     || !heHeight
-    || !placement.size
+    || !placement.scale
     || rows <= 0
     || columns <= 0
     || spotDiameter <= 0
@@ -149,32 +155,36 @@ export function projectSpotsForPlacement(args: {
     return [];
   }
 
-  // Scale the full grid block (spots + surrounding gaps) to fill the placement square.
-  const blockExtent = columns * spotDiameter + (columns + 1) * spotGap;
-  const scale = placement.size / blockExtent;
-  const spotPx = spotDiameter * scale;
-  const gapPx = spotGap * scale;
+  const excludedRowSet = new Set(excludedRows ?? []);
+  const excludedColSet = new Set(excludedColumns ?? []);
+  const visibleRows: number[] = [];
+  for (let r = 1; r <= rows; r += 1) {
+    if (!excludedRowSet.has(r)) visibleRows.push(r);
+  }
+  const visibleCols: number[] = [];
+  for (let c = 1; c <= columns; c += 1) {
+    if (!excludedColSet.has(c)) visibleCols.push(c);
+  }
+  if (visibleRows.length === 0 || visibleCols.length === 0) return [];
+
+  const spotPx = spotDiameter * placement.scale;
+  const gapPx = spotGap * placement.scale;
+  const width = clamp(spotPx / heWidth, 0, 1);
+  const height = clamp(spotPx / heHeight, 0, 1);
 
   const spots: ProjectedSpot[] = [];
-  for (let row = 1; row <= rows; row += 1) {
-    for (let col = 1; col <= columns; col += 1) {
-      const localCenterX = gapPx + (col - 1) * (spotPx + gapPx) + spotPx / 2;
-      const localCenterY = gapPx + (row - 1) * (spotPx + gapPx) + spotPx / 2;
-      const centerX = placement.x + localCenterX;
-      const centerY = placement.y + localCenterY;
-
-      const width = clamp(spotPx / heWidth, 0, 1);
-      const height = clamp(spotPx / heHeight, 0, 1);
+  for (let ri = 0; ri < visibleRows.length; ri += 1) {
+    const row = visibleRows[ri];
+    const centerY = placement.y + gapPx + ri * (spotPx + gapPx) + spotPx / 2;
+    for (let ci = 0; ci < visibleCols.length; ci += 1) {
+      const col = visibleCols[ci];
+      const centerX = placement.x + gapPx + ci * (spotPx + gapPx) + spotPx / 2;
       const id = `${row}:${col}`;
-
       spots.push({
         id,
         barcode: id,
         arrayRow: row,
         arrayCol: col,
-        // Intentionally unclamped: when the placement extends beyond the HE
-        // image, out-of-image spots keep their real position (>1 or <0) so they
-        // render in the white-padded area.
         x: centerX / heWidth,
         y: centerY / heHeight,
         width,

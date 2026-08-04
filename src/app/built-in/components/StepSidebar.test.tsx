@@ -51,6 +51,8 @@ const createProject = (
     origin: { x: 0, y: 0 },
     rotationDegrees: 0,
     placement: null,
+    excludedRows: [],
+    excludedColumns: [],
     projectedSpots: [
       {
         id: 'spot-a',

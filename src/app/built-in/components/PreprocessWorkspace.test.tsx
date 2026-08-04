@@ -97,7 +97,7 @@ vi.mock('./TissueSelectionPanel', () => ({
       <button
         type="button"
         data-testid="tissue-panel-change-placement"
-        onClick={() => props.onPlacementChange?.({ x: 50, y: 50, size: 200 })}
+        onClick={() => props.onPlacementChange?.({ x: 50, y: 50, scale: 1 })}
       >
         Move placement
       </button>
@@ -176,7 +176,9 @@ const createProject = (): PreprocessProject => ({
     spotDiameter: 25,
     origin: { x: 0, y: 0 },
     rotationDegrees: 0,
-    placement: { x: 10, y: 10, size: 100 },
+    placement: { x: 10, y: 10, scale: 1 },
+    excludedRows: [],
+    excludedColumns: [],
     projectedSpots: [
       createProjectedSpot('spot-a', 0.25, 0.25, 1, 1),
       createProjectedSpot('spot-b', 0.75, 0.25, 1, 2),
@@ -342,26 +344,28 @@ describe('PreprocessWorkspace tissue selection', () => {
         && mutation.project.chipConfig.placement?.y === 50,
     );
     expect(placementMutation).toBeDefined();
-    expect(placementMutation?.project.chipConfig.placement).toEqual({ x: 50, y: 50, size: 200 });
+    expect(placementMutation?.project.chipConfig.placement).toEqual({ x: 50, y: 50, scale: 1 });
     // Placement updates are persisted with the metadata debounced strategy.
     expect(placementMutation?.persistOptions).toEqual({ mode: 'metadata', strategy: 'debounced' });
 
-    // Reset re-centers the placement over the 200x150 HE image:
-    // size = min(200, 150) * 0.9 = 135, centered.
+    // Reset re-centers the placement over the 200x150 HE image: the full grid
+    // (96*25 + 97*1 = 2497 chip units) fits min(200,150)*0.9 = 135 px ->
+    // scale = 135/2497, centered.
+    const expectedResetScale = 135 / (96 * 25 + 97 * 1);
     await user.click(screen.getByTestId('tissue-reset-placement'));
 
     await waitFor(() => {
       const resetMutation = capturedMutations.find(
-        (mutation) => mutation.project.chipConfig.placement?.size === 135,
+        (mutation) => mutation.project.chipConfig.placement?.scale === expectedResetScale,
       );
       expect(resetMutation).toBeDefined();
     });
 
     const resetMutation = capturedMutations.find(
-      (mutation) => mutation.project.chipConfig.placement?.size === 135,
+      (mutation) => mutation.project.chipConfig.placement?.scale === expectedResetScale,
     );
     expect(resetMutation?.project.chipConfig.placement).toEqual({
-      size: 135,
+      scale: expectedResetScale,
       x: (200 - 135) / 2,
       y: (150 - 135) / 2,
     });

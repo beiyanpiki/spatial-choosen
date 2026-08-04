@@ -9,11 +9,14 @@ import { TissueSelectionPanel } from './TissueSelectionPanel';
 // Transform geometry (host rect 400x300, square MockImage -> ratio 1):
 //   computeBaseView -> viewX=50, viewY=0, width=300, height=300.
 //   HE [0,1] maps to canvas local [50,350] x [0,300].
-// With heWidth/heHeight = 1000 and placement {x:200, y:200, size:600}:
+// With heWidth/heHeight = 1000, placement {x:200, y:200, scale:1} and a
+// unitExtent of 600x600 chip-units, the block is 600x600 HE px:
 //   HE (200,200) -> canvas (110, 60)   [tl corner]
 //   HE (800,800) -> canvas (290, 240)  [br corner]
 //   HE (500,500) -> canvas (200, 150)  [center of grid body]
-const PLACEMENT: ChipPlacement = { x: 200, y: 200, size: 600 };
+const PLACEMENT: ChipPlacement = { x: 200, y: 200, scale: 1 };
+const UNIT_EXTENT = { w: 600, h: 600 };
+const SCALE_RANGE = { min: 0.001, max: 4 };
 
 const PROJECTED_SPOTS: ProjectedSpot[] = [
 	{
@@ -141,6 +144,8 @@ const renderPanel = (onPlacementChange: (placement: ChipPlacement) => void) => {
 				projectedSpots={PROJECTED_SPOTS}
 				selectedSpotIds={[]}
 				placement={PLACEMENT}
+					unitExtent={UNIT_EXTENT}
+					scaleRange={SCALE_RANGE}
 				heWidth={1000}
 				heHeight={1000}
 				onPlacementChange={onPlacementChange}
@@ -181,12 +186,12 @@ describe('TissueSelectionPanel pointer interaction', () => {
 		fireEvent.pointerUp(canvas, { button: 0, clientX: 230, clientY: 150, pointerId: 1 });
 
 		expect(onPlacementChange).toHaveBeenCalledWith(
-			expect.objectContaining({ x: 300, y: 200, size: 600 }),
+			expect.objectContaining({ x: 300, y: 200, scale: 1 }),
 		);
 		const moved = onPlacementChange.mock.calls[0]?.[0] as ChipPlacement | undefined;
 		expect(moved).toBeDefined();
 		expect(moved!.x).not.toBe(PLACEMENT.x);
-		expect(moved!.size).toBe(PLACEMENT.size);
+		expect(moved!.scale).toBe(PLACEMENT.scale);
 	});
 
 	it('resizes the placement when dragging from a corner handle', async () => {
@@ -205,11 +210,11 @@ describe('TissueSelectionPanel pointer interaction', () => {
 		fireEvent.pointerUp(canvas, { button: 0, clientX: 260, clientY: 210, pointerId: 1 });
 
 		expect(onPlacementChange).toHaveBeenCalledWith(
-			expect.objectContaining({ x: 200, y: 200, size: 500 }),
+			expect.objectContaining({ x: 200, y: 200, scale: 5 / 6 }),
 		);
 		const resized = onPlacementChange.mock.calls[0]?.[0] as ChipPlacement | undefined;
 		expect(resized).toBeDefined();
-		expect(resized!.size).not.toBe(PLACEMENT.size);
+		expect(resized!.scale).not.toBe(PLACEMENT.scale);
 	});
 
 	it('resizes the placement when dragging from an edge', async () => {
@@ -230,10 +235,10 @@ describe('TissueSelectionPanel pointer interaction', () => {
 		fireEvent.pointerUp(canvas, { button: 0, clientX: 200, clientY: 30, pointerId: 1 });
 
 		expect(onPlacementChange).toHaveBeenCalledWith(
-			expect.objectContaining({ x: 150, y: 100, size: 700 }),
+			expect.objectContaining({ x: 150, y: 100, scale: 7 / 6 }),
 		);
 		const resized = onPlacementChange.mock.calls[0]?.[0] as ChipPlacement | undefined;
 		expect(resized).toBeDefined();
-		expect(resized!.size).toBeGreaterThan(PLACEMENT.size);
+		expect(resized!.scale).toBeGreaterThan(PLACEMENT.scale);
 	});
 });

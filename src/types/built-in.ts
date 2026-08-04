@@ -103,12 +103,12 @@ export type LegacyProjectedSpot = ProjectedSpotBase
   & Partial<CanonicalProjectedSpotDimensions>;
 
 export type ChipPlacement = {
-  /** Top-left X of the grid square, in full-resolution HE pixel space. */
+  /** Top-left X of the grid block, in full-resolution HE pixel space. */
   x: number;
-  /** Top-left Y of the grid square, in full-resolution HE pixel space. */
+  /** Top-left Y of the grid block, in full-resolution HE pixel space. */
   y: number;
-  /** Side length of the (square) grid, in full-resolution HE pixel space. */
-  size: number;
+  /** HE pixels per chip unit (manifest unit); spot/gap HE sizes derive from this. */
+  scale: number;
 };
 
 export type ChipConfigSlice = PreprocessSliceBase & {
@@ -121,6 +121,8 @@ export type ChipConfigSlice = PreprocessSliceBase & {
   origin: PreprocessPoint | null;
   rotationDegrees: number;
   placement: ChipPlacement | null;
+  excludedRows: number[];
+  excludedColumns: number[];
   projectedSpots: ProjectedSpot[] | null;
 };
 

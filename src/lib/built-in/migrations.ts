@@ -53,6 +53,8 @@ const createDefaultChipConfigSlice = (): ChipConfigSlice => ({
 	origin: null,
 	rotationDegrees: 0,
 	placement: null,
+	excludedRows: [],
+	excludedColumns: [],
 	projectedSpots: null,
 });
 
@@ -263,6 +265,8 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		origin,
 		rotationDegrees,
 		placement,
+		excludedRows,
+		excludedColumns,
 	} = value as Record<string, unknown>;
 
 	const allowedStatuses = new Set([
@@ -281,13 +285,26 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 	const normalizedPlacement = isRecord(placement)
 		&& typeof (placement as Record<string, unknown>).x === "number"
 		&& typeof (placement as Record<string, unknown>).y === "number"
-		&& typeof (placement as Record<string, unknown>).size === "number"
+		&& typeof (placement as Record<string, unknown>).scale === "number"
 		? {
 				x: (placement as Record<string, unknown>).x as number,
 				y: (placement as Record<string, unknown>).y as number,
-				size: (placement as Record<string, unknown>).size as number,
+				scale: (placement as Record<string, unknown>).scale as number,
 			}
 		: null;
+
+	const normalizeExclusionList = (value: unknown): number[] => {
+		if (!Array.isArray(value)) return [];
+		const set = new Set<number>();
+		for (const item of value) {
+			if (typeof item === "number" && Number.isInteger(item) && item >= 1) {
+				set.add(item);
+			}
+		}
+		return [...set].sort((a, b) => a - b);
+	};
+	const normalizedExcludedRows = normalizeExclusionList(excludedRows);
+	const normalizedExcludedColumns = normalizeExclusionList(excludedColumns);
 
 	const normalizedOrigin = isRecord(origin)
 		&& typeof (origin as Record<string, unknown>).x === "number"
@@ -314,6 +331,8 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		spotDiameter: typeof spotDiameter === "number" ? spotDiameter : null,
 		origin: normalizedOrigin,
 		placement: normalizedPlacement,
+		excludedRows: normalizedExcludedRows,
+		excludedColumns: normalizedExcludedColumns,
 		rotationDegrees:
 			typeof rotationDegrees === "number" ? rotationDegrees : 0,
 		// projectedSpots are recomputed in the UI after load; never persist them.

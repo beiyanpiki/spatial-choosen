@@ -65,6 +65,8 @@ export const buildEmptyPreprocessProject = (
 			origin: null,
 			rotationDegrees: 0,
 			placement: null,
+			excludedRows: [],
+			excludedColumns: [],
 			projectedSpots: null,
 		},
 		tissueSelection: {

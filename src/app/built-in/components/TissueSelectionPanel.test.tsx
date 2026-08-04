@@ -144,7 +144,9 @@ describe('TissueSelectionPanel', () => {
 						},
 					]}
 					selectedSpotIds={['1:1']}
-					placement={{ x: 0, y: 0, size: 1000 }}
+					placement={{ x: 0, y: 0, scale: 1 }}
+					unitExtent={{ w: 1000, h: 1000 }}
+					scaleRange={{ min: 0.001, max: 4 }}
 					heWidth={1000}
 					heHeight={1000}
 					onPlacementChange={vi.fn()}
@@ -189,7 +191,9 @@ describe('TissueSelectionPanel', () => {
 						},
 					]}
 					selectedSpotIds={['1:1']}
-					placement={{ x: 0, y: 0, size: 1000 }}
+					placement={{ x: 0, y: 0, scale: 1 }}
+					unitExtent={{ w: 1000, h: 1000 }}
+					scaleRange={{ min: 0.001, max: 4 }}
 					heWidth={1000}
 					heHeight={1000}
 					showSpots={false}

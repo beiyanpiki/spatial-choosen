@@ -125,16 +125,15 @@ describe("projectSpotsForCrop", () => {
 });
 
 describe("projectSpotsForPlacement", () => {
-	it("lays out a 2x2 grid inside the placement square in HE-normalized coordinates", () => {
-		// rows=2, columns=2, spotDiameter=1, spotGap=1 -> blockExtent = 2*1 + 3*1 = 5.
-		// placement size 1000 -> scale = 200, spotPx = 200, gapPx = 200.
-		// Centers land at local 300/700 in HE pixels -> normalized 0.3/0.7 on a 1000x1000 HE.
+	it("lays out a 2x2 grid at the placement scale in HE-normalized coordinates", () => {
+		// rows=2, columns=2, spotDiameter=1, spotGap=1, scale=100 -> spotPx=gapPx=100.
+		// Center of (1,1) = 100 + 50 = 150 HE px -> normalized 0.15; (1,2)/(2,1) at 350 -> 0.35.
 		const spots = projectSpotsForPlacement({
 			rows: 2,
 			columns: 2,
 			spotDiameter: 1,
 			spotGap: 1,
-			placement: { x: 0, y: 0, size: 1000 },
+			placement: { x: 0, y: 0, scale: 100 },
 			heWidth: 1000,
 			heHeight: 1000,
 		});
@@ -149,73 +148,79 @@ describe("projectSpotsForPlacement", () => {
 			barcode: "1:1",
 			arrayRow: 1,
 			arrayCol: 1,
-			x: 0.3,
-			y: 0.3,
-			width: 0.2,
-			height: 0.2,
-			diameterX: 0.2,
-			diameterY: 0.2,
+			x: 0.15,
+			y: 0.15,
+			width: 0.1,
+			height: 0.1,
+			diameterX: 0.1,
+			diameterY: 0.1,
 		});
 		expect(byId.get("1:2")?.arrayRow).toBe(1);
 		expect(byId.get("1:2")?.arrayCol).toBe(2);
-		expect(byId.get("1:2")?.x).toBeCloseTo(0.7, 10);
-		expect(byId.get("1:2")?.y).toBeCloseTo(0.3, 10);
-
-		expect(byId.get("2:1")?.arrayRow).toBe(2);
-		expect(byId.get("2:1")?.arrayCol).toBe(1);
-		expect(byId.get("2:1")?.x).toBeCloseTo(0.3, 10);
-		expect(byId.get("2:1")?.y).toBeCloseTo(0.7, 10);
-
-		expect(byId.get("2:2")?.x).toBeCloseTo(0.7, 10);
-		expect(byId.get("2:2")?.y).toBeCloseTo(0.7, 10);
-
-		// Every normalized center is strictly inside (0, 1).
-		for (const spot of spots) {
-			expect(spot.x).toBeGreaterThan(0);
-			expect(spot.x).toBeLessThan(1);
-			expect(spot.y).toBeGreaterThan(0);
-			expect(spot.y).toBeLessThan(1);
-		}
+		expect(byId.get("1:2")?.x).toBeCloseTo(0.35, 10);
+		expect(byId.get("1:2")?.y).toBeCloseTo(0.15, 10);
+		expect(byId.get("2:1")?.x).toBeCloseTo(0.15, 10);
+		expect(byId.get("2:1")?.y).toBeCloseTo(0.35, 10);
+		expect(byId.get("2:2")?.x).toBeCloseTo(0.35, 10);
+		expect(byId.get("2:2")?.y).toBeCloseTo(0.35, 10);
 	});
 
-	it("moves and spreads the spots when the placement size grows", () => {
-		const baseline = projectSpotsForPlacement({
-			rows: 2,
-			columns: 2,
+	it("compacts excluded rows/columns while keeping the pitch", () => {
+		// rows=3, cols=3, exclude row 1 and column 2: visible rows [2,3], visible cols [1,3].
+		// Row 2 now occupies the FIRST slot (y=0.15) and row 3 the second (y=0.35):
+		// the removed row is compressed, pitch (0.2) unchanged, block shrinks.
+		const spots = projectSpotsForPlacement({
+			rows: 3,
+			columns: 3,
 			spotDiameter: 1,
 			spotGap: 1,
-			placement: { x: 0, y: 0, size: 1000 },
-			heWidth: 1000,
-			heHeight: 1000,
-		});
-		const grown = projectSpotsForPlacement({
-			rows: 2,
-			columns: 2,
-			spotDiameter: 1,
-			spotGap: 1,
-			placement: { x: 0, y: 0, size: 2000 },
+			placement: { x: 0, y: 0, scale: 100 },
+			excludedRows: [1],
+			excludedColumns: [2],
 			heWidth: 1000,
 			heHeight: 1000,
 		});
 
-		const baselineFirst = baseline.find((spot) => spot.id === "1:1");
-		const grownFirst = grown.find((spot) => spot.id === "1:1");
-		expect(baselineFirst).toBeDefined();
-		expect(grownFirst).toBeDefined();
-		// A larger placement square scales spot centers outward and widens spots.
-		expect(grownFirst!.x).toBeGreaterThan(baselineFirst!.x);
-		expect(grownFirst!.y).toBeGreaterThan(baselineFirst!.y);
-		expect(grownFirst!.diameterX).toBeGreaterThan(baselineFirst!.diameterX);
+		expect(spots).toHaveLength(4);
+		expect(spots.map((spot) => spot.id).sort()).toEqual(["2:1", "2:3", "3:1", "3:3"]);
+		expect(spots.some((spot) => spot.arrayRow === 1)).toBe(false);
+		expect(spots.some((spot) => spot.arrayCol === 2)).toBe(false);
+
+		const row21 = spots.find((spot) => spot.id === "2:1");
+		const row31 = spots.find((spot) => spot.id === "3:1");
+		expect(row21?.x).toBeCloseTo(0.15, 10);
+		expect(row21?.y).toBeCloseTo(0.15, 10);
+		expect(row31?.y).toBeCloseTo(0.35, 10);
+		// Pitch between adjacent visible rows is unchanged (0.2).
+		expect(row31!.y - row21!.y).toBeCloseTo(0.2, 10);
+		// The compacted column skips to index 1: (2,3) is the second visible column.
+		expect(spots.find((spot) => spot.id === "2:3")?.x).toBeCloseTo(0.35, 10);
 	});
 
-	it("returns no spots when placement dimensions are missing", () => {
+	it("keeps out-of-image spot coordinates unclamped", () => {
+		const spots = projectSpotsForPlacement({
+			rows: 2,
+			columns: 2,
+			spotDiameter: 1,
+			spotGap: 1,
+			placement: { x: 900, y: 0, scale: 100 },
+			heWidth: 1000,
+			heHeight: 1000,
+		});
+		const first = spots.find((spot) => spot.id === "1:1");
+		expect(first).toBeDefined();
+		// Center = 900 + 150 = 1050 HE px -> x = 1.05 (beyond the image, not clamped).
+		expect(first!.x).toBeCloseTo(1.05, 10);
+	});
+
+	it("returns no spots when the placement scale is missing", () => {
 		expect(
 			projectSpotsForPlacement({
 				rows: 2,
 				columns: 2,
 				spotDiameter: 1,
 				spotGap: 1,
-				placement: { x: 0, y: 0, size: 0 },
+				placement: { x: 0, y: 0, scale: 0 },
 				heWidth: 1000,
 				heHeight: 1000,
 			}),

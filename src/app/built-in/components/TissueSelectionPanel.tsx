@@ -23,7 +23,6 @@ import type { ChipPlacement, ProjectedSpot } from '@/types/built-in';
 
 const HANDLE_RADIUS_PX = 12;
 const EDGE_THRESHOLD_PX = 8;
-const MIN_PLACEMENT_SIZE_PX = 8;
 
 type Corner = 'tl' | 'tr' | 'bl' | 'br';
 type Edge = 'top' | 'bottom' | 'left' | 'right';
@@ -48,6 +47,10 @@ const EDGE_CURSOR: Record<Edge, string> = {
 };
 
 type PointHE = { x: number; y: number };
+type BlockRect = { x: number; y: number; width: number; height: number };
+
+type UnitExtent = { w: number; h: number };
+type ScaleRange = { min: number; max: number };
 
 type Gesture =
   | { mode: 'move'; startPointer: PointHE; startPlacement: ChipPlacement }
@@ -60,6 +63,10 @@ type TissueSelectionPanelProps = {
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
   placement: ChipPlacement | null;
+  /** Chip-unit extent of the visible (post-exclusion) grid block. */
+  unitExtent: UnitExtent;
+  /** Allowed range for placement.scale. */
+  scaleRange: ScaleRange;
   heWidth: number | null;
   heHeight: number | null;
   showSpots?: boolean;
@@ -67,25 +74,20 @@ type TissueSelectionPanelProps = {
   onPlacementChange: (placement: ChipPlacement) => void;
 };
 
-const cornerHE = (placement: ChipPlacement, corner: Corner): PointHE => {
-  const { x, y, size } = placement;
-  switch (corner) {
-    case 'tl':
-      return { x, y };
-    case 'tr':
-      return { x: x + size, y };
-    case 'bl':
-      return { x, y: y + size };
-    case 'br':
-      return { x: x + size, y: y + size };
-  }
-};
+const cornersOf = (rect: BlockRect): Record<Corner, PointHE> => ({
+  tl: { x: rect.x, y: rect.y },
+  tr: { x: rect.x + rect.width, y: rect.y },
+  bl: { x: rect.x, y: rect.y + rect.height },
+  br: { x: rect.x + rect.width, y: rect.y + rect.height },
+});
 
 export function TissueSelectionPanel({
   imageDataUrl,
   projectedSpots,
   selectedSpotIds,
   placement,
+  unitExtent,
+  scaleRange,
   heWidth,
   heHeight,
   showSpots = true,
@@ -173,7 +175,17 @@ export function TissueSelectionPanel({
     [hostRect, ratio, zoom, pan],
   );
 
-  const hasPlacementSpace = placement !== null
+  const blockRect = useMemo<BlockRect | null>(() => {
+    if (!placement || placement.scale <= 0) return null;
+    return {
+      x: placement.x,
+      y: placement.y,
+      width: placement.scale * unitExtent.w,
+      height: placement.scale * unitExtent.h,
+    };
+  }, [placement, unitExtent]);
+
+  const hasPlacementSpace = blockRect !== null
     && typeof heWidth === 'number'
     && typeof heHeight === 'number'
     && heWidth > 0
@@ -203,51 +215,42 @@ export function TissueSelectionPanel({
     [getTransformCb, heWidth, heHeight, hostRect],
   );
 
-  const clampPlacement = useCallback(
-    (next: ChipPlacement): ChipPlacement => {
-      // The grid may extend beyond the HE image; the out-of-image area becomes
-      // white padding in the output. Only enforce a sane size range and leave
-      // the position free (including beyond the image bounds).
-      const dimMax = Math.max(heWidth ?? 0, heHeight ?? 0);
-      const maxSize = dimMax > 0 ? dimMax * 4 : next.size;
-      const size = Math.min(Math.max(next.size, MIN_PLACEMENT_SIZE_PX), maxSize);
-      return { size, x: next.x, y: next.y };
-    },
-    [heWidth, heHeight],
+  const clampScale = useCallback(
+    (scale: number) => Math.min(Math.max(scale, scaleRange.min), scaleRange.max),
+    [scaleRange],
   );
 
   const findCornerAt = useCallback(
     (pointerScreen: Point, transform: NonNullable<ReturnType<typeof getTransformCb>>): Corner | null => {
-      if (!placement) return null;
+      if (!blockRect) return null;
+      const corners = cornersOf(blockRect);
       for (const corner of CORNERS) {
-        const c = heToCanvas(cornerHE(placement, corner), transform);
+        const c = heToCanvas(corners[corner], transform);
         if (Math.hypot(c.x - pointerScreen.x, c.y - pointerScreen.y) <= HANDLE_RADIUS_PX) {
           return corner;
         }
       }
       return null;
     },
-    [heToCanvas, placement],
+    [blockRect, heToCanvas],
   );
 
   const findEdgeAt = useCallback(
     (pointerScreen: Point, transform: NonNullable<ReturnType<typeof getTransformCb>>): Edge | null => {
-      if (!placement) return null;
-      const tl = heToCanvas(cornerHE(placement, 'tl'), transform);
-      const tr = heToCanvas(cornerHE(placement, 'tr'), transform);
-      const bl = heToCanvas(cornerHE(placement, 'bl'), transform);
-      const br = heToCanvas(cornerHE(placement, 'br'), transform);
+      if (!blockRect) return null;
+      const tl = heToCanvas(cornersOf(blockRect).tl, transform);
+      const br = heToCanvas(cornersOf(blockRect).br, transform);
       const minX = Math.min(tl.x, br.x);
       const maxX = Math.max(tl.x, br.x);
       const minY = Math.min(tl.y, br.y);
       const maxY = Math.max(tl.y, br.y);
       const nearTop = Math.abs(pointerScreen.y - tl.y) <= EDGE_THRESHOLD_PX
         && pointerScreen.x >= minX && pointerScreen.x <= maxX;
-      const nearBottom = Math.abs(pointerScreen.y - bl.y) <= EDGE_THRESHOLD_PX
+      const nearBottom = Math.abs(pointerScreen.y - br.y) <= EDGE_THRESHOLD_PX
         && pointerScreen.x >= minX && pointerScreen.x <= maxX;
       const nearLeft = Math.abs(pointerScreen.x - tl.x) <= EDGE_THRESHOLD_PX
         && pointerScreen.y >= minY && pointerScreen.y <= maxY;
-      const nearRight = Math.abs(pointerScreen.x - tr.x) <= EDGE_THRESHOLD_PX
+      const nearRight = Math.abs(pointerScreen.x - br.x) <= EDGE_THRESHOLD_PX
         && pointerScreen.y >= minY && pointerScreen.y <= maxY;
       if (nearTop) return 'top';
       if (nearBottom) return 'bottom';
@@ -255,34 +258,7 @@ export function TissueSelectionPanel({
       if (nearRight) return 'right';
       return null;
     },
-    [heToCanvas, placement],
-  );
-
-  const applyResizeEdge = useCallback(
-    (edge: Edge, fixed: number, center: PointHE, pointerHE: PointHE): ChipPlacement => {
-      let size: number;
-      let next: ChipPlacement;
-      switch (edge) {
-        case 'top':
-          size = fixed - pointerHE.y;
-          next = { size, x: center.x - size / 2, y: fixed - size };
-          break;
-        case 'bottom':
-          size = pointerHE.y - fixed;
-          next = { size, x: center.x - size / 2, y: fixed };
-          break;
-        case 'left':
-          size = fixed - pointerHE.x;
-          next = { size, x: fixed - size, y: center.y - size / 2 };
-          break;
-        case 'right':
-          size = pointerHE.x - fixed;
-          next = { size, x: fixed, y: center.y - size / 2 };
-          break;
-      }
-      return clampPlacement(next);
-    },
-    [clampPlacement],
+    [blockRect, heToCanvas],
   );
 
   const handlePointerDown = useCallback(
@@ -294,12 +270,13 @@ export function TissueSelectionPanel({
       if (!hostBox || !transform) return;
       const pointerScreen: Point = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
 
-      if (hasPlacementSpace && placement) {
+      if (hasPlacementSpace && blockRect && placement) {
         const corner = findCornerAt(pointerScreen, transform);
         if (corner) {
           const opposite = OPPOSITE_CORNER[corner];
-          const oppHE = cornerHE(placement, opposite);
-          const draggedHE = cornerHE(placement, corner);
+          const corners = cornersOf(blockRect);
+          const oppHE = corners[opposite];
+          const draggedHE = corners[corner];
           gestureRef.current = {
             mode: 'resize-corner',
             opposite: oppHE,
@@ -313,15 +290,12 @@ export function TissueSelectionPanel({
 
         const edge = findEdgeAt(pointerScreen, transform);
         if (edge) {
-          const center = {
-            x: placement.x + placement.size / 2,
-            y: placement.y + placement.size / 2,
-          };
+          const center = { x: blockRect.x + blockRect.width / 2, y: blockRect.y + blockRect.height / 2 };
           const fixed =
-            edge === 'top' ? placement.y + placement.size
-              : edge === 'bottom' ? placement.y
-                : edge === 'left' ? placement.x + placement.size
-                  : placement.x;
+            edge === 'top' ? blockRect.y + blockRect.height
+              : edge === 'bottom' ? blockRect.y
+                : edge === 'left' ? blockRect.x + blockRect.width
+                  : blockRect.x;
           gestureRef.current = { mode: 'resize-edge', edge, fixed, center };
           event.currentTarget.setPointerCapture(event.pointerId);
           event.preventDefault();
@@ -331,10 +305,10 @@ export function TissueSelectionPanel({
         const pointerHE = screenToHE(event.clientX, event.clientY);
         if (
           pointerHE
-          && pointerHE.x >= placement.x
-          && pointerHE.x <= placement.x + placement.size
-          && pointerHE.y >= placement.y
-          && pointerHE.y <= placement.y + placement.size
+          && pointerHE.x >= blockRect.x
+          && pointerHE.x <= blockRect.x + blockRect.width
+          && pointerHE.y >= blockRect.y
+          && pointerHE.y <= blockRect.y + blockRect.height
         ) {
           gestureRef.current = { mode: 'move', startPointer: pointerHE, startPlacement: placement };
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -347,7 +321,7 @@ export function TissueSelectionPanel({
       gestureRef.current = { mode: 'pan', startScreen: pointerScreen, startPan: pan };
       event.currentTarget.setPointerCapture(event.pointerId);
     },
-    [disabled, findCornerAt, findEdgeAt, getTransformCb, hasPlacementSpace, pan, placement, screenToHE],
+    [blockRect, disabled, findCornerAt, findEdgeAt, getTransformCb, hasPlacementSpace, pan, placement, screenToHE],
   );
 
   const handlePointerMove = useCallback(
@@ -360,7 +334,6 @@ export function TissueSelectionPanel({
       const pointerScreen: Point = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
 
       if (!gesture) {
-        // Hover cursor feedback only.
         const transform = getTransformCb();
         if (!transform || !canvas) return;
         const corner = hasPlacementSpace ? findCornerAt(pointerScreen, transform) : null;
@@ -374,15 +347,16 @@ export function TissueSelectionPanel({
           return;
         }
         const pointerHE = screenToHE(event.clientX, event.clientY);
-        const inside = placement && pointerHE
-          && pointerHE.x >= placement.x
-          && pointerHE.x <= placement.x + placement.size
-          && pointerHE.y >= placement.y
-          && pointerHE.y <= placement.y + placement.size;
+        const inside = blockRect && pointerHE
+          && pointerHE.x >= blockRect.x
+          && pointerHE.x <= blockRect.x + blockRect.width
+          && pointerHE.y >= blockRect.y
+          && pointerHE.y <= blockRect.y + blockRect.height;
         canvas.style.cursor = inside ? 'move' : 'grab';
         return;
       }
 
+      const { w: unitW, h: unitH } = unitExtent;
       switch (gesture.mode) {
         case 'pan': {
           setPan({
@@ -394,53 +368,63 @@ export function TissueSelectionPanel({
         case 'move': {
           const pointerHE = screenToHE(event.clientX, event.clientY);
           if (!pointerHE) return;
-          onPlacementChange(
-            clampPlacement({
-              ...gesture.startPlacement,
-              x: gesture.startPlacement.x + (pointerHE.x - gesture.startPointer.x),
-              y: gesture.startPlacement.y + (pointerHE.y - gesture.startPointer.y),
-            }),
-          );
+          onPlacementChange({
+            scale: gesture.startPlacement.scale,
+            x: gesture.startPlacement.x + (pointerHE.x - gesture.startPointer.x),
+            y: gesture.startPlacement.y + (pointerHE.y - gesture.startPointer.y),
+          });
           return;
         }
         case 'resize-corner': {
           const pointerHE = screenToHE(event.clientX, event.clientY);
           if (!pointerHE) return;
           const { opposite, dirX, dirY } = gesture;
-          const size = Math.max(
-            Math.abs(pointerHE.x - opposite.x),
-            Math.abs(pointerHE.y - opposite.y),
-          );
-          onPlacementChange(
-            clampPlacement({
-              size,
-              x: Math.min(opposite.x, opposite.x + dirX * size),
-              y: Math.min(opposite.y, opposite.y + dirY * size),
-            }),
-          );
+          const scale = clampScale(Math.max(
+            Math.abs(pointerHE.x - opposite.x) / unitW,
+            Math.abs(pointerHE.y - opposite.y) / unitH,
+          ));
+          onPlacementChange({
+            scale,
+            x: Math.min(opposite.x, opposite.x + dirX * scale * unitW),
+            y: Math.min(opposite.y, opposite.y + dirY * scale * unitH),
+          });
           return;
         }
         case 'resize-edge': {
           const pointerHE = screenToHE(event.clientX, event.clientY);
           if (!pointerHE) return;
-          onPlacementChange(
-            applyResizeEdge(gesture.edge, gesture.fixed, gesture.center, pointerHE),
-          );
+          const { edge, fixed, center } = gesture;
+          let scale: number;
+          let next: ChipPlacement;
+          if (edge === 'top') {
+            scale = clampScale((fixed - pointerHE.y) / unitH);
+            next = { scale, x: center.x - (scale * unitW) / 2, y: fixed - scale * unitH };
+          } else if (edge === 'bottom') {
+            scale = clampScale((pointerHE.y - fixed) / unitH);
+            next = { scale, x: center.x - (scale * unitW) / 2, y: fixed };
+          } else if (edge === 'left') {
+            scale = clampScale((fixed - pointerHE.x) / unitW);
+            next = { scale, x: fixed - scale * unitW, y: center.y - (scale * unitH) / 2 };
+          } else {
+            scale = clampScale((pointerHE.x - fixed) / unitW);
+            next = { scale, x: fixed, y: center.y - (scale * unitH) / 2 };
+          }
+          onPlacementChange(next);
           return;
         }
       }
     },
     [
-      applyResizeEdge,
-      clampPlacement,
+      blockRect,
+      clampScale,
       disabled,
       findCornerAt,
       findEdgeAt,
       getTransformCb,
       hasPlacementSpace,
       onPlacementChange,
-      placement,
       screenToHE,
+      unitExtent,
     ],
   );
 
@@ -487,12 +471,11 @@ export function TissueSelectionPanel({
     const transform = getTransformCb();
     if (!transform) return;
 
-    // Pre-fill the placement box with white: the opaque HE draw covers the
-    // in-image part, so any box area outside the image stays white — matching
-    // the white padding used in the final output when the box exceeds the image.
-    if (placement && hasPlacementSpace) {
-      const tl = heToCanvas(cornerHE(placement, 'tl'), transform);
-      const br = heToCanvas(cornerHE(placement, 'br'), transform);
+    // Pre-fill the placement block with white: the opaque HE draw covers the
+    // in-image part, so any block area outside the image stays white.
+    if (blockRect && hasPlacementSpace) {
+      const tl = heToCanvas({ x: blockRect.x, y: blockRect.y }, transform);
+      const br = heToCanvas({ x: blockRect.x + blockRect.width, y: blockRect.y + blockRect.height }, transform);
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
     }
@@ -515,15 +498,15 @@ export function TissueSelectionPanel({
       }
     }
 
-    if (placement && hasPlacementSpace) {
-      const tl = heToCanvas(cornerHE(placement, 'tl'), transform);
-      const br = heToCanvas(cornerHE(placement, 'br'), transform);
+    if (blockRect && hasPlacementSpace) {
+      const tl = heToCanvas({ x: blockRect.x, y: blockRect.y }, transform);
+      const br = heToCanvas({ x: blockRect.x + blockRect.width, y: blockRect.y + blockRect.height }, transform);
       ctx.strokeStyle = 'rgba(43,108,176,0.9)';
       ctx.lineWidth = 2;
       ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
 
       for (const corner of CORNERS) {
-        const c = heToCanvas(cornerHE(placement, corner), transform);
+        const c = heToCanvas(cornersOf(blockRect)[corner], transform);
         ctx.fillStyle = '#ffffff';
         ctx.strokeStyle = 'rgba(43,108,176,0.9)';
         ctx.lineWidth = 2;
@@ -535,12 +518,12 @@ export function TissueSelectionPanel({
     }
   }, [
     assignedSpotFillColor,
+    blockRect,
     canvasRefresh,
     getTransformCb,
     hasPlacementSpace,
     heToCanvas,
     hostRect,
-    placement,
     projectedSpots,
     selectedSpotIdSet,
     showSpots,
