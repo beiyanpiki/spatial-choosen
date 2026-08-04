@@ -211,4 +211,29 @@ describe('TissueSelectionPanel pointer interaction', () => {
 		expect(resized).toBeDefined();
 		expect(resized!.size).not.toBe(PLACEMENT.size);
 	});
+
+	it('resizes the placement when dragging from an edge', async () => {
+		const onPlacementChange = vi.fn();
+		const canvas = renderPanel(onPlacementChange);
+		if (!(canvas instanceof HTMLCanvasElement)) return;
+
+		await waitFor(() => {
+			expect(strokeRectMock).toHaveBeenCalled();
+		});
+
+		// Top edge midpoint (HE 500,200 -> canvas 200,60): within the 8px edge
+		// band and far from the corner handles.
+		fireEvent.pointerDown(canvas, { button: 0, clientX: 200, clientY: 60, pointerId: 1 });
+		// Drag the top edge upward to HE y=100 (canvas 30); the bottom edge stays
+		// fixed and the box stays square, so size grows to 700.
+		fireEvent.pointerMove(canvas, { button: 0, clientX: 200, clientY: 30, pointerId: 1 });
+		fireEvent.pointerUp(canvas, { button: 0, clientX: 200, clientY: 30, pointerId: 1 });
+
+		expect(onPlacementChange).toHaveBeenCalledWith(
+			expect.objectContaining({ x: 150, y: 100, size: 700 }),
+		);
+		const resized = onPlacementChange.mock.calls[0]?.[0] as ChipPlacement | undefined;
+		expect(resized).toBeDefined();
+		expect(resized!.size).toBeGreaterThan(PLACEMENT.size);
+	});
 });

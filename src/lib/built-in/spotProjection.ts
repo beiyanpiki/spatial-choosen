@@ -172,8 +172,11 @@ export function projectSpotsForPlacement(args: {
         barcode: id,
         arrayRow: row,
         arrayCol: col,
-        x: clamp(centerX / heWidth, 0, 1),
-        y: clamp(centerY / heHeight, 0, 1),
+        // Intentionally unclamped: when the placement extends beyond the HE
+        // image, out-of-image spots keep their real position (>1 or <0) so they
+        // render in the white-padded area.
+        x: centerX / heWidth,
+        y: centerY / heHeight,
         width,
         height,
         diameterX: width,

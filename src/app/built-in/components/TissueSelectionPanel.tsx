@@ -12,13 +12,21 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { colorForLabel } from '../../../lib/colors';
-import { computeBaseView, getTransform } from '../../../lib/canvasViewport';
+import {
+  computeBaseView,
+  computeZoomTransform,
+  getTransform,
+  relativeToImage,
+} from '../../../lib/canvasViewport';
+import type { Point } from '@/types/project';
 import type { ChipPlacement, ProjectedSpot } from '@/types/built-in';
 
 const HANDLE_RADIUS_PX = 12;
+const EDGE_THRESHOLD_PX = 8;
 const MIN_PLACEMENT_SIZE_PX = 8;
 
 type Corner = 'tl' | 'tr' | 'bl' | 'br';
+type Edge = 'top' | 'bottom' | 'left' | 'right';
 const CORNERS: readonly Corner[] = ['tl', 'tr', 'bl', 'br'];
 const OPPOSITE_CORNER: Record<Corner, Corner> = {
   tl: 'br',
@@ -32,17 +40,20 @@ const CORNER_CURSOR: Record<Corner, string> = {
   bl: 'nesw-resize',
   br: 'nwse-resize',
 };
+const EDGE_CURSOR: Record<Edge, string> = {
+  top: 'ns-resize',
+  bottom: 'ns-resize',
+  left: 'ew-resize',
+  right: 'ew-resize',
+};
 
 type PointHE = { x: number; y: number };
 
 type Gesture =
   | { mode: 'move'; startPointer: PointHE; startPlacement: ChipPlacement }
-  | {
-      mode: 'resize';
-      opposite: PointHE;
-      dirX: number;
-      dirY: number;
-    };
+  | { mode: 'resize-corner'; opposite: PointHE; dirX: number; dirY: number }
+  | { mode: 'resize-edge'; edge: Edge; fixed: number; center: PointHE }
+  | { mode: 'pan'; startScreen: Point; startPan: Point };
 
 type TissueSelectionPanelProps = {
   imageDataUrl: string | null;
@@ -84,6 +95,8 @@ export function TissueSelectionPanel({
   const [canvasRefresh, setCanvasRefresh] = useState(0);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
   const [hostRect, setHostRect] = useState<DOMRect | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -156,8 +169,8 @@ export function TissueSelectionPanel({
   const neutralSpotFillColor = '#cbd5e026';
 
   const getTransformCb = useCallback(
-    () => getTransform(computeBaseView(hostRect, ratio), 1, { x: 0, y: 0 }),
-    [hostRect, ratio],
+    () => getTransform(computeBaseView(hostRect, ratio), zoom, pan),
+    [hostRect, ratio, zoom, pan],
   );
 
   const hasPlacementSpace = placement !== null
@@ -166,7 +179,7 @@ export function TissueSelectionPanel({
     && heWidth > 0
     && heHeight > 0;
 
-  // HE-pixel point <-> canvas-pixel point via the current transform.
+  // HE-pixel point <-> canvas-pixel point via the current (zoomed/panned) transform.
   const heToCanvas = useCallback(
     (point: PointHE, transform: NonNullable<ReturnType<typeof getTransformCb>>) => ({
       x: transform.originX + (heWidth ? point.x / heWidth : 0) * transform.width,
@@ -204,7 +217,7 @@ export function TissueSelectionPanel({
   );
 
   const findCornerAt = useCallback(
-    (pointerScreen: PointHE, transform: NonNullable<ReturnType<typeof getTransformCb>>): Corner | null => {
+    (pointerScreen: Point, transform: NonNullable<ReturnType<typeof getTransformCb>>): Corner | null => {
       if (!placement) return null;
       for (const corner of CORNERS) {
         const c = heToCanvas(cornerHE(placement, corner), transform);
@@ -217,105 +230,212 @@ export function TissueSelectionPanel({
     [heToCanvas, placement],
   );
 
+  const findEdgeAt = useCallback(
+    (pointerScreen: Point, transform: NonNullable<ReturnType<typeof getTransformCb>>): Edge | null => {
+      if (!placement) return null;
+      const tl = heToCanvas(cornerHE(placement, 'tl'), transform);
+      const tr = heToCanvas(cornerHE(placement, 'tr'), transform);
+      const bl = heToCanvas(cornerHE(placement, 'bl'), transform);
+      const br = heToCanvas(cornerHE(placement, 'br'), transform);
+      const minX = Math.min(tl.x, br.x);
+      const maxX = Math.max(tl.x, br.x);
+      const minY = Math.min(tl.y, br.y);
+      const maxY = Math.max(tl.y, br.y);
+      const nearTop = Math.abs(pointerScreen.y - tl.y) <= EDGE_THRESHOLD_PX
+        && pointerScreen.x >= minX && pointerScreen.x <= maxX;
+      const nearBottom = Math.abs(pointerScreen.y - bl.y) <= EDGE_THRESHOLD_PX
+        && pointerScreen.x >= minX && pointerScreen.x <= maxX;
+      const nearLeft = Math.abs(pointerScreen.x - tl.x) <= EDGE_THRESHOLD_PX
+        && pointerScreen.y >= minY && pointerScreen.y <= maxY;
+      const nearRight = Math.abs(pointerScreen.x - tr.x) <= EDGE_THRESHOLD_PX
+        && pointerScreen.y >= minY && pointerScreen.y <= maxY;
+      if (nearTop) return 'top';
+      if (nearBottom) return 'bottom';
+      if (nearLeft) return 'left';
+      if (nearRight) return 'right';
+      return null;
+    },
+    [heToCanvas, placement],
+  );
+
+  const applyResizeEdge = useCallback(
+    (edge: Edge, fixed: number, center: PointHE, pointerHE: PointHE): ChipPlacement => {
+      let size: number;
+      let next: ChipPlacement;
+      switch (edge) {
+        case 'top':
+          size = fixed - pointerHE.y;
+          next = { size, x: center.x - size / 2, y: fixed - size };
+          break;
+        case 'bottom':
+          size = pointerHE.y - fixed;
+          next = { size, x: center.x - size / 2, y: fixed };
+          break;
+        case 'left':
+          size = fixed - pointerHE.x;
+          next = { size, x: fixed - size, y: center.y - size / 2 };
+          break;
+        case 'right':
+          size = pointerHE.x - fixed;
+          next = { size, x: fixed, y: center.y - size / 2 };
+          break;
+      }
+      return clampPlacement(next);
+    },
+    [clampPlacement],
+  );
+
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (disabled || !hasPlacementSpace || !placement) return;
+      if (disabled) return;
       if (event.button !== 0) return;
-
-      const transform = getTransformCb();
-      if (!transform) return;
       const hostBox = hostRef.current?.getBoundingClientRect() ?? null;
-      if (!hostBox) return;
-      const pointerScreen = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
-      const pointerHE = screenToHE(event.clientX, event.clientY);
-      if (!pointerHE) return;
+      const transform = getTransformCb();
+      if (!hostBox || !transform) return;
+      const pointerScreen: Point = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
 
-      const corner = findCornerAt(pointerScreen, transform);
-      if (corner) {
-        const opposite = OPPOSITE_CORNER[corner];
-        const oppHE = cornerHE(placement, opposite);
-        const draggedHE = cornerHE(placement, corner);
-        gestureRef.current = {
-          mode: 'resize',
-          opposite: oppHE,
-          dirX: Math.sign(draggedHE.x - oppHE.x) || 1,
-          dirY: Math.sign(draggedHE.y - oppHE.y) || 1,
-        };
-      } else if (
-        pointerHE.x >= placement.x
-        && pointerHE.x <= placement.x + placement.size
-        && pointerHE.y >= placement.y
-        && pointerHE.y <= placement.y + placement.size
-      ) {
-        gestureRef.current = { mode: 'move', startPointer: pointerHE, startPlacement: placement };
-      } else {
-        return;
+      if (hasPlacementSpace && placement) {
+        const corner = findCornerAt(pointerScreen, transform);
+        if (corner) {
+          const opposite = OPPOSITE_CORNER[corner];
+          const oppHE = cornerHE(placement, opposite);
+          const draggedHE = cornerHE(placement, corner);
+          gestureRef.current = {
+            mode: 'resize-corner',
+            opposite: oppHE,
+            dirX: Math.sign(draggedHE.x - oppHE.x) || 1,
+            dirY: Math.sign(draggedHE.y - oppHE.y) || 1,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          return;
+        }
+
+        const edge = findEdgeAt(pointerScreen, transform);
+        if (edge) {
+          const center = {
+            x: placement.x + placement.size / 2,
+            y: placement.y + placement.size / 2,
+          };
+          const fixed =
+            edge === 'top' ? placement.y + placement.size
+              : edge === 'bottom' ? placement.y
+                : edge === 'left' ? placement.x + placement.size
+                  : placement.x;
+          gestureRef.current = { mode: 'resize-edge', edge, fixed, center };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          return;
+        }
+
+        const pointerHE = screenToHE(event.clientX, event.clientY);
+        if (
+          pointerHE
+          && pointerHE.x >= placement.x
+          && pointerHE.x <= placement.x + placement.size
+          && pointerHE.y >= placement.y
+          && pointerHE.y <= placement.y + placement.size
+        ) {
+          gestureRef.current = { mode: 'move', startPointer: pointerHE, startPlacement: placement };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          return;
+        }
       }
 
+      // Otherwise, dragging pans the (possibly zoomed) view.
+      gestureRef.current = { mode: 'pan', startScreen: pointerScreen, startPan: pan };
       event.currentTarget.setPointerCapture(event.pointerId);
-      event.preventDefault();
     },
-    [disabled, findCornerAt, getTransformCb, hasPlacementSpace, placement, screenToHE],
+    [disabled, findCornerAt, findEdgeAt, getTransformCb, hasPlacementSpace, pan, placement, screenToHE],
   );
 
   const handlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (disabled || !hasPlacementSpace) return;
+      if (disabled) return;
       const gesture = gestureRef.current;
+      const hostBox = hostRef.current?.getBoundingClientRect() ?? null;
+      const canvas = canvasRef.current;
+      if (!hostBox) return;
+      const pointerScreen: Point = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
 
       if (!gesture) {
         // Hover cursor feedback only.
         const transform = getTransformCb();
-        const hostBox = hostRef.current?.getBoundingClientRect() ?? null;
-        const canvas = canvasRef.current;
-        if (!transform || !hostBox || !canvas || !placement) return;
-        const pointerScreen = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
-        const corner = findCornerAt(pointerScreen, transform);
+        if (!transform || !canvas) return;
+        const corner = hasPlacementSpace ? findCornerAt(pointerScreen, transform) : null;
         if (corner) {
           canvas.style.cursor = CORNER_CURSOR[corner];
-        } else {
-          const pointerHE = screenToHE(event.clientX, event.clientY);
-          const inside = pointerHE
-            && pointerHE.x >= placement.x
-            && pointerHE.x <= placement.x + placement.size
-            && pointerHE.y >= placement.y
-            && pointerHE.y <= placement.y + placement.size;
-          canvas.style.cursor = inside ? 'move' : 'default';
+          return;
         }
+        const edge = hasPlacementSpace ? findEdgeAt(pointerScreen, transform) : null;
+        if (edge) {
+          canvas.style.cursor = EDGE_CURSOR[edge];
+          return;
+        }
+        const pointerHE = screenToHE(event.clientX, event.clientY);
+        const inside = placement && pointerHE
+          && pointerHE.x >= placement.x
+          && pointerHE.x <= placement.x + placement.size
+          && pointerHE.y >= placement.y
+          && pointerHE.y <= placement.y + placement.size;
+        canvas.style.cursor = inside ? 'move' : 'grab';
         return;
       }
 
-      const pointerHE = screenToHE(event.clientX, event.clientY);
-      if (!pointerHE) return;
-
-      if (gesture.mode === 'move') {
-        const dx = pointerHE.x - gesture.startPointer.x;
-        const dy = pointerHE.y - gesture.startPointer.y;
-        onPlacementChange(
-          clampPlacement({
-            ...gesture.startPlacement,
-            x: gesture.startPlacement.x + dx,
-            y: gesture.startPlacement.y + dy,
-          }),
-        );
-      } else {
-        const { opposite, dirX, dirY } = gesture;
-        const size = Math.max(
-          Math.abs(pointerHE.x - opposite.x),
-          Math.abs(pointerHE.y - opposite.y),
-        );
-        const placed = clampPlacement({
-          size,
-          x: Math.min(opposite.x, opposite.x + dirX * size),
-          y: Math.min(opposite.y, opposite.y + dirY * size),
-        });
-        onPlacementChange(placed);
+      switch (gesture.mode) {
+        case 'pan': {
+          setPan({
+            x: gesture.startPan.x + (pointerScreen.x - gesture.startScreen.x),
+            y: gesture.startPan.y + (pointerScreen.y - gesture.startScreen.y),
+          });
+          return;
+        }
+        case 'move': {
+          const pointerHE = screenToHE(event.clientX, event.clientY);
+          if (!pointerHE) return;
+          onPlacementChange(
+            clampPlacement({
+              ...gesture.startPlacement,
+              x: gesture.startPlacement.x + (pointerHE.x - gesture.startPointer.x),
+              y: gesture.startPlacement.y + (pointerHE.y - gesture.startPointer.y),
+            }),
+          );
+          return;
+        }
+        case 'resize-corner': {
+          const pointerHE = screenToHE(event.clientX, event.clientY);
+          if (!pointerHE) return;
+          const { opposite, dirX, dirY } = gesture;
+          const size = Math.max(
+            Math.abs(pointerHE.x - opposite.x),
+            Math.abs(pointerHE.y - opposite.y),
+          );
+          onPlacementChange(
+            clampPlacement({
+              size,
+              x: Math.min(opposite.x, opposite.x + dirX * size),
+              y: Math.min(opposite.y, opposite.y + dirY * size),
+            }),
+          );
+          return;
+        }
+        case 'resize-edge': {
+          const pointerHE = screenToHE(event.clientX, event.clientY);
+          if (!pointerHE) return;
+          onPlacementChange(
+            applyResizeEdge(gesture.edge, gesture.fixed, gesture.center, pointerHE),
+          );
+          return;
+        }
       }
     },
     [
+      applyResizeEdge,
       clampPlacement,
       disabled,
       findCornerAt,
+      findEdgeAt,
       getTransformCb,
       hasPlacementSpace,
       onPlacementChange,
@@ -332,6 +452,25 @@ export function TissueSelectionPanel({
       }
     }
   }, []);
+
+  const handleWheel = useCallback(
+    (event: React.WheelEvent<HTMLCanvasElement>) => {
+      if (disabled) return;
+      const hostBox = hostRef.current?.getBoundingClientRect() ?? null;
+      const base = computeBaseView(hostRect, ratio);
+      if (!hostBox || !base) return;
+      const anchorScreen: Point = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
+      const anchorNorm = relativeToImage(anchorScreen, getTransformCb());
+      event.preventDefault();
+      const delta = event.deltaY > 0 ? 0.9 : 1.1;
+      const result = computeZoomTransform(base, zoom * delta, anchorNorm ?? undefined, anchorScreen);
+      if (result) {
+        setZoom(result.zoom);
+        setPan(result.pan);
+      }
+    },
+    [disabled, getTransformCb, hostRect, ratio, zoom],
+  );
 
   // Draw the HE image, the activation grid, the placement outline, and handles.
   useEffect(() => {
@@ -420,7 +559,7 @@ export function TissueSelectionPanel({
             <Stack spacing={1}>
               <Text fontSize='lg' fontWeight='semibold'>Chip grid placement</Text>
               <Text fontSize='sm' color='gray.500'>
-                Drag the grid to position it over the tissue; drag a corner handle to resize it.
+                Drag the grid to position it; drag an edge or corner to resize. Scroll to zoom, drag outside the grid to pan.
               </Text>
             </Stack>
             <HStack spacing={3} wrap='wrap' justify={{ base: 'flex-start', md: 'flex-end' }}>
@@ -450,6 +589,7 @@ export function TissueSelectionPanel({
               onPointerMove={handlePointerMove}
               onPointerUp={endGesture}
               onPointerCancel={endGesture}
+              onWheel={handleWheel}
             />
           </Box>
         </Stack>
