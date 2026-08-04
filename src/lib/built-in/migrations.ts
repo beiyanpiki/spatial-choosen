@@ -49,8 +49,10 @@ const createDefaultChipConfigSlice = (): ChipConfigSlice => ({
 	columns: null,
 	pitchX: null,
 	pitchY: null,
+	spotDiameter: null,
 	origin: null,
 	rotationDegrees: 0,
+	placement: null,
 	projectedSpots: null,
 });
 
@@ -257,8 +259,10 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		columns,
 		pitchX,
 		pitchY,
+		spotDiameter,
 		origin,
 		rotationDegrees,
+		placement,
 	} = value as Record<string, unknown>;
 
 	const allowedStatuses = new Set([
@@ -273,6 +277,17 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		typeof status === "string" && allowedStatuses.has(status)
 			? (status as PreprocessSliceBase["status"])
 			: "idle";
+
+	const normalizedPlacement = isRecord(placement)
+		&& typeof (placement as Record<string, unknown>).x === "number"
+		&& typeof (placement as Record<string, unknown>).y === "number"
+		&& typeof (placement as Record<string, unknown>).size === "number"
+		? {
+				x: (placement as Record<string, unknown>).x as number,
+				y: (placement as Record<string, unknown>).y as number,
+				size: (placement as Record<string, unknown>).size as number,
+			}
+		: null;
 
 	const normalizedOrigin = isRecord(origin)
 		&& typeof (origin as Record<string, unknown>).x === "number"
@@ -296,7 +311,9 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		columns: typeof columns === "number" ? columns : null,
 		pitchX: typeof pitchX === "number" ? pitchX : null,
 		pitchY: typeof pitchY === "number" ? pitchY : null,
+		spotDiameter: typeof spotDiameter === "number" ? spotDiameter : null,
 		origin: normalizedOrigin,
+		placement: normalizedPlacement,
 		rotationDegrees:
 			typeof rotationDegrees === "number" ? rotationDegrees : 0,
 		// projectedSpots are recomputed in the UI after load; never persist them.

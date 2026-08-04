@@ -61,8 +61,10 @@ export const buildEmptyPreprocessProject = (
 			columns: null,
 			pitchX: null,
 			pitchY: null,
+			spotDiameter: null,
 			origin: null,
 			rotationDegrees: 0,
+			placement: null,
 			projectedSpots: null,
 		},
 		tissueSelection: {

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PreprocessProject, PreprocessPoint } from '@/types/built-in';
+import type { ChipPlacement, PreprocessProject } from '@/types/built-in';
 
 type CapturedPersistOptions = {
   mode?: string;
@@ -87,38 +87,19 @@ vi.mock('./StepSidebar', () => ({
 vi.mock('./TissueSelectionPanel', () => ({
   TissueSelectionPanel: (props: {
     selectedSpotIds: string[];
-    onEditCommit?: (editArea: PreprocessPoint[]) => void;
-    onSpotToggle?: (spotId: string) => void;
+    placement: ChipPlacement | null;
+    onPlacementChange?: (placement: ChipPlacement) => void;
   }) => (
     <div data-testid="tissue-selection-panel-mock">
       <div data-testid="tissue-panel-selected-count">
-        Number of Tissue Spots: {props.selectedSpotIds.length}
+        Active spots: {props.selectedSpotIds.length}
       </div>
       <button
         type="button"
-        data-testid="tissue-panel-commit-manual-edit"
-        onClick={() => props.onEditCommit?.([
-          { x: 0.15, y: 0.15 },
-          { x: 0.35, y: 0.15 },
-          { x: 0.35, y: 0.35 },
-          { x: 0.15, y: 0.35 },
-        ])}
+        data-testid="tissue-panel-change-placement"
+        onClick={() => props.onPlacementChange?.({ x: 50, y: 50, size: 200 })}
       >
-        Commit manual tissue edit
-      </button>
-      <button
-        type="button"
-        data-testid="tissue-panel-toggle-spot"
-        onClick={() => props.onSpotToggle?.('spot-a')}
-      >
-        Toggle spot
-      </button>
-      <button
-        type="button"
-        data-testid="tissue-panel-toggle-missing-spot"
-        onClick={() => props.onSpotToggle?.('missing-spot')}
-      >
-        Toggle missing spot
+        Move placement
       </button>
     </div>
   ),
@@ -192,8 +173,10 @@ const createProject = (): PreprocessProject => ({
     columns: 96,
     pitchX: 1,
     pitchY: 1,
+    spotDiameter: 25,
     origin: { x: 0, y: 0 },
     rotationDegrees: 0,
+    placement: { x: 10, y: 10, size: 100 },
     projectedSpots: [
       createProjectedSpot('spot-a', 0.25, 0.25, 1, 1),
       createProjectedSpot('spot-b', 0.75, 0.25, 1, 2),
@@ -334,16 +317,16 @@ describe('PreprocessWorkspace tissue selection', () => {
     const toggleButton = screen.getByRole('button', { name: 'Hide spot grid' });
 
     expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Active spots: 0');
 
     await user.click(toggleButton);
 
     expect(screen.getByRole('button', { name: 'Show spot grid' })).toBeInTheDocument();
     expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
-    expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(panelSelectedCount).toHaveTextContent('Active spots: 0');
   });
 
-  it('persists manual tissue canvas edits with tissue-aware debounced options', async () => {
+  it('persists chipConfig.placement via onPlacementChange and re-centers on reset', async () => {
     const user = userEvent.setup();
     const capturedMutations: CapturedProjectMutation[] = [];
     render(
@@ -352,146 +335,36 @@ describe('PreprocessWorkspace tissue selection', () => {
       />,
     );
 
-    await user.click(screen.getByTestId('tissue-panel-commit-manual-edit'));
+    await user.click(screen.getByTestId('tissue-panel-change-placement'));
+
+    const placementMutation = capturedMutations.find(
+      (mutation) => mutation.project.chipConfig.placement?.x === 50
+        && mutation.project.chipConfig.placement?.y === 50,
+    );
+    expect(placementMutation).toBeDefined();
+    expect(placementMutation?.project.chipConfig.placement).toEqual({ x: 50, y: 50, size: 200 });
+    // Placement updates are persisted with the metadata debounced strategy.
+    expect(placementMutation?.persistOptions).toEqual({ mode: 'metadata', strategy: 'debounced' });
+
+    // Reset re-centers the placement over the 200x150 HE image:
+    // size = min(200, 150) * 0.9 = 135, centered.
+    await user.click(screen.getByTestId('tissue-reset-placement'));
 
     await waitFor(() => {
-      expect(capturedMutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            persistOptions: { mode: 'tissue', strategy: 'debounced' },
-          }),
-        ]),
+      const resetMutation = capturedMutations.find(
+        (mutation) => mutation.project.chipConfig.placement?.size === 135,
       );
+      expect(resetMutation).toBeDefined();
     });
 
-    const manualEditMutation = capturedMutations.find(
-      (mutation) => mutation.persistOptions?.mode === 'tissue'
-        && mutation.persistOptions.strategy === 'debounced',
+    const resetMutation = capturedMutations.find(
+      (mutation) => mutation.project.chipConfig.placement?.size === 135,
     );
-    expect(manualEditMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
-    expect(manualEditMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
-  });
-
-  it('persists a single-click spot toggle with tissue-aware debounced options', async () => {
-    const user = userEvent.setup();
-    const capturedMutations: CapturedProjectMutation[] = [];
-    render(
-      <WorkspaceHarness
-        onProjectMutateCapture={(mutation) => capturedMutations.push(mutation)}
-      />,
-    );
-
-    await user.click(screen.getByTestId('tissue-panel-toggle-spot'));
-
-    await waitFor(() => {
-      expect(capturedMutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            persistOptions: { mode: 'tissue', strategy: 'debounced' },
-          }),
-        ]),
-      );
+    expect(resetMutation?.project.chipConfig.placement).toEqual({
+      size: 135,
+      x: (200 - 135) / 2,
+      y: (150 - 135) / 2,
     });
-
-    const toggleMutation = capturedMutations.find(
-      (mutation) => mutation.persistOptions?.mode === 'tissue'
-        && mutation.persistOptions.strategy === 'debounced',
-    );
-    expect(toggleMutation?.project.tissueSelection.matrix?.values[0]).toBe(1);
-    expect(toggleMutation?.project.tissueSelection.selectedSpotIds).toEqual(['spot-a']);
-  });
-
-  it('leaves the project unchanged when toggling an unknown spot id', async () => {
-    const user = userEvent.setup();
-    const initialProject = createProject();
-    const capturedMutations: CapturedProjectMutation[] = [];
-    render(
-      <WorkspaceHarness
-        initialProject={initialProject}
-        onProjectMutateCapture={(mutation) => capturedMutations.push(mutation)}
-      />,
-    );
-
-    await user.click(screen.getByTestId('tissue-panel-toggle-missing-spot'));
-
-    // The workspace still forwards the mutation request, but buildManualTissueSelectionState
-    // returns the slice unchanged so the project object is identical.
-    expect(capturedMutations).toHaveLength(1);
-    expect(capturedMutations[0]?.project).toBe(initialProject);
-  });
-
-  it('inverts the current tissue selection with tissue-aware debounced options', async () => {
-    const user = userEvent.setup();
-    const capturedMutations: CapturedProjectMutation[] = [];
-    render(
-      <WorkspaceHarness
-        onProjectMutateCapture={(mutation) => capturedMutations.push(mutation)}
-      />,
-    );
-
-    await user.click(screen.getByTestId('tissue-invert-selection'));
-
-    await waitFor(() => {
-      expect(capturedMutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            persistOptions: { mode: 'tissue', strategy: 'debounced' },
-          }),
-        ]),
-      );
-    });
-
-    const invertMutation = capturedMutations.find(
-      (mutation) => mutation.persistOptions?.mode === 'tissue'
-        && mutation.persistOptions.strategy === 'debounced',
-    );
-    expect(invertMutation?.project.tissueSelection.matrix).not.toBeNull();
-  });
-});
-
-describe('PreprocessWorkspace projected spot grid', () => {
-  it('projects the chip grid onto the HE image when projectedSpots is null', async () => {
-    mockLoadChipConfigData.mockResolvedValue({
-      manifest: {
-        id: '15um',
-        label: '15um',
-        gridRows: 2,
-        gridCols: 2,
-        spotDiameter: 10,
-        spotGap: 4,
-        barcodeTemplatePath: '/unused.csv',
-        tissuePositionsPath: '/unused.csv',
-      },
-      templateEntries: [
-        { barcode: 'spot-a', arrayRow: 1, arrayCol: 1 },
-        { barcode: 'spot-b', arrayRow: 1, arrayCol: 2 },
-        { barcode: 'spot-c', arrayRow: 2, arrayCol: 1 },
-        { barcode: 'spot-d', arrayRow: 2, arrayCol: 2 },
-      ],
-    });
-
-    const initialProject = createProject();
-    initialProject.chipConfig.projectedSpots = null;
-
-    let latestProject = initialProject;
-    render(
-      <WorkspaceHarness
-        initialProject={initialProject}
-        onProjectMutateCapture={(mutation) => {
-          latestProject = mutation.project;
-        }}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(mockLoadChipConfigData).toHaveBeenCalledWith('15um');
-      expect(latestProject.chipConfig.projectedSpots).not.toBeNull();
-    });
-
-    expect(latestProject.chipConfig.projectedSpots?.length).toBe(4);
-    expect(latestProject.chipConfig.rows).toBe(2);
-    expect(latestProject.chipConfig.columns).toBe(2);
-    expect(latestProject.chipConfig.status).toBe('complete');
   });
 });
 
@@ -556,11 +429,11 @@ describe('Preprocess page autosave handling', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('does not mark tissue autosave saved when the tissue payload write fails', async () => {
-    const tissueFailure = new Error('forced tissue payload failure');
+  it('surfaces debounced metadata persistence failures from a placement change', async () => {
+    const placementFailure = new Error('forced metadata payload failure');
     const storedProject = createStoredTissueProject();
     mockGetPreprocessProject.mockResolvedValue(storedProject);
-    mockUpsertPreprocessProject.mockRejectedValue(tissueFailure);
+    mockUpsertPreprocessProject.mockRejectedValue(placementFailure);
 
     const user = userEvent.setup();
     render(
@@ -573,10 +446,10 @@ describe('Preprocess page autosave handling', () => {
       expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
     });
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-invert-selection')).toBeInTheDocument();
+      expect(screen.getByTestId('tissue-panel-change-placement')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId('tissue-invert-selection'));
+    await user.click(screen.getByTestId('tissue-panel-change-placement'));
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 350));
     });
@@ -584,7 +457,7 @@ describe('Preprocess page autosave handling', () => {
     await waitFor(() => {
       expect(mockUpsertPreprocessProject).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'preprocess-project' }),
-        { mode: 'tissue' },
+        { mode: 'metadata' },
       );
       expect(screen.getByTestId('autosave-status')).toHaveTextContent('error');
     });
@@ -594,24 +467,5 @@ describe('Preprocess page autosave handling', () => {
       title: 'Autosave failed',
       status: 'error',
     }));
-  });
-
-  it('does not persist tissue metadata alone during pagehide', async () => {
-    const storedProject = createStoredTissueProject();
-    mockGetPreprocessProject.mockResolvedValue(storedProject);
-    const user = userEvent.setup();
-    render(
-      <ChakraProvider theme={theme}>
-        <PreprocessPage />
-      </ChakraProvider>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tissue-invert-selection')).toBeInTheDocument();
-    });
-    await user.click(screen.getByTestId('tissue-invert-selection'));
-    window.dispatchEvent(new Event('pagehide'));
-
-    expect(mockUpsertPreprocessProjectMetadata).not.toHaveBeenCalled();
   });
 });

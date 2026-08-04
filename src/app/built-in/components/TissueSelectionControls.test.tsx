@@ -4,52 +4,37 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ChipPlacement } from "@/types/built-in";
 import { theme } from "../../../theme";
-import {
-	type TissueSelectionSupportState,
-	TissueSelectionControls,
-	type TissueTool,
-} from "./TissueSelectionControls";
+import { TissueSelectionControls } from "./TissueSelectionControls";
 
 type RenderOptions = {
-	supportState?: TissueSelectionSupportState;
-	unsupportedReason?: string | null;
 	disabled?: boolean;
-	tissueTool?: TissueTool;
 	showSpots?: boolean;
+	placement?: ChipPlacement | null;
 };
 
 function renderControls({
-	supportState = "supported",
-	unsupportedReason = null,
 	disabled = false,
-	tissueTool = "activate",
 	showSpots = true,
+	placement = null,
 }: RenderOptions = {}) {
-	const onTissueToolChange = vi.fn();
-	const onInvertSelection = vi.fn();
 	const onShowSpotsChange = vi.fn();
+	const onResetPlacement = vi.fn();
 
 	function Harness() {
-		const [currentTissueTool, setCurrentTissueTool] = useState(tissueTool);
 		const [currentShowSpots, setCurrentShowSpots] = useState(showSpots);
 
 		return (
 			<TissueSelectionControls
-				supportState={supportState}
-				unsupportedReason={unsupportedReason}
 				disabled={disabled}
-				tissueTool={currentTissueTool}
 				showSpots={currentShowSpots}
-				onTissueToolChange={(value) => {
-					onTissueToolChange(value);
-					setCurrentTissueTool(value);
-				}}
-				onInvertSelection={onInvertSelection}
 				onShowSpotsChange={(value) => {
 					onShowSpotsChange(value);
 					setCurrentShowSpots(value);
 				}}
+				onResetPlacement={onResetPlacement}
+				placement={placement}
 			/>
 		);
 	}
@@ -60,68 +45,63 @@ function renderControls({
 		</ChakraProvider>,
 	);
 
-	return { onTissueToolChange, onInvertSelection, onShowSpotsChange };
+	return { onShowSpotsChange, onResetPlacement };
 }
 
 describe("TissueSelectionControls", () => {
-	it("toggles the show spots button label and callback", async () => {
+	it("toggles the show/hide spot grid button label and callback", async () => {
 		const user = userEvent.setup();
 		const { onShowSpotsChange } = renderControls({ showSpots: true });
 
-		const toggleButton = screen.getByRole("button", { name: "Hide spot grid" });
+		const toggleButton = screen.getByTestId("tissue-show-spots-toggle");
+		expect(toggleButton).toHaveTextContent("Hide spot grid");
 		expect(toggleButton).toBeEnabled();
 
 		await user.click(toggleButton);
+
 		expect(onShowSpotsChange).toHaveBeenCalledWith(false);
-		expect(screen.getByRole("button", { name: "Show spot grid" })).toBeInTheDocument();
+		expect(toggleButton).toHaveTextContent("Show spot grid");
 	});
 
-	it("exposes only the tissue and background marking tools and the invert action", async () => {
+	it("calls onResetPlacement when the reset button is clicked", async () => {
 		const user = userEvent.setup();
-		const { onTissueToolChange, onInvertSelection } = renderControls();
-
-		const activateButton = screen.getByRole("button", { name: "Mark as tissue" });
-		const deactivateButton = screen.getByRole("button", { name: "Mark as background" });
-		expect(activateButton).toBeEnabled();
-		expect(deactivateButton).toBeEnabled();
-		expect(
-			screen.getByRole("button", { name: "Invert selection" }),
-		).toBeInTheDocument();
-		// Auto-detection UI was removed in the HE-only model.
-		expect(
-			screen.queryByRole("button", { name: /detect tissue/i }),
-		).not.toBeInTheDocument();
-		expect(
-			screen.queryByTestId("tissue-threshold-mode-select"),
-		).not.toBeInTheDocument();
-
-		await user.click(screen.getByTestId("tissue-tool-activate"));
-		expect(onTissueToolChange).toHaveBeenCalledWith("activate");
-
-		await user.click(screen.getByTestId("tissue-tool-deactivate"));
-		expect(onTissueToolChange).toHaveBeenCalledWith("deactivate");
-
-		await user.click(screen.getByTestId("tissue-invert-selection"));
-		expect(onInvertSelection).toHaveBeenCalledTimes(1);
-	});
-
-	it("renders the unsupported notice and disables manual refinement actions", () => {
-		renderControls({
-			supportState: "unsupported",
-			unsupportedReason: "50um tissue auto-selection requires a 64x64 spot grid.",
+		const { onResetPlacement } = renderControls({
+			placement: { x: 10, y: 10, size: 100 },
 		});
 
-		expect(
-			screen.getByText(
-				"Tissue spot selection currently supports only 15um and 50um capture chips.",
-			),
-		).toBeInTheDocument();
-		expect(
-			screen.getByText("50um tissue auto-selection requires a 64x64 spot grid."),
-		).toBeInTheDocument();
-		expect(screen.getByTestId("tissue-tool-activate")).toBeDisabled();
-		expect(screen.getByTestId("tissue-tool-deactivate")).toBeDisabled();
-		expect(screen.getByTestId("tissue-invert-selection")).toBeDisabled();
+		const resetButton = screen.getByTestId("tissue-reset-placement");
+		expect(resetButton).toBeEnabled();
+
+		await user.click(resetButton);
+
+		expect(onResetPlacement).toHaveBeenCalledTimes(1);
+	});
+
+	it("renders the rounded placement size and position in the readout", () => {
+		renderControls({
+			placement: { x: 123.4, y: 98.6, size: 456.7 },
+		});
+
+		expect(screen.getByTestId("tissue-placement-readout")).toHaveTextContent(
+			"Covered region: 457×457 px at (123, 99)",
+		);
+	});
+
+	it("renders the empty prompt when placement is null", () => {
+		renderControls({ placement: null });
+
+		expect(screen.getByTestId("tissue-placement-readout")).toHaveTextContent(
+			"Position the chip grid over the tissue.",
+		);
+	});
+
+	it("disables both actions when disabled", () => {
+		renderControls({
+			disabled: true,
+			placement: { x: 10, y: 10, size: 100 },
+		});
+
 		expect(screen.getByTestId("tissue-show-spots-toggle")).toBeDisabled();
+		expect(screen.getByTestId("tissue-reset-placement")).toBeDisabled();
 	});
 });

@@ -102,14 +102,25 @@ export type LegacyProjectedSpot = ProjectedSpotBase
   & DeprecatedProjectedSpotDiameterAliases
   & Partial<CanonicalProjectedSpotDimensions>;
 
+export type ChipPlacement = {
+  /** Top-left X of the grid square, in full-resolution HE pixel space. */
+  x: number;
+  /** Top-left Y of the grid square, in full-resolution HE pixel space. */
+  y: number;
+  /** Side length of the (square) grid, in full-resolution HE pixel space. */
+  size: number;
+};
+
 export type ChipConfigSlice = PreprocessSliceBase & {
   chipType: string | null;
   rows: number | null;
   columns: number | null;
   pitchX: number | null;
   pitchY: number | null;
+  spotDiameter: number | null;
   origin: PreprocessPoint | null;
   rotationDegrees: number;
+  placement: ChipPlacement | null;
   projectedSpots: ProjectedSpot[] | null;
 };
 

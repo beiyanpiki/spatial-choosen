@@ -47,8 +47,10 @@ const createProject = (
     columns: 96,
     pitchX: 1,
     pitchY: 1,
+    spotDiameter: 25,
     origin: { x: 0, y: 0 },
     rotationDegrees: 0,
+    placement: null,
     projectedSpots: [
       {
         id: 'spot-a',

@@ -1,4 +1,4 @@
-import type { ProjectedSpot } from '@/types/built-in';
+import type { ChipPlacement, ProjectedSpot } from '@/types/built-in';
 import type { ChipConfigManifest, ChipTemplateEntry } from './chipConfigs';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -108,4 +108,79 @@ export function projectSpotsForCrop(args: {
   });
 
   return projected;
+}
+
+/**
+ * Project the full chip spot grid into a user-placed square region on the HE
+ * image, returning spots in HE-normalized [0,1] coordinates. Unlike
+ * `projectSpotsForCrop` (which fits+centers the grid in a frame), this lays the
+ * grid out inside `placement` (a square in full-HE pixel space) so the caller
+ * can move/scale the grid over the image. Activation is looked up downstream by
+ * `(arrayRow, arrayCol)`, so spot ids are synthetic coordinates.
+ */
+export function projectSpotsForPlacement(args: {
+  rows: number;
+  columns: number;
+  spotDiameter: number;
+  spotGap: number;
+  placement: ChipPlacement;
+  heWidth: number;
+  heHeight: number;
+}): ProjectedSpot[] {
+  const {
+    rows,
+    columns,
+    spotDiameter,
+    spotGap,
+    placement,
+    heWidth,
+    heHeight,
+  } = args;
+
+  if (
+    !heWidth
+    || !heHeight
+    || !placement.size
+    || rows <= 0
+    || columns <= 0
+    || spotDiameter <= 0
+    || spotGap < 0
+  ) {
+    return [];
+  }
+
+  // Scale the full grid block (spots + surrounding gaps) to fill the placement square.
+  const blockExtent = columns * spotDiameter + (columns + 1) * spotGap;
+  const scale = placement.size / blockExtent;
+  const spotPx = spotDiameter * scale;
+  const gapPx = spotGap * scale;
+
+  const spots: ProjectedSpot[] = [];
+  for (let row = 1; row <= rows; row += 1) {
+    for (let col = 1; col <= columns; col += 1) {
+      const localCenterX = gapPx + (col - 1) * (spotPx + gapPx) + spotPx / 2;
+      const localCenterY = gapPx + (row - 1) * (spotPx + gapPx) + spotPx / 2;
+      const centerX = placement.x + localCenterX;
+      const centerY = placement.y + localCenterY;
+
+      const width = clamp(spotPx / heWidth, 0, 1);
+      const height = clamp(spotPx / heHeight, 0, 1);
+      const id = `${row}:${col}`;
+
+      spots.push({
+        id,
+        barcode: id,
+        arrayRow: row,
+        arrayCol: col,
+        x: clamp(centerX / heWidth, 0, 1),
+        y: clamp(centerY / heHeight, 0, 1),
+        width,
+        height,
+        diameterX: width,
+        diameterY: height,
+      });
+    }
+  }
+
+  return spots;
 }

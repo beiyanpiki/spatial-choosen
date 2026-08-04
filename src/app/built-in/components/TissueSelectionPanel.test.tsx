@@ -16,8 +16,8 @@ const clearRectMock = vi.fn();
 const fillRectMock = vi.fn();
 const strokeRectMock = vi.fn();
 const beginPathMock = vi.fn();
-const moveToMock = vi.fn();
-const lineToMock = vi.fn();
+const arcMock = vi.fn();
+const fillMock = vi.fn();
 const strokeMock = vi.fn();
 
 const contextStub = {
@@ -26,8 +26,10 @@ const contextStub = {
 	fillRect: fillRectMock,
 	strokeRect: strokeRectMock,
 	beginPath: beginPathMock,
-	moveTo: moveToMock,
-	lineTo: lineToMock,
+	moveTo: vi.fn(),
+	lineTo: vi.fn(),
+	arc: arcMock,
+	fill: fillMock,
 	stroke: strokeMock,
 	fillStyle: '',
 	strokeStyle: '',
@@ -92,8 +94,8 @@ afterEach(() => {
 	fillRectMock.mockClear();
 	strokeRectMock.mockClear();
 	beginPathMock.mockClear();
-	moveToMock.mockClear();
-	lineToMock.mockClear();
+	arcMock.mockClear();
+	fillMock.mockClear();
 	strokeMock.mockClear();
 	contextStub.fillStyle = '';
 	contextStub.strokeStyle = '';
@@ -101,7 +103,7 @@ afterEach(() => {
 });
 
 describe('TissueSelectionPanel', () => {
-	it('renders spots without borders and with more transparent fills', async () => {
+	it('renders the placement grid with colored spots and the active-spot count', async () => {
 		const assignedFill = colorForLabel(1).toLowerCase();
 		const expectedAssignedFill = `${assignedFill}40`;
 		const expectedNeutralFill = '#e5e5e520';
@@ -117,8 +119,8 @@ describe('TissueSelectionPanel', () => {
 					imageDataUrl='data:image/png;base64,AA=='
 					projectedSpots={[
 						{
-							id: 'spot-a',
-							barcode: 'spot-a',
+							id: '1:1',
+							barcode: '1:1',
 							arrayRow: 1,
 							arrayCol: 1,
 							x: 0.25,
@@ -129,8 +131,8 @@ describe('TissueSelectionPanel', () => {
 							diameterY: 0.2,
 						},
 						{
-							id: 'spot-b',
-							barcode: 'spot-b',
+							id: '1:2',
+							barcode: '1:2',
 							arrayRow: 1,
 							arrayCol: 2,
 							x: 0.75,
@@ -141,7 +143,11 @@ describe('TissueSelectionPanel', () => {
 							diameterY: 0.2,
 						},
 					]}
-					selectedSpotIds={['spot-a']}
+					selectedSpotIds={['1:1']}
+					placement={{ x: 0, y: 0, size: 1000 }}
+					heWidth={1000}
+					heHeight={1000}
+					onPlacementChange={vi.fn()}
 				/>
 			</ChakraProvider>,
 		);
@@ -150,22 +156,23 @@ describe('TissueSelectionPanel', () => {
 			expect(fillStyles).toContain(expectedAssignedFill);
 			expect(fillStyles).toContain(expectedNeutralFill);
 		});
-		expect(strokeRectMock).not.toHaveBeenCalled();
 
-		expect(screen.getByText('Tissue Spot Selection')).toBeInTheDocument();
-		expect(screen.getByText('Automatically identify tissue-covered spots and refine the selection manually if needed.')).toBeInTheDocument();
-		expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
+		// The placement outline square is drawn on top of the spots.
+		expect(strokeRectMock).toHaveBeenCalled();
+
+		expect(screen.getByText('Chip grid placement')).toBeInTheDocument();
+		expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Active spots: 1');
 	});
 
-	it('skips spot drawing when spot visibility is turned off', async () => {
+	it('skips spot drawing when spot visibility is turned off but still draws the placement outline', async () => {
 		render(
 			<ChakraProvider theme={theme}>
 				<TissueSelectionPanel
 					imageDataUrl='data:image/png;base64,AA=='
 					projectedSpots={[
 						{
-							id: 'spot-a',
-							barcode: 'spot-a',
+							id: '1:1',
+							barcode: '1:1',
 							arrayRow: 1,
 							arrayCol: 1,
 							x: 0.25,
@@ -176,8 +183,12 @@ describe('TissueSelectionPanel', () => {
 							diameterY: 0.2,
 						},
 					]}
-					selectedSpotIds={['spot-a']}
+					selectedSpotIds={['1:1']}
+					placement={{ x: 0, y: 0, size: 1000 }}
+					heWidth={1000}
+					heHeight={1000}
 					showSpots={false}
+					onPlacementChange={vi.fn()}
 				/>
 			</ChakraProvider>,
 		);
@@ -187,6 +198,5 @@ describe('TissueSelectionPanel', () => {
 		});
 
 		expect(fillRectMock).not.toHaveBeenCalled();
-		expect(strokeRectMock).not.toHaveBeenCalled();
 	});
 });

@@ -2,8 +2,6 @@
 
 import {
   Box,
-  Button,
-  ButtonGroup,
   Card,
   CardBody,
   Flex,
@@ -14,69 +12,89 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { colorForLabel } from '../../../lib/colors';
-import {
-  computeBaseView,
-  computeZoomTransform,
-  getTransform,
-  relativeToImage,
-} from '../../../lib/canvasViewport';
-import type { Point } from '@/types/project';
-import type { PreprocessPoint, ProjectedSpot } from '@/types/built-in';
+import { computeBaseView, getTransform } from '../../../lib/canvasViewport';
+import type { ChipPlacement, ProjectedSpot } from '@/types/built-in';
 
-export type ToolMode = 'activate' | 'deactivate';
+const HANDLE_RADIUS_PX = 12;
+const MIN_PLACEMENT_SIZE_PX = 8;
 
-const CLICK_MOVEMENT_THRESHOLD_PX = 4;
+type Corner = 'tl' | 'tr' | 'bl' | 'br';
+const CORNERS: readonly Corner[] = ['tl', 'tr', 'bl', 'br'];
+const OPPOSITE_CORNER: Record<Corner, Corner> = {
+  tl: 'br',
+  tr: 'bl',
+  bl: 'tr',
+  br: 'tl',
+};
+const CORNER_CURSOR: Record<Corner, string> = {
+  tl: 'nwse-resize',
+  tr: 'nesw-resize',
+  bl: 'nesw-resize',
+  br: 'nwse-resize',
+};
+
+type PointHE = { x: number; y: number };
+
+type Gesture =
+  | { mode: 'move'; startPointer: PointHE; startPlacement: ChipPlacement }
+  | {
+      mode: 'resize';
+      opposite: PointHE;
+      dirX: number;
+      dirY: number;
+    };
 
 type TissueSelectionPanelProps = {
   imageDataUrl: string | null;
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
+  placement: ChipPlacement | null;
+  heWidth: number | null;
+  heHeight: number | null;
   showSpots?: boolean;
   disabled?: boolean;
-  showControls?: boolean;
-  tool?: ToolMode;
-  onToolChange?: (tool: ToolMode) => void;
-  onEditCommit?: (editArea: PreprocessPoint[]) => void;
-  onSpotToggle?: (spotId: string) => void;
+  onPlacementChange: (placement: ChipPlacement) => void;
+};
+
+const cornerHE = (placement: ChipPlacement, corner: Corner): PointHE => {
+  const { x, y, size } = placement;
+  switch (corner) {
+    case 'tl':
+      return { x, y };
+    case 'tr':
+      return { x: x + size, y };
+    case 'bl':
+      return { x, y: y + size };
+    case 'br':
+      return { x: x + size, y: y + size };
+  }
 };
 
 export function TissueSelectionPanel({
   imageDataUrl,
   projectedSpots,
   selectedSpotIds,
+  placement,
+  heWidth,
+  heHeight,
   showSpots = true,
   disabled = false,
-  showControls = true,
-  tool: controlledTool,
-  onToolChange,
-  onEditCommit,
-  onSpotToggle,
+  onPlacementChange,
 }: TissueSelectionPanelProps) {
-  const [internalTool, setInternalTool] = useState<ToolMode>('activate');
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [, setIsPanning] = useState(false);
   const [canvasRefresh, setCanvasRefresh] = useState(0);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [hostRect, setHostRect] = useState<DOMRect | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const loadedImageRef = useRef<HTMLImageElement | null>(null);
-  const pathRef = useRef<PreprocessPoint[]>([]);
   const canvasRefreshFrameRef = useRef<number | null>(null);
-  const panStartRef = useRef<{ x: number; y: number } | null>(null);
-  const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
-  const pointerMovedRef = useRef(false);
-  const drawingActiveRef = useRef(false);
-  const panningActiveRef = useRef(false);
-  const [hostRect, setHostRect] = useState<DOMRect | null>(null);
+  const gestureRef = useRef<Gesture | null>(null);
 
   const requestCanvasRefresh = useCallback(() => {
     if (canvasRefreshFrameRef.current !== null) {
       return;
     }
-
     canvasRefreshFrameRef.current = window.requestAnimationFrame(() => {
       canvasRefreshFrameRef.current = null;
       setCanvasRefresh((value) => value + 1);
@@ -89,7 +107,6 @@ export function TissueSelectionPanel({
       requestCanvasRefresh();
       return;
     }
-
     const image = new Image();
     image.onload = () => {
       loadedImageRef.current = image;
@@ -102,7 +119,6 @@ export function TissueSelectionPanel({
       requestCanvasRefresh();
     };
     image.src = imageDataUrl;
-
     return () => {
       image.onload = null;
       image.onerror = null;
@@ -116,24 +132,14 @@ export function TissueSelectionPanel({
   }, []);
 
   useEffect(() => {
-    if (!hostRef.current) {
-      return;
-    }
-
+    if (!hostRef.current) return;
     const updateRect = () => {
-      if (!hostRef.current) {
-        return;
-      }
-      setHostRect(hostRef.current.getBoundingClientRect());
+      if (hostRef.current) setHostRect(hostRef.current.getBoundingClientRect());
     };
-
     updateRect();
-    const observer = new ResizeObserver(() => {
-      updateRect();
-    });
+    const observer = new ResizeObserver(updateRect);
     observer.observe(hostRef.current);
     window.addEventListener('resize', updateRect);
-
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', updateRect);
@@ -141,274 +147,201 @@ export function TissueSelectionPanel({
   }, []);
 
   const ratio = useMemo(() => {
-    if (!imageDataUrl || !imageDimensions) {
-      return 4 / 3;
-    }
-
+    if (!imageDimensions) return 4 / 3;
     return imageDimensions.width / imageDimensions.height;
-  }, [imageDataUrl, imageDimensions]);
+  }, [imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
   const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}40`, []);
   const neutralSpotFillColor = '#e5e5e520';
 
-  const computeBaseViewCb = useCallback(
-    () => computeBaseView(hostRect, ratio),
+  const getTransformCb = useCallback(
+    () => getTransform(computeBaseView(hostRect, ratio), 1, { x: 0, y: 0 }),
     [hostRect, ratio],
   );
 
-  const getLiveHostRect = useCallback(
-    () => hostRef.current?.getBoundingClientRect() ?? hostRect,
-    [hostRect],
+  const hasPlacementSpace = placement !== null
+    && typeof heWidth === 'number'
+    && typeof heHeight === 'number'
+    && heWidth > 0
+    && heHeight > 0;
+
+  // HE-pixel point <-> canvas-pixel point via the current transform.
+  const heToCanvas = useCallback(
+    (point: PointHE, transform: NonNullable<ReturnType<typeof getTransformCb>>) => ({
+      x: transform.originX + (heWidth ? point.x / heWidth : 0) * transform.width,
+      y: transform.originY + (heHeight ? point.y / heHeight : 0) * transform.height,
+    }),
+    [heWidth, heHeight],
   );
 
-  const getTransformCb = useCallback(
-    () => getTransform(computeBaseViewCb(), zoom, pan),
-    [computeBaseViewCb, pan, zoom],
-  );
-
-  const relativeToImageCb = useCallback(
-    (relative: Point | null) => relativeToImage(relative, getTransformCb()),
-    [getTransformCb],
-  );
-
-  const screenToImage = useCallback(
-    (event: React.PointerEvent<HTMLCanvasElement>): Point | null => {
-      const currentHostRect = getLiveHostRect();
-      if (!currentHostRect) {
-        return null;
-      }
-
-      const relative = {
-        x: event.clientX - currentHostRect.left,
-        y: event.clientY - currentHostRect.top,
+  const screenToHE = useCallback(
+    (clientX: number, clientY: number): PointHE | null => {
+      const currentHostRect = hostRef.current?.getBoundingClientRect() ?? hostRect;
+      const transform = getTransformCb();
+      if (!currentHostRect || !transform || !heWidth || !heHeight) return null;
+      const relX = clientX - currentHostRect.left;
+      const relY = clientY - currentHostRect.top;
+      return {
+        x: ((relX - transform.originX) / transform.width) * heWidth,
+        y: ((relY - transform.originY) / transform.height) * heHeight,
       };
-      return relativeToImageCb(relative);
     },
-    [getLiveHostRect, relativeToImageCb],
+    [getTransformCb, heWidth, heHeight, hostRect],
   );
 
-  const activeTool = controlledTool ?? internalTool;
-  const handleToolChange = useCallback(
-    (nextTool: ToolMode) => {
-      if (controlledTool === undefined) {
-        setInternalTool(nextTool);
+  const clampPlacement = useCallback(
+    (next: ChipPlacement): ChipPlacement => {
+      if (!heWidth || !heHeight) return next;
+      const maxDim = Math.max(heWidth, heHeight);
+      const size = Math.min(Math.max(next.size, MIN_PLACEMENT_SIZE_PX), maxDim);
+      const maxX = Math.max(0, heWidth - size);
+      const maxY = Math.max(0, heHeight - size);
+      return {
+        size,
+        x: Math.min(Math.max(next.x, 0), maxX),
+        y: Math.min(Math.max(next.y, 0), maxY),
+      };
+    },
+    [heWidth, heHeight],
+  );
+
+  const findCornerAt = useCallback(
+    (pointerScreen: PointHE, transform: NonNullable<ReturnType<typeof getTransformCb>>): Corner | null => {
+      if (!placement) return null;
+      for (const corner of CORNERS) {
+        const c = heToCanvas(cornerHE(placement, corner), transform);
+        if (Math.hypot(c.x - pointerScreen.x, c.y - pointerScreen.y) <= HANDLE_RADIUS_PX) {
+          return corner;
+        }
       }
-      onToolChange?.(nextTool);
+      return null;
     },
-    [controlledTool, onToolChange],
+    [heToCanvas, placement],
   );
-
-  const resetInteractionState = useCallback(() => {
-    drawingActiveRef.current = false;
-    panningActiveRef.current = false;
-    pathRef.current = [];
-    setIsDrawing(false);
-    setIsPanning(false);
-    panStartRef.current = null;
-    pointerStartRef.current = null;
-    pointerMovedRef.current = false;
-    requestCanvasRefresh();
-  }, [requestCanvasRefresh]);
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (disabled) {
-        resetInteractionState();
-        event.preventDefault();
+      if (disabled || !hasPlacementSpace || !placement) return;
+      if (event.button !== 0) return;
+
+      const transform = getTransformCb();
+      if (!transform) return;
+      const hostBox = hostRef.current?.getBoundingClientRect() ?? null;
+      if (!hostBox) return;
+      const pointerScreen = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
+      const pointerHE = screenToHE(event.clientX, event.clientY);
+      if (!pointerHE) return;
+
+      const corner = findCornerAt(pointerScreen, transform);
+      if (corner) {
+        const opposite = OPPOSITE_CORNER[corner];
+        const oppHE = cornerHE(placement, opposite);
+        const draggedHE = cornerHE(placement, corner);
+        gestureRef.current = {
+          mode: 'resize',
+          opposite: oppHE,
+          dirX: Math.sign(draggedHE.x - oppHE.x) || 1,
+          dirY: Math.sign(draggedHE.y - oppHE.y) || 1,
+        };
+      } else if (
+        pointerHE.x >= placement.x
+        && pointerHE.x <= placement.x + placement.size
+        && pointerHE.y >= placement.y
+        && pointerHE.y <= placement.y + placement.size
+      ) {
+        gestureRef.current = { mode: 'move', startPointer: pointerHE, startPlacement: placement };
+      } else {
         return;
       }
 
-      if (event.button !== 0 && event.button !== 1) {
-        return;
-      }
-
-      const isMiddleButton = event.button === 1;
       event.currentTarget.setPointerCapture(event.pointerId);
-
-      if (isMiddleButton) {
-        event.preventDefault();
-        panStartRef.current = { x: event.clientX, y: event.clientY };
-        panningActiveRef.current = true;
-        setIsPanning(true);
-        return;
-      }
-
-      const point = screenToImage(event);
-      if (!point) {
-        return;
-      }
-
-      pathRef.current = [point];
-      pointerStartRef.current = { x: event.clientX, y: event.clientY };
-      pointerMovedRef.current = false;
-      drawingActiveRef.current = true;
-      setIsDrawing(true);
-      requestCanvasRefresh();
+      event.preventDefault();
     },
-    [disabled, requestCanvasRefresh, resetInteractionState, screenToImage],
+    [disabled, findCornerAt, getTransformCb, hasPlacementSpace, placement, screenToHE],
   );
 
   const handlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (disabled) {
-        resetInteractionState();
-        return;
-      }
+      if (disabled || !hasPlacementSpace) return;
+      const gesture = gestureRef.current;
 
-      if (panningActiveRef.current) {
-        if (!panStartRef.current) {
-          return;
-        }
-
-        const dx = event.clientX - panStartRef.current.x;
-        const dy = event.clientY - panStartRef.current.y;
-        setPan((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
-        panStartRef.current = { x: event.clientX, y: event.clientY };
-        return;
-      }
-
-      if (!drawingActiveRef.current) {
-        return;
-      }
-
-      const pointerStart = pointerStartRef.current;
-      if (pointerStart && Math.hypot(
-        event.clientX - pointerStart.x,
-        event.clientY - pointerStart.y,
-      ) > CLICK_MOVEMENT_THRESHOLD_PX) {
-        pointerMovedRef.current = true;
-      }
-
-      const point = screenToImage(event);
-      if (!point) {
-        return;
-      }
-      pathRef.current.push(point);
-      requestCanvasRefresh();
-    },
-    [disabled, requestCanvasRefresh, resetInteractionState, screenToImage],
-  );
-
-  const handlePointerUp = useCallback(
-    (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (disabled) {
-        resetInteractionState();
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
+      if (!gesture) {
+        // Hover cursor feedback only.
+        const transform = getTransformCb();
+        const hostBox = hostRef.current?.getBoundingClientRect() ?? null;
+        const canvas = canvasRef.current;
+        if (!transform || !hostBox || !canvas || !placement) return;
+        const pointerScreen = { x: event.clientX - hostBox.left, y: event.clientY - hostBox.top };
+        const corner = findCornerAt(pointerScreen, transform);
+        if (corner) {
+          canvas.style.cursor = CORNER_CURSOR[corner];
+        } else {
+          const pointerHE = screenToHE(event.clientX, event.clientY);
+          const inside = pointerHE
+            && pointerHE.x >= placement.x
+            && pointerHE.x <= placement.x + placement.size
+            && pointerHE.y >= placement.y
+            && pointerHE.y <= placement.y + placement.size;
+          canvas.style.cursor = inside ? 'move' : 'default';
         }
         return;
       }
 
-      if (panningActiveRef.current) {
-        panningActiveRef.current = false;
-        setIsPanning(false);
-        panStartRef.current = null;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
-        return;
-      }
+      const pointerHE = screenToHE(event.clientX, event.clientY);
+      if (!pointerHE) return;
 
-      if (!drawingActiveRef.current) {
-        return;
-      }
-
-      drawingActiveRef.current = false;
-      setIsDrawing(false);
-      const committedPath = [...pathRef.current];
-      const pointerStart = pointerStartRef.current;
-      const pointerUpMoved = pointerStart !== null && Math.hypot(
-        event.clientX - pointerStart.x,
-        event.clientY - pointerStart.y,
-      ) > CLICK_MOVEMENT_THRESHOLD_PX;
-      const pointerMoved = pointerMovedRef.current || pointerUpMoved;
-      pathRef.current = [];
-      pointerStartRef.current = null;
-      pointerMovedRef.current = false;
-      requestCanvasRefresh();
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      const clickPoint = pointerMoved ? undefined : committedPath[0];
-      if (clickPoint && showSpots) {
-        const clickedSpot = projectedSpots.find((spot) => {
-          const width = spot.width ?? spot.diameterX ?? 0;
-          const height = spot.height ?? spot.diameterY ?? width;
-          return Math.abs(clickPoint.x - spot.x) <= width / 2
-            && Math.abs(clickPoint.y - spot.y) <= height / 2;
+      if (gesture.mode === 'move') {
+        const dx = pointerHE.x - gesture.startPointer.x;
+        const dy = pointerHE.y - gesture.startPointer.y;
+        onPlacementChange(
+          clampPlacement({
+            ...gesture.startPlacement,
+            x: gesture.startPlacement.x + dx,
+            y: gesture.startPlacement.y + dy,
+          }),
+        );
+      } else {
+        const { opposite, dirX, dirY } = gesture;
+        const size = Math.max(
+          Math.abs(pointerHE.x - opposite.x),
+          Math.abs(pointerHE.y - opposite.y),
+        );
+        const placed = clampPlacement({
+          size,
+          x: Math.min(opposite.x, opposite.x + dirX * size),
+          y: Math.min(opposite.y, opposite.y + dirY * size),
         });
-        if (clickedSpot) {
-          onSpotToggle?.(clickedSpot.id);
-        }
-      } else if (pointerMoved && committedPath.length >= 3) {
-        onEditCommit?.(committedPath);
+        onPlacementChange(placed);
       }
     },
-    [disabled, onEditCommit, onSpotToggle, projectedSpots, requestCanvasRefresh, resetInteractionState, showSpots],
+    [
+      clampPlacement,
+      disabled,
+      findCornerAt,
+      getTransformCb,
+      hasPlacementSpace,
+      onPlacementChange,
+      placement,
+      screenToHE,
+    ],
   );
 
-  const handlePointerCancel = useCallback(
-    (event: React.PointerEvent<HTMLCanvasElement>) => {
-      resetInteractionState();
+  const endGesture = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (gestureRef.current) {
+      gestureRef.current = null;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-    },
-    [resetInteractionState],
-  );
+    }
+  }, []);
 
-  const applyZoom = useCallback(
-    (rawZoom: number, anchorNorm?: Point, anchorScreen?: Point) => {
-      const result = computeZoomTransform(computeBaseViewCb(), rawZoom, anchorNorm, anchorScreen);
-      if (!result) {
-        return;
-      }
-      setZoom(result.zoom);
-      setPan(result.pan);
-    },
-    [computeBaseViewCb],
-  );
-
-  const handleWheel = useCallback(
-    (event: React.WheelEvent<HTMLCanvasElement>) => {
-      if (disabled) {
-        resetInteractionState();
-        event.preventDefault();
-        return;
-      }
-
-      const currentHostRect = getLiveHostRect();
-      if (!currentHostRect) {
-        return;
-      }
-
-      const anchorScreen = {
-        x: event.clientX - currentHostRect.left,
-        y: event.clientY - currentHostRect.top,
-      };
-      const anchorNorm = relativeToImageCb(anchorScreen);
-      if (!anchorNorm) {
-        return;
-      }
-
-      event.preventDefault();
-      const delta = event.deltaY > 0 ? 0.9 : 1.1;
-      applyZoom(zoom * delta, anchorNorm, anchorScreen);
-    },
-    [applyZoom, disabled, getLiveHostRect, relativeToImageCb, resetInteractionState, zoom],
-  );
-
+  // Draw the HE image, the activation grid, the placement outline, and handles.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !hostRect) {
-      return;
-    }
-
+    if (!canvas || !hostRect) return;
     const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
+    if (!ctx) return;
     void canvasRefresh;
 
     canvas.width = hostRect.width;
@@ -416,61 +349,52 @@ export function TissueSelectionPanel({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const transform = getTransformCb();
-    if (!transform) {
-      return;
-    }
+    if (!transform) return;
 
     const image = loadedImageRef.current;
     if (image) {
-      ctx.drawImage(
-        image,
-        transform.originX,
-        transform.originY,
-        transform.width,
-        transform.height,
-      );
+      ctx.drawImage(image, transform.originX, transform.originY, transform.width, transform.height);
     }
 
     if (showSpots) {
       for (const spot of projectedSpots) {
-        const normalizedSpotWidth = spot.width ?? spot.diameterX ?? 0;
-        const normalizedSpotHeight = spot.height ?? spot.diameterY ?? normalizedSpotWidth;
-        const spotWidth = Math.max(1, normalizedSpotWidth * transform.width);
-        const spotHeight = Math.max(1, normalizedSpotHeight * transform.height);
+        const nw = spot.width ?? spot.diameterX ?? 0;
+        const nh = spot.height ?? spot.diameterY ?? nw;
+        const spotWidth = Math.max(1, nw * transform.width);
+        const spotHeight = Math.max(1, nh * transform.height);
         const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
         const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
-        const selected = selectedSpotIdSet.has(spot.id);
-        ctx.fillStyle = selected ? assignedSpotFillColor : neutralSpotFillColor;
+        ctx.fillStyle = selectedSpotIdSet.has(spot.id) ? assignedSpotFillColor : neutralSpotFillColor;
         ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
       }
     }
 
-    const currentPoints = pathRef.current;
-    if (isDrawing && currentPoints.length > 0) {
-      ctx.beginPath();
-      const first = currentPoints[0];
-      ctx.moveTo(
-        transform.originX + first.x * transform.width,
-        transform.originY + first.y * transform.height,
-      );
-      for (let index = 1; index < currentPoints.length; index += 1) {
-        const point = currentPoints[index];
-        ctx.lineTo(
-          transform.originX + point.x * transform.width,
-          transform.originY + point.y * transform.height,
-        );
-      }
-      ctx.strokeStyle = activeTool === 'deactivate' ? 'rgba(255,0,0,0.8)' : 'rgba(0,255,0,0.8)';
+    if (placement && hasPlacementSpace) {
+      const tl = heToCanvas(cornerHE(placement, 'tl'), transform);
+      const br = heToCanvas(cornerHE(placement, 'br'), transform);
+      ctx.strokeStyle = 'rgba(43,108,176,0.9)';
       ctx.lineWidth = 2;
-      ctx.stroke();
+      ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+
+      for (const corner of CORNERS) {
+        const c = heToCanvas(cornerHE(placement, corner), transform);
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = 'rgba(43,108,176,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
     }
   }, [
-    activeTool,
     assignedSpotFillColor,
     canvasRefresh,
     getTransformCb,
+    hasPlacementSpace,
+    heToCanvas,
     hostRect,
-    isDrawing,
+    placement,
     projectedSpots,
     selectedSpotIdSet,
     showSpots,
@@ -487,14 +411,14 @@ export function TissueSelectionPanel({
             direction={{ base: 'column', md: 'row' }}
           >
             <Stack spacing={1}>
-              <Text fontSize='lg' fontWeight='semibold'>Tissue Spot Selection</Text>
+              <Text fontSize='lg' fontWeight='semibold'>Chip grid placement</Text>
               <Text fontSize='sm' color='gray.500'>
-                Automatically identify tissue-covered spots and refine the selection manually if needed.
+                Drag the grid to position it over the tissue; drag a corner handle to resize it.
               </Text>
             </Stack>
             <HStack spacing={3} wrap='wrap' justify={{ base: 'flex-start', md: 'flex-end' }}>
               <Text data-testid='tissue-panel-selected-count' fontSize='sm' color='gray.600'>
-                Number of Tissue Spots: {selectedSpotIds.length}
+                Active spots: {selectedSpotIds.length}
               </Text>
             </HStack>
           </Flex>
@@ -517,32 +441,10 @@ export function TissueSelectionPanel({
               style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', touchAction: 'none', pointerEvents: 'auto' }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerCancel}
-              onWheel={handleWheel}
+              onPointerUp={endGesture}
+              onPointerCancel={endGesture}
             />
           </Box>
-
-          {showControls ? (
-            <ButtonGroup size='sm' isAttached variant='outline' alignSelf='flex-start'>
-              <Button
-                data-testid='tissue-tool-activate'
-                colorScheme={activeTool === 'activate' ? 'brand' : 'gray'}
-                isDisabled={disabled}
-                onClick={() => handleToolChange('activate')}
-              >
-                Mark as tissue
-              </Button>
-              <Button
-                data-testid='tissue-tool-deactivate'
-                colorScheme={activeTool === 'deactivate' ? 'brand' : 'gray'}
-                isDisabled={disabled}
-                onClick={() => handleToolChange('deactivate')}
-              >
-                Mark as background
-              </Button>
-            </ButtonGroup>
-          ) : null}
         </Stack>
       </CardBody>
     </Card>

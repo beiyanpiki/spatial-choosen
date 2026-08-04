@@ -19,37 +19,25 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
-	useRef,
 	useState,
 } from "react";
 import type {
+	ChipPlacement,
 	PreprocessProject,
 	PreprocessSourceImage,
 	PreprocessStepId,
-	TissueActivationValue,
 } from "@/types/built-in";
-import {
-	type ChipConfigManifest,
-	loadChipConfigData,
-	loadChipConfigManifest,
-} from "@/lib/built-in/chipConfigs";
+import { loadChipConfigManifest } from "@/lib/built-in/chipConfigs";
 import { invalidateOnSourceAssetsChange } from "@/lib/built-in/invalidation";
 import { parseTissueActivationCsv } from "@/lib/built-in/tissueCsvImport";
-import {
-	buildImportedTissueSelectionState,
-	buildInvertedTissueSelectionState,
-	buildManualTissueSelectionState,
-} from "@/lib/built-in/projectUpdates";
+import { buildImportedTissueSelectionState } from "@/lib/built-in/projectUpdates";
 import { buildSourceImage } from "@/lib/built-in/sourceImage";
-import { projectSpotsForCrop } from "@/lib/built-in/spotProjection";
+import { projectSpotsForPlacement } from "@/lib/built-in/spotProjection";
 import type { PreprocessPersistMode } from "@/lib/built-in/storage";
 import { selectedSpotIdsFromMatrix } from "@/lib/built-in/tissueMatrix";
 import { resolveTissueSelectionSupport } from "@/lib/built-in/tissueSupport";
 import { StepSidebar } from "./StepSidebar";
-import {
-	TissueSelectionControls,
-	type TissueTool,
-} from "./TissueSelectionControls";
+import { TissueSelectionControls } from "./TissueSelectionControls";
 import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
@@ -264,9 +252,7 @@ export function PreprocessWorkspace({
 	const toast = useToast();
 	const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 	const [projectNameDraft, setProjectNameDraft] = useState("");
-	const [tissueTool, setTissueTool] = useState<TissueTool>("activate");
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
-	const projectedSpotsRequestTokenRef = useRef(0);
 
 	const handleUploadHe = useCallback(
 		async (fileList: FileList | null) => {
@@ -278,8 +264,8 @@ export function PreprocessWorkspace({
 
 				onProjectMutate((current) => {
 					const timestamp = new Date().toISOString();
-					// Replace the HE image and reset the projected spot grid so the
-					// workspace re-projects the chip onto the new image dimensions.
+					// Replace the HE image and reset the chip placement so the
+					// default-placement effect re-centers the grid on the new image.
 					return invalidateOnSourceAssetsChange({
 						...current,
 						sourceAssets: {
@@ -295,7 +281,7 @@ export function PreprocessWorkspace({
 						},
 						chipConfig: {
 							...current.chipConfig,
-							projectedSpots: null,
+							placement: null,
 						},
 					});
 				});
@@ -358,8 +344,10 @@ export function PreprocessWorkspace({
 							columns: manifest.gridCols,
 							pitchX: manifest.spotGap,
 							pitchY: manifest.spotGap,
+							spotDiameter: manifest.spotDiameter,
 							origin: { x: 0, y: 0 },
 							rotationDegrees: 0,
+							placement: null,
 							projectedSpots: null,
 							status: "ready",
 							isStale: false,
@@ -394,35 +382,11 @@ export function PreprocessWorkspace({
 		[onProjectMutate, toast],
 	);
 
-	const loadAndProjectChipConfig = useCallback(
-		async (
-			chipType: ChipConfigManifest["id"],
-			imageDimensions: { width: number; height: number },
-		) => {
-			const requestToken = ++projectedSpotsRequestTokenRef.current;
-			const config = await loadChipConfigData(chipType);
-			if (projectedSpotsRequestTokenRef.current !== requestToken) {
-				return null;
-			}
-
-			const projectedSpots = projectSpotsForCrop({
-				chip: config.manifest,
-				templateEntries: config.templateEntries,
-				cropWidth: imageDimensions.width,
-				cropHeight: imageDimensions.height,
-			});
-
-			return { requestToken, config, projectedSpots };
-		},
-		[],
-	);
-
-	// Project the chip spot grid onto the full HE image once both the HE image
-	// and a chip type are available. Re-runs only while projectedSpots is null.
+	// Default the chip grid placement (centered, ~fit) once both the HE image
+	// and a chip type are available and the user hasn't placed it yet.
 	useEffect(() => {
 		if (!project) return;
 		const he = project.sourceAssets.images.he;
-		const chipType = project.chipConfig.chipType;
 		if (
 			!he ||
 			typeof he.width !== "number" ||
@@ -432,100 +396,50 @@ export function PreprocessWorkspace({
 		) {
 			return;
 		}
+		const chipType = project.chipConfig.chipType;
 		if (chipType !== "15um" && chipType !== "50um") return;
-		if (project.chipConfig.projectedSpots !== null) return;
+		if (project.chipConfig.placement !== null) return;
 
 		const heWidth = he.width;
 		const heHeight = he.height;
-		const requestToken = ++projectedSpotsRequestTokenRef.current;
-		let cancelled = false;
-
-		void (async () => {
-			try {
-				const result = await loadAndProjectChipConfig(chipType, {
-					width: heWidth,
-					height: heHeight,
-				});
-				if (!result || cancelled) return;
-				const { requestToken: resolvedToken, config, projectedSpots } = result;
-				const timestamp = new Date().toISOString();
-
-				onProjectMutate(
-					(current) => {
-						if (projectedSpotsRequestTokenRef.current !== resolvedToken) {
-							return current;
-						}
-						const currentHe = current.sourceAssets.images.he;
-						if (
-							current.chipConfig.projectedSpots !== null ||
-							current.chipConfig.chipType !== chipType ||
-							!currentHe ||
-							currentHe.width !== heWidth ||
-							currentHe.height !== heHeight
-						) {
-							return current;
-						}
-
-						return {
-							...current,
-							chipConfig: {
-								...current.chipConfig,
-								rows: config.manifest.gridRows,
-								columns: config.manifest.gridCols,
-								pitchX: config.manifest.spotGap,
-								pitchY: config.manifest.spotGap,
-								origin: { x: 0, y: 0 },
-								rotationDegrees: 0,
-								projectedSpots,
-								status: "complete",
-								isStale: false,
-								error: null,
-								updatedAt: timestamp,
-							},
-						};
-					},
-					METADATA_DEBOUNCED_PERSIST_OPTIONS,
-				);
-			} catch (error) {
-				if (cancelled) return;
-				const message =
-					error instanceof Error ? error.message : "Failed to load chip config";
-				onProjectMutate(
-					(current) => {
-						if (projectedSpotsRequestTokenRef.current !== requestToken) {
-							return current;
-						}
-						if (
-							current.chipConfig.projectedSpots !== null ||
-							current.chipConfig.chipType !== chipType
-						) {
-							return current;
-						}
-						return {
-							...current,
-							chipConfig: {
-								...current.chipConfig,
-								status: "error",
-								isStale: false,
-								error: message,
-								updatedAt: new Date().toISOString(),
-							},
-						};
-					},
-					METADATA_DEBOUNCED_PERSIST_OPTIONS,
-				);
-			}
-		})();
-
-		return () => {
-			cancelled = true;
+		const size = Math.min(heWidth, heHeight) * 0.9;
+		const placement: ChipPlacement = {
+			size,
+			x: (heWidth - size) / 2,
+			y: (heHeight - size) / 2,
 		};
+		const timestamp = new Date().toISOString();
+
+		onProjectMutate(
+			(current) => {
+				const currentHe = current.sourceAssets.images.he;
+				if (
+					current.chipConfig.placement !== null ||
+					!currentHe ||
+					currentHe.width !== heWidth ||
+					currentHe.height !== heHeight
+				) {
+					return current;
+				}
+				return {
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						placement,
+						status: "complete",
+						isStale: false,
+						error: null,
+						updatedAt: timestamp,
+					},
+				};
+			},
+			METADATA_DEBOUNCED_PERSIST_OPTIONS,
+		);
 	}, [
-		loadAndProjectChipConfig,
 		onProjectMutate,
 		project,
 		project?.chipConfig.chipType,
-		project?.chipConfig.projectedSpots,
+		project?.chipConfig.placement,
 		project?.sourceAssets.images.he,
 	]);
 
@@ -537,10 +451,33 @@ export function PreprocessWorkspace({
 			})
 		: { supportState: "unsupported" as const, unsupportedReason: null };
 
-	const tissueProjectedSpots = useMemo(
-		() => project?.chipConfig.projectedSpots ?? [],
-		[project?.chipConfig.projectedSpots],
-	);
+	const tissueProjectedSpots = useMemo(() => {
+		if (!project) return [];
+		const { chipConfig, sourceAssets } = project;
+		const he = sourceAssets.images.he;
+		const placement = chipConfig.placement;
+		if (
+			!he ||
+			typeof he.width !== "number" ||
+			typeof he.height !== "number" ||
+			!placement ||
+			typeof chipConfig.rows !== "number" ||
+			typeof chipConfig.columns !== "number" ||
+			typeof chipConfig.spotDiameter !== "number" ||
+			typeof chipConfig.pitchX !== "number"
+		) {
+			return [];
+		}
+		return projectSpotsForPlacement({
+			rows: chipConfig.rows,
+			columns: chipConfig.columns,
+			spotDiameter: chipConfig.spotDiameter,
+			spotGap: chipConfig.pitchX,
+			placement,
+			heWidth: he.width,
+			heHeight: he.height,
+		});
+	}, [project]);
 
 	const tissueSelectedSpotIds = useMemo(() => {
 		if (!project) return [];
@@ -559,44 +496,51 @@ export function PreprocessWorkspace({
 			? "Tissue spot selection is complete. Refine the selection by marking spots as tissue or background if necessary."
 			: "Import a tissue activation CSV and project the chip grid to begin refining tissue spots.";
 
-	const commitManualTissueSelection = useCallback(
-		(
-			edit:
-				| { readonly editArea: import("@/types/built-in").PreprocessPoint[] }
-				| { readonly spotId: string },
-		) => {
+	const handlePlacementChange = useCallback(
+		(placement: ChipPlacement) => {
 			onProjectMutate(
-				(current) => {
-					const projectedSpots = current.chipConfig.projectedSpots ?? [];
-					const updatedAt = new Date().toISOString();
-					const nextValue: TissueActivationValue =
-						tissueTool === "activate" ? 1 : 0;
-					const editArgs =
-						"editArea" in edit
-							? { editArea: edit.editArea, nextValue }
-							: { spotId: edit.spotId };
-					const nextTissueSelection = buildManualTissueSelectionState({
-						current: current.tissueSelection,
-						projectedSpots,
-						...editArgs,
-						rows: current.chipConfig.rows,
-						columns: current.chipConfig.columns,
-						updatedAt,
-					});
-					if (nextTissueSelection === current.tissueSelection) {
-						return current;
-					}
-
-					return {
-						...current,
-						tissueSelection: nextTissueSelection,
-					};
-				},
-				{ mode: "tissue", strategy: "debounced" },
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						placement,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
 			);
 		},
-		[onProjectMutate, tissueTool],
+		[onProjectMutate],
 	);
+
+	const handleResetPlacement = useCallback(() => {
+		onProjectMutate(
+			(current) => {
+				const he = current.sourceAssets.images.he;
+				if (
+					!he ||
+					typeof he.width !== "number" ||
+					typeof he.height !== "number"
+				) {
+					return current;
+				}
+				const size = Math.min(he.width, he.height) * 0.9;
+				return {
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						placement: {
+							size,
+							x: (he.width - size) / 2,
+							y: (he.height - size) / 2,
+						},
+						updatedAt: new Date().toISOString(),
+					},
+				};
+			},
+			METADATA_DEBOUNCED_PERSIST_OPTIONS,
+		);
+	}, [onProjectMutate]);
 
 	// The editable name draft is only displayed while editing, so it only needs to
 	// be seeded from the persisted name when editing begins (see
@@ -828,17 +772,12 @@ export function PreprocessWorkspace({
 											}
 											projectedSpots={tissueProjectedSpots}
 											selectedSpotIds={tissueSelectedSpotIds}
+											placement={project.chipConfig.placement}
+											heWidth={project.sourceAssets.images.he?.width ?? null}
+											heHeight={project.sourceAssets.images.he?.height ?? null}
 											showSpots={showTissueSpots}
-											showControls={false}
-											tool={tissueTool}
 											disabled={isTissueInteractionDisabled}
-											onToolChange={setTissueTool}
-											onEditCommit={(editArea) => {
-												commitManualTissueSelection({ editArea });
-											}}
-											onSpotToggle={(spotId) => {
-												commitManualTissueSelection({ spotId });
-											}}
+											onPlacementChange={handlePlacementChange}
 										/>
 									</Box>
 									<Stack
@@ -852,34 +791,11 @@ export function PreprocessWorkspace({
 							</Text>
 						) : null}
 										<TissueSelectionControls
-											supportState={tissueSupport.supportState}
-											unsupportedReason={tissueSupport.unsupportedReason}
 											disabled={isTissueInteractionDisabled}
-											tissueTool={tissueTool}
 											showSpots={showTissueSpots}
-											onTissueToolChange={setTissueTool}
-											onInvertSelection={() => {
-												onProjectMutate(
-													(current) => {
-														const projectedSpots =
-															current.chipConfig.projectedSpots ?? [];
-														const updatedAt = new Date().toISOString();
-														return {
-															...current,
-															tissueSelection:
-																buildInvertedTissueSelectionState({
-																	current: current.tissueSelection,
-																	projectedSpots,
-																	rows: current.chipConfig.rows,
-																	columns: current.chipConfig.columns,
-																	updatedAt,
-																}),
-														};
-													},
-													{ mode: "tissue", strategy: "debounced" },
-												);
-											}}
 											onShowSpotsChange={setShowTissueSpots}
+											onResetPlacement={handleResetPlacement}
+											placement={project.chipConfig.placement}
 										/>
 
 										<Card
