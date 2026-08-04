@@ -450,7 +450,7 @@ function PreprocessContent() {
 
 	const openProject = useCallback(
 		(projectId: string) => {
-			router.push(`/preprocess?preprocess_id=${encodeURIComponent(projectId)}`);
+			router.push(`/built-in?preprocess_id=${encodeURIComponent(projectId)}`);
 		},
 		[router],
 	);
@@ -585,7 +585,7 @@ function PreprocessContent() {
 	);
 
 	const handleBackToLanding = useCallback(() => {
-		router.push("/preprocess");
+		router.push("/built-in");
 	}, [router]);
 
 	if (!preprocessId) {
