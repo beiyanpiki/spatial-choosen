@@ -28,7 +28,7 @@ export type ToolMode = 'activate' | 'deactivate';
 const CLICK_MOVEMENT_THRESHOLD_PX = 4;
 
 type TissueSelectionPanelProps = {
-  eosinCropDataUrl: string | null;
+  imageDataUrl: string | null;
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
   showSpots?: boolean;
@@ -41,7 +41,7 @@ type TissueSelectionPanelProps = {
 };
 
 export function TissueSelectionPanel({
-  eosinCropDataUrl,
+  imageDataUrl,
   projectedSpots,
   selectedSpotIds,
   showSpots = true,
@@ -84,7 +84,7 @@ export function TissueSelectionPanel({
   }, []);
 
   useEffect(() => {
-    if (!eosinCropDataUrl) {
+    if (!imageDataUrl) {
       loadedImageRef.current = null;
       requestCanvasRefresh();
       return;
@@ -101,13 +101,13 @@ export function TissueSelectionPanel({
       setImageDimensions(null);
       requestCanvasRefresh();
     };
-    image.src = eosinCropDataUrl;
+    image.src = imageDataUrl;
 
     return () => {
       image.onload = null;
       image.onerror = null;
     };
-  }, [eosinCropDataUrl, requestCanvasRefresh]);
+  }, [imageDataUrl, requestCanvasRefresh]);
 
   useEffect(() => () => {
     if (canvasRefreshFrameRef.current !== null) {
@@ -141,12 +141,12 @@ export function TissueSelectionPanel({
   }, []);
 
   const ratio = useMemo(() => {
-    if (!eosinCropDataUrl || !imageDimensions) {
+    if (!imageDataUrl || !imageDimensions) {
       return 4 / 3;
     }
 
     return imageDimensions.width / imageDimensions.height;
-  }, [eosinCropDataUrl, imageDimensions]);
+  }, [imageDataUrl, imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
   const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}40`, []);

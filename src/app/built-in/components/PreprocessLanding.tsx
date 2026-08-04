@@ -37,22 +37,13 @@ type PreprocessLandingProps = {
 };
 
 const describeSources = (project: PreprocessProjectSummary) => {
-  const labels = [project.sourceAssets.images.eosin, project.sourceAssets.images.he]
-    .filter((image): image is NonNullable<typeof image> => Boolean(image))
-    .map((image) => (image.kind === 'he' ? 'HE' : 'Eosin reference'));
-
-  return labels.length > 0 ? labels.join(' + ') : 'No source images yet';
+  const he = project.sourceAssets.images.he;
+  return he ? 'HE' : 'No source images yet';
 };
 
 const STEP_LABELS: Record<PreprocessStepId, string> = {
   sourceAssets: 'Source images',
-  localization: 'Chip localization',
-  heFocus: 'HE focus',
-  alignment: 'Image registration',
-  cropQc: 'Crop QC',
-  chipConfig: 'Chip projection',
   tissueSelection: 'Tissue spot selection',
-  exportState: 'Export package',
 };
 
 export function PreprocessLanding({

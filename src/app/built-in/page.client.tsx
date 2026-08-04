@@ -38,25 +38,8 @@ const collectProjectObjectUrls = (project: PreprocessProject | null) => {
 	for (const image of Object.values(project.sourceAssets.images)) {
 		addUrl(image?.objectUrl);
 		addUrl(image?.thumbnailObjectUrl);
+		addUrl(image?.workingObjectUrl);
 	}
-
-	addUrl(project.heFocus.focusedImageDataUrl);
-
-	const cropAssets = project.cropQc.cropAssets;
-	if (cropAssets?.eosin && cropAssets.he) {
-		for (const assetSet of [cropAssets.eosin, cropAssets.he]) {
-			addUrl(assetSet.fullres.dataUrl);
-			addUrl(assetSet.hires.dataUrl);
-			addUrl(assetSet.lowres.dataUrl);
-		}
-	}
-
-	addUrl(project.cropQc.checkerboardPreview?.dataUrl);
-	addUrl(project.cropQc.featureMatchesPreview?.dataUrl);
-	addUrl(project.cropQc.eosinPreviewDataUrl);
-	addUrl(project.cropQc.previewDataUrl);
-	addUrl(project.cropQc.checkerboardPreviewDataUrl);
-	addUrl(project.cropQc.featureMatchesPreviewDataUrl);
 
 	return urls;
 };

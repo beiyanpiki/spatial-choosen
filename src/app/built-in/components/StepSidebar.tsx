@@ -16,40 +16,10 @@ export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
     testId: 'preprocess-step-source-assets',
   },
   {
-    id: 'localization',
-    label: 'Define Capture Area',
-    description: 'Position the capture area on the NATA Align image.',
-    testId: 'preprocess-step-localize',
-  },
-  {
-    id: 'heFocus',
-    label: 'H&E ROI Alignment',
-    description: 'Select the corresponding ROI in the H&E image.',
-    testId: 'preprocess-step-he-focus',
-  },
-  {
-    id: 'alignment',
-    label: 'Image Registration',
-    description: 'Create landmark pairs and register the images.',
-    testId: 'preprocess-step-align',
-  },
-  {
-    id: 'cropQc',
-    label: 'Registration Review',
-    description: 'Review the registration results using Checkerboard, Landmark Pair, and Overlay views.',
-    testId: 'preprocess-step-crop',
-  },
-  {
     id: 'tissueSelection',
     label: 'Tissue Spot Selection',
-    description: 'Automatically detect and manually refine tissue spots.',
+    description: 'Refine the tissue spot matrix over the H&E image.',
     testId: 'preprocess-step-tissue',
-  },
-  {
-    id: 'exportState',
-    label: 'Export Preprocessing Package',
-    description: 'Download the preprocessing package for downstream analysis in NATA Insight Bioinformatics Software.',
-    testId: 'preprocess-step-export',
   },
 ] as const;
 
@@ -66,20 +36,8 @@ const stepStateFor = (project: PreprocessProject, stepId: PreprocessStepId) => {
   switch (stepId) {
     case 'sourceAssets':
       return project.sourceAssets;
-    case 'localization':
-      return project.localization;
-    case 'heFocus':
-      return project.heFocus;
-    case 'alignment':
-      return project.alignment;
-    case 'cropQc':
-      return project.cropQc;
-    case 'chipConfig':
-      return project.chipConfig;
     case 'tissueSelection':
       return project.tissueSelection;
-    case 'exportState':
-      return project.exportState;
     default:
       return project.sourceAssets;
   }
@@ -95,28 +53,14 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
   switch (stepId) {
     case 'sourceAssets':
       return true;
-    case 'localization':
-      return true;
-    case 'heFocus':
-      return project.localization.status === 'complete';
-    case 'alignment':
-      return project.heFocus.status === 'complete';
-    case 'cropQc':
-      return project.alignment.status === 'complete' && (project.alignment.qualityFlags.accepted || project.alignment.forceAccepted);
-    case 'chipConfig':
-      return project.cropQc.status === 'complete';
     case 'tissueSelection':
-      return project.cropQc.status === 'complete';
-    case 'exportState':
-      return project.tissueSelection.status === 'complete';
+      return Boolean(project.sourceAssets.images.he) && project.chipConfig.chipType !== null;
     default:
       return false;
   }
 };
 
 export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarProps) {
-  const visibleCurrentStep = currentStep === 'chipConfig' ? 'tissueSelection' : currentStep;
-
   return (
     <Stack
       spacing={4}
@@ -141,7 +85,7 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
       </Box>
       {PREPROCESS_STEP_ITEMS.map((step, index) => {
         const stepState = stepStateFor(project, step.id);
-        const isActive = step.id === visibleCurrentStep;
+        const isActive = step.id === currentStep;
         const enabled = isStepEnabled(project, step.id);
         return (
           <Button

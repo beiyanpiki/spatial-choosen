@@ -109,7 +109,7 @@ describe('preprocess source image working proxy', () => {
       lastModified: 123,
     });
 
-    const image = await buildSourceImage(file, 'eosin');
+    const image = await buildSourceImage(file, 'he');
 
     expect(image.width).toBe(4000);
     expect(image.height).toBe(2000);

@@ -11,24 +11,14 @@ const createProjectSummary = (): PreprocessProjectSummary => ({
   name: 'Copy QA project',
   createdAt: '2026-04-15T00:00:00.000Z',
   updatedAt: '2026-04-16T00:00:00.000Z',
-  currentStep: 'heFocus',
+  currentStep: 'tissueSelection',
   sourceAssets: {
     status: 'complete',
     isStale: false,
     updatedAt: '2026-04-16T00:00:00.000Z',
     error: null,
-    activeImage: 'eosin',
+    activeImage: 'he',
     images: {
-      eosin: {
-        id: 'eosin-source',
-        kind: 'eosin',
-        fileName: 'eosin.png',
-        mimeType: 'image/png',
-        sizeBytes: 10,
-        width: 100,
-        height: 100,
-        lastModified: 1,
-      },
       he: {
         id: 'he-source',
         kind: 'he',
@@ -50,7 +40,7 @@ type RenderLandingOptions = {
   readonly onImportProject?: (fileList: FileList | null) => void;
   readonly onOpenProject?: (projectId: string) => void;
   readonly projectName?: string;
-  readonly projects?: readonly PreprocessProjectSummary[];
+  readonly projects?: PreprocessProjectSummary[];
 };
 
 const renderLanding = ({
@@ -98,9 +88,9 @@ describe('PreprocessLanding copy policy', () => {
     renderLanding({ projects: [createProjectSummary()] });
 
     const projectList = screen.getByTestId('preprocess-project-list');
-    expect(within(projectList).getByText('Current step: HE focus')).toBeInTheDocument();
-    expect(within(projectList).getByText('Eosin reference + HE')).toBeInTheDocument();
-    expect(projectList).not.toHaveTextContent('H&E');
+    expect(within(projectList).getByText('Current step: Tissue spot selection')).toBeInTheDocument();
+    expect(within(projectList).getByText('HE')).toBeInTheDocument();
+    expect(projectList).not.toHaveTextContent('Eosin');
   });
 
   it('keeps create, import, open, and delete actions wired', () => {

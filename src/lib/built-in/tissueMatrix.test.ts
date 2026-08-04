@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ProjectedSpot } from '@/types/built-in';
+import type { ProjectedSpot, TissueActivationMatrix, TissueActivationValue } from '@/types/built-in';
 
 import {
   createEmptyMatrix,
@@ -75,12 +75,12 @@ describe('tissueMatrix helpers', () => {
     expect(() => validateTissueActivationMatrix({
       rows: 2,
       columns: 2,
-      values: [0, 1, 2, 0],
+      values: [0, 1, 2, 0] as unknown as TissueActivationValue[],
     })).toThrow(/binary/i);
   });
 
   it('derives selected spot ids from projected spots and matrix state', () => {
-    const matrix = {
+    const matrix: TissueActivationMatrix = {
       rows: 2,
       columns: 2,
       values: [1, 0, 1, 0],

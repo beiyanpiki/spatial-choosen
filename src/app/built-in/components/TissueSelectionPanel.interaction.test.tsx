@@ -85,7 +85,7 @@ const renderPanel = (callbacks: {
 	readonly onSpotToggle: ReturnType<typeof vi.fn<(spotId: string) => void>>;
 }) => {
 	const panelProps = {
-		eosinCropDataUrl: 'data:image/png;base64,AA==',
+		imageDataUrl: 'data:image/png;base64,AA==',
 		projectedSpots: PROJECTED_SPOTS,
 		selectedSpotIds: [],
 		onEditCommit: callbacks.onEditCommit,

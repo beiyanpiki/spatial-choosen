@@ -5,6 +5,6 @@
   "gridCols": 96,
   "spotDiameter": 25,
   "spotGap": 15,
-  "barcodeTemplatePath": "/preprocess-chip-configs/15um/tissue_positions.csv",
-  "tissuePositionsPath": "/preprocess-chip-configs/15um/tissue_positions.csv"
+  "barcodeTemplatePath": "/built-in-chip-configs/15um/tissue_positions.csv",
+  "tissuePositionsPath": "/built-in-chip-configs/15um/tissue_positions.csv"
 }

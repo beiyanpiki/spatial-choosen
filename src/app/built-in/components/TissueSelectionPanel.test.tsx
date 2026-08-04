@@ -114,7 +114,7 @@ describe('TissueSelectionPanel', () => {
 		render(
 			<ChakraProvider theme={theme}>
 				<TissueSelectionPanel
-					eosinCropDataUrl='data:image/png;base64,AA=='
+					imageDataUrl='data:image/png;base64,AA=='
 					projectedSpots={[
 						{
 							id: 'spot-a',
@@ -161,7 +161,7 @@ describe('TissueSelectionPanel', () => {
 		render(
 			<ChakraProvider theme={theme}>
 				<TissueSelectionPanel
-					eosinCropDataUrl='data:image/png;base64,AA=='
+					imageDataUrl='data:image/png;base64,AA=='
 					projectedSpots={[
 						{
 							id: 'spot-a',
