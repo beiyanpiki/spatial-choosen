@@ -387,11 +387,11 @@ export const generateFocusedHeDataUrl = async (args: {
 	orientedContext.fillStyle = "#ffffff";
 	orientedContext.fillRect(0, 0, orientedWidth, orientedHeight);
 	orientedContext.translate(orientedWidth / 2, orientedHeight / 2);
+	orientedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
 	orientedContext.scale(
 		args.imageTransform.flipHorizontal ? -1 : 1,
 		args.imageTransform.flipVertical ? -1 : 1,
 	);
-	orientedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
 	orientedContext.drawImage(
 		sourceImage,
 		-sourceWidth / 2,
@@ -809,6 +809,16 @@ export function PreprocessWorkspace({
 			? focusedHeMovingImage
 			: (project.sourceAssets.images[project.alignment.movingImage] ?? null)
 		: null;
+	// The focused HE crop has the HE-focus orientation baked in, so the moving
+	// canvas uses an identity transform for it. Until HE focus is complete the
+	// canvas falls back to the raw HE source — display it with the orientation
+	// the user configured in HE focus instead of the untransformed original.
+	const alignmentMovingImageTransform = project
+		? project.alignment.movingImage === "he" &&
+			project.heFocus.status !== "complete"
+			? project.heFocus.imageTransform
+			: project.alignment.movingImageTransform
+		: undefined;
 	const localizationImageDataUrl =
 		localizationImage?.workingDataUrl ?? localizationImage?.dataUrl ?? null;
 	const localizationChipBounds = project?.localization.chipBounds ?? null;
@@ -2569,6 +2579,7 @@ export function PreprocessWorkspace({
 									alignment={project.alignment}
 									chipBounds={project.localization.chipBounds}
 									movingImage={alignmentMovingImage}
+									movingImageTransform={alignmentMovingImageTransform}
 									onSolveAccepted={() => {
 										onStepChange("cropQc");
 									}}

@@ -48,10 +48,16 @@ const transforms: Array<{ name: string; transform: LocalizationImageTransform; e
 		expected: { x: 0.2, y: 0.2 },
 	},
 	{
-		name: 'combined rotation + view-horizontal flip',
+		name: 'combined horizontal flip + rotation (flip applied in source frame)',
 		transform: { rotationDegrees: 90, flipHorizontal: true, flipVertical: false, scale: 1 },
 		point: { x: 0.12, y: 0.73 },
-		expected: { x: 0.73, y: 0.12 },
+		expected: { x: 0.27, y: 0.88 },
+	},
+	{
+		name: 'vertical flip keeps rotate-left moving the visible top to the left',
+		transform: { rotationDegrees: -90, flipHorizontal: false, flipVertical: true, scale: 1 },
+		point: { x: 0.5, y: 1 },
+		expected: { x: 0, y: 0.5 },
 	},
 ];
 
@@ -88,7 +94,7 @@ describe('imageTransforms', () => {
 		);
 	});
 
-	it('applies horizontal flips in the rotated display coordinate system', () => {
+	it('applies horizontal flips in the source coordinate system before rotation', () => {
 		const transform: LocalizationImageTransform = {
 			rotationDegrees: 90,
 			flipHorizontal: true,
@@ -105,11 +111,25 @@ describe('imageTransforms', () => {
 
 		const displayPoint = projectSourcePointToDisplayRect(sourcePoint, transform, displayRect);
 
-		expectPointCloseTo(displayPoint, { x: 220, y: 60 });
+		expectPointCloseTo(displayPoint, { x: 580, y: 540 });
 		expectPointCloseTo(
 			invertDisplayRectPointToSource(displayPoint, transform, displayRect),
 			sourcePoint,
 		);
+	});
+
+	it('keeps the visual rotation direction independent of flips (rotate-left after vertical flip)', () => {
+		const transform: LocalizationImageTransform = {
+			rotationDegrees: -90,
+			flipHorizontal: false,
+			flipVertical: true,
+			scale: 1,
+		};
+		// After a vertical flip the visible top edge is the source bottom edge;
+		// "rotate left" must still move the visible top edge to the left.
+		const visibleTopAfterRotateLeft = applyImageDisplayTransform({ x: 0.5, y: 1 }, transform);
+
+		expectPointCloseTo(visibleTopAfterRotateLeft, { x: 0, y: 0.5 });
 	});
 
 	it('transforms off-axis rect corners under 90 degree rotation', () => {

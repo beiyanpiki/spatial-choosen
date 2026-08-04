@@ -46,6 +46,7 @@ type AlignmentPanelProps = {
 	alignment: AlignmentSlice;
 	chipBounds: PreprocessRect | null;
 	movingImage: PreprocessSourceImage | null;
+	movingImageTransform?: LocalizationImageTransform;
 	onSolveAccepted: () => void;
 	onAlignmentChange: (
 		updater: (current: AlignmentSlice) => AlignmentSlice,
@@ -420,7 +421,7 @@ function LandmarkCanvas({
 									data-testid={`${testIdPrefix}-image-transform-layer`}
 									style={{
 										transformOrigin: "center center",
-										transform: `scale(${imageTransform.flipHorizontal ? -1 : 1}, ${imageTransform.flipVertical ? -1 : 1}) rotate(${imageTransform.rotationDegrees}deg)`,
+										transform: `rotate(${imageTransform.rotationDegrees}deg) scale(${imageTransform.flipHorizontal ? -1 : 1}, ${imageTransform.flipVertical ? -1 : 1})`,
 									}}
 								>
 									<img
@@ -539,6 +540,7 @@ export function AlignmentPanel({
 	alignment,
 	chipBounds,
 	movingImage,
+	movingImageTransform,
 	onSolveAccepted,
 	onAlignmentChange,
 	referenceImage,
@@ -1386,7 +1388,7 @@ export function AlignmentPanel({
 				<LandmarkCanvas
 					image={movingImage}
 					imageKey="target"
-					imageTransform={alignment.movingImageTransform}
+					imageTransform={movingImageTransform ?? alignment.movingImageTransform}
 					points={targetPoints}
 					pendingPoint={null}
 					title="HE landmarks (moving)"

@@ -41,12 +41,35 @@ export function normalizeRotationDegrees(value: number): number {
   return Math.min(180, Math.max(-180, Number.isFinite(value) ? value : 0));
 }
 
+// Flips are applied in the source/screen coordinate system first, then the
+// rotation — so `rotationDegrees` always means the visible rotation on screen,
+// regardless of flip state (a reflection would otherwise invert the visual
+// rotation direction).
 export function applyImageDisplayTransform(
   point: PreprocessPoint,
   transform: LocalizationImageTransform,
 ): PreprocessPoint {
   const centered = toCentered(point);
+  const flipped = {
+    x: centered.x * (transform.flipHorizontal ? -1 : 1),
+    y: centered.y * (transform.flipVertical ? -1 : 1),
+  };
   const radians = degreesToRadians(normalizeRotationDegrees(transform.rotationDegrees));
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  return fromCentered({
+    x: flipped.x * cos - flipped.y * sin,
+    y: flipped.x * sin + flipped.y * cos,
+  });
+}
+
+export function invertImageDisplayTransform(
+  point: PreprocessPoint,
+  transform: LocalizationImageTransform,
+): PreprocessPoint {
+  const centered = toCentered(point);
+  const radians = degreesToRadians(-normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   const rotated = {
@@ -60,25 +83,6 @@ export function applyImageDisplayTransform(
   });
 }
 
-export function invertImageDisplayTransform(
-  point: PreprocessPoint,
-  transform: LocalizationImageTransform,
-): PreprocessPoint {
-  const centered = toCentered(point);
-  const unflipped = {
-    x: centered.x * (transform.flipHorizontal ? -1 : 1),
-    y: centered.y * (transform.flipVertical ? -1 : 1),
-  };
-  const radians = degreesToRadians(-normalizeRotationDegrees(transform.rotationDegrees));
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-
-  return fromCentered({
-    x: unflipped.x * cos - unflipped.y * sin,
-    y: unflipped.x * sin + unflipped.y * cos,
-  });
-}
-
 export function projectSourcePointToDisplayRect(
   point: PreprocessPoint,
   transform: LocalizationImageTransform,
@@ -88,15 +92,15 @@ export function projectSourcePointToDisplayRect(
   const centerY = displayRect.originY + displayRect.height / 2;
   const displayDeltaX = (point.x - CENTER) * displayRect.width;
   const displayDeltaY = (point.y - CENTER) * displayRect.height;
+  const flippedDisplayDeltaX = displayDeltaX * (transform.flipHorizontal ? -1 : 1);
+  const flippedDisplayDeltaY = displayDeltaY * (transform.flipVertical ? -1 : 1);
   const radians = degreesToRadians(normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const rotatedDisplayDeltaX = displayDeltaX * cos - displayDeltaY * sin;
-  const rotatedDisplayDeltaY = displayDeltaX * sin + displayDeltaY * cos;
 
   return {
-    x: centerX + rotatedDisplayDeltaX * (transform.flipHorizontal ? -1 : 1),
-    y: centerY + rotatedDisplayDeltaY * (transform.flipVertical ? -1 : 1),
+    x: centerX + flippedDisplayDeltaX * cos - flippedDisplayDeltaY * sin,
+    y: centerY + flippedDisplayDeltaX * sin + flippedDisplayDeltaY * cos,
   };
 }
 
@@ -107,17 +111,19 @@ export function invertDisplayRectPointToSource(
 ): PreprocessPoint {
   const centerX = displayRect.originX + displayRect.width / 2;
   const centerY = displayRect.originY + displayRect.height / 2;
-  const unflippedDisplayDeltaX = (point.x - centerX) * (transform.flipHorizontal ? -1 : 1);
-  const unflippedDisplayDeltaY = (point.y - centerY) * (transform.flipVertical ? -1 : 1);
+  const rotatedDisplayDeltaX = point.x - centerX;
+  const rotatedDisplayDeltaY = point.y - centerY;
   const radians = degreesToRadians(-normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const unrotatedDisplayDeltaX = unflippedDisplayDeltaX * cos - unflippedDisplayDeltaY * sin;
-  const unrotatedDisplayDeltaY = unflippedDisplayDeltaX * sin + unflippedDisplayDeltaY * cos;
+  const unrotatedDisplayDeltaX = rotatedDisplayDeltaX * cos - rotatedDisplayDeltaY * sin;
+  const unrotatedDisplayDeltaY = rotatedDisplayDeltaX * sin + rotatedDisplayDeltaY * cos;
+  const unflippedDisplayDeltaX = unrotatedDisplayDeltaX * (transform.flipHorizontal ? -1 : 1);
+  const unflippedDisplayDeltaY = unrotatedDisplayDeltaY * (transform.flipVertical ? -1 : 1);
 
   return {
-    x: unrotatedDisplayDeltaX / displayRect.width + CENTER,
-    y: unrotatedDisplayDeltaY / displayRect.height + CENTER,
+    x: unflippedDisplayDeltaX / displayRect.width + CENTER,
+    y: unflippedDisplayDeltaY / displayRect.height + CENTER,
   };
 }
 
@@ -166,12 +172,14 @@ export function transformImagePixelPoint(
   const sin = Math.sin(radians);
   const sourceDeltaX = point.x - sourceCenter.x;
   const sourceDeltaY = point.y - sourceCenter.y;
-  const rotatedDeltaX = sourceDeltaX * cos - sourceDeltaY * sin;
-  const rotatedDeltaY = sourceDeltaX * sin + sourceDeltaY * cos;
+  const flippedDeltaX = sourceDeltaX * (transform.flipHorizontal ? -1 : 1);
+  const flippedDeltaY = sourceDeltaY * (transform.flipVertical ? -1 : 1);
+  const rotatedDeltaX = flippedDeltaX * cos - flippedDeltaY * sin;
+  const rotatedDeltaY = flippedDeltaX * sin + flippedDeltaY * cos;
 
   return {
-    x: outputCenter.x + rotatedDeltaX * (transform.flipHorizontal ? -1 : 1),
-    y: outputCenter.y + rotatedDeltaY * (transform.flipVertical ? -1 : 1),
+    x: outputCenter.x + rotatedDeltaX,
+    y: outputCenter.y + rotatedDeltaY,
   };
 }
 
