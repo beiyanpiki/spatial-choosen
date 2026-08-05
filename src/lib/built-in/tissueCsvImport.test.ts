@@ -124,6 +124,49 @@ describe('parseTissueActivationCsv', () => {
 		expect(() => parseTissueActivationCsv(csv)).toThrow(/non-integer row\/col/);
 	});
 
+	it('captures Log2_nGene_Spatial keyed by the flipped in-memory position', () => {
+		const csv = [
+			'barcode,Log2_nGene_Spatial,tissue,row,col',
+			'BC-TL,8.9,1,1,1',
+			'BC-BR,10.1,0,96,96',
+		].join('\n');
+
+		const { log2nGeneByPosition } = parseTissueActivationCsv(csv);
+
+		// csv (1,1) is the TOP-left cell; after the flip its in-memory position
+		// is arrayRow 96, so the key is '96:1'.
+		expect(log2nGeneByPosition['96:1']).toBe(8.9);
+		// csv (96,96) -> in-memory position '1:96'.
+		expect(log2nGeneByPosition['1:96']).toBe(10.1);
+		expect(Object.keys(log2nGeneByPosition)).toHaveLength(2);
+	});
+
+	it('omits empty or non-numeric Log2_nGene_Spatial cells', () => {
+		const csv = [
+			'barcode,Log2_nGene_Spatial,tissue,row,col',
+			'BC-OK,8.9,1,1,1',
+			'BC-EMPTY,,1,96,96',
+			'BC-BAD,not-a-number,1,50,50',
+		].join('\n');
+
+		const { log2nGeneByPosition } = parseTissueActivationCsv(csv);
+
+		expect(Object.keys(log2nGeneByPosition)).toHaveLength(1);
+		expect(log2nGeneByPosition['96:1']).toBe(8.9);
+	});
+
+	it('returns an empty Log2 map when the column is absent', () => {
+		const csv = [
+			'barcode,tissue,row,col',
+			'BC,1,1,1',
+			'BC2,0,96,96',
+		].join('\n');
+
+		const { log2nGeneByPosition } = parseTissueActivationCsv(csv);
+
+		expect(log2nGeneByPosition).toEqual({});
+	});
+
 	it('captures barcodes keyed by the flipped in-memory position', () => {
 		const csv = [
 			'barcode,Log2_nGene_Spatial,tissue,row,col',

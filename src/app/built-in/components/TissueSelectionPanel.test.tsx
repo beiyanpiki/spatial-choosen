@@ -166,6 +166,106 @@ describe('TissueSelectionPanel', () => {
 		expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Active spots: 1');
 	});
 
+	it('draws heatmap colors for valued spots and neutral for unvalued ones in heatmap mode', async () => {
+		const fillStyles: string[] = [];
+		fillRectMock.mockImplementation(() => {
+			fillStyles.push(String(contextStub.fillStyle).toLowerCase());
+		});
+
+		render(
+			<ChakraProvider theme={theme}>
+				<TissueSelectionPanel
+					imageDataUrl='data:image/png;base64,AA=='
+					projectedSpots={[
+						{
+							id: '1:1',
+							barcode: '1:1',
+							arrayRow: 1,
+							arrayCol: 1,
+							x: 0.25,
+							y: 0.25,
+							width: 0.2,
+							height: 0.2,
+							diameterX: 0.2,
+							diameterY: 0.2,
+						},
+						{
+							id: '1:2',
+							barcode: '1:2',
+							arrayRow: 1,
+							arrayCol: 2,
+							x: 0.75,
+							y: 0.25,
+							width: 0.2,
+							height: 0.2,
+							diameterX: 0.2,
+							diameterY: 0.2,
+						},
+					]}
+					selectedSpotIds={[]}
+					placement={{ x: 0, y: 0, scale: 1 }}
+					unitExtent={{ w: 1000, h: 1000 }}
+					scaleRange={{ min: 0.001, max: 4 }}
+					heWidth={1000}
+					heHeight={1000}
+					displayMode='heatmap'
+					spotValueById={new Map([['1:1', 0], ['1:2', 1]])}
+					onPlacementChange={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		await waitFor(() => {
+			expect(fillStyles).toContain('#313695e6');
+			expect(fillStyles).toContain('#d73027e6');
+			// The assigned tissue color is not used in heatmap mode.
+			expect(fillStyles).not.toContain(`${colorForLabel(1).toLowerCase()}e6`);
+		});
+	});
+
+	it('uses the neutral fill for unvalued spots in heatmap mode', async () => {
+		const fillStyles: string[] = [];
+		fillRectMock.mockImplementation(() => {
+			fillStyles.push(String(contextStub.fillStyle).toLowerCase());
+		});
+
+		render(
+			<ChakraProvider theme={theme}>
+				<TissueSelectionPanel
+					imageDataUrl='data:image/png;base64,AA=='
+					projectedSpots={[
+						{
+							id: '1:1',
+							barcode: '1:1',
+							arrayRow: 1,
+							arrayCol: 1,
+							x: 0.25,
+							y: 0.25,
+							width: 0.2,
+							height: 0.2,
+							diameterX: 0.2,
+							diameterY: 0.2,
+						},
+					]}
+					selectedSpotIds={['1:1']}
+					placement={{ x: 0, y: 0, scale: 1 }}
+					unitExtent={{ w: 1000, h: 1000 }}
+					scaleRange={{ min: 0.001, max: 4 }}
+					heWidth={1000}
+					heHeight={1000}
+					displayMode='heatmap'
+					spotValueById={new Map()}
+					onPlacementChange={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		await waitFor(() => {
+			expect(fillStyles).toContain('#cbd5e026');
+			expect(fillStyles).not.toContain(`${colorForLabel(1).toLowerCase()}e6`);
+		});
+	});
+
 	it('skips spot drawing when spot visibility is turned off but still draws the placement outline', async () => {
 		const fillStyles: string[] = [];
 		fillRectMock.mockImplementation(() => {

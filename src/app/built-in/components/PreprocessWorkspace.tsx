@@ -29,6 +29,7 @@ import type {
 } from "@/types/built-in";
 import { loadChipConfigManifest } from "@/lib/built-in/chipConfigs";
 import { exportBuiltInZip, getBuiltInZipExportReadiness } from "@/lib/built-in/exportBundle";
+import { buildNormalizedExpressionById } from "@/lib/built-in/expressionColors";
 import { invalidateOnSourceAssetsChange } from "@/lib/built-in/invalidation";
 import { parseTissueActivationCsv } from "@/lib/built-in/tissueCsvImport";
 import { buildImportedTissueSelectionState } from "@/lib/built-in/projectUpdates";
@@ -277,6 +278,7 @@ export function PreprocessWorkspace({
 	const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 	const [projectNameDraft, setProjectNameDraft] = useState("");
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
+	const [tissueDisplayMode, setTissueDisplayMode] = useState<"tissue" | "heatmap">("tissue");
 	const [isExporting, setIsExporting] = useState(false);
 
 	const handleUploadHe = useCallback(
@@ -376,6 +378,7 @@ export function PreprocessWorkspace({
 							excludedRows: [],
 							excludedColumns: [],
 							barcodesByPosition: parsed.barcodesByPosition,
+							log2nGeneByPosition: parsed.log2nGeneByPosition,
 							projectedSpots: null,
 							status: "ready",
 							isStale: false,
@@ -527,6 +530,22 @@ export function PreprocessWorkspace({
 		}
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+
+	// Normalized [0, 1] expression values over the visible (post-exclusion)
+	// spots, for the heatmap display mode. Spots without an imported value are
+	// left out so the canvas falls back to the neutral fill.
+	const tissueExpressionById = useMemo(() => {
+		if (!project) return null;
+		return buildNormalizedExpressionById({
+			log2nGeneByPosition: project.chipConfig.log2nGeneByPosition,
+			spots: tissueProjectedSpots,
+		});
+	}, [project, tissueProjectedSpots]);
+
+	const hasTissueExpressionData = useMemo(
+		() => Object.keys(project?.chipConfig.log2nGeneByPosition ?? {}).length > 0,
+		[project?.chipConfig.log2nGeneByPosition],
+	);
 
 	const tissueUnitExtent = useMemo(() => {
 		if (
@@ -928,6 +947,8 @@ export function PreprocessWorkspace({
 											heWidth={project.sourceAssets.images.he?.width ?? null}
 											heHeight={project.sourceAssets.images.he?.height ?? null}
 											showSpots={showTissueSpots}
+											displayMode={tissueDisplayMode}
+											spotValueById={tissueExpressionById}
 											disabled={isTissueInteractionDisabled}
 											onPlacementChange={handlePlacementChange}
 										/>
@@ -954,6 +975,9 @@ export function PreprocessWorkspace({
 											excludedColumns={project.chipConfig.excludedColumns}
 											onExcludeRowsChange={handleExcludeRowsChange}
 											onExcludeColumnsChange={handleExcludeColumnsChange}
+											displayMode={tissueDisplayMode}
+											onDisplayModeChange={setTissueDisplayMode}
+											hasExpressionData={hasTissueExpressionData}
 										/>
 
 										<Card

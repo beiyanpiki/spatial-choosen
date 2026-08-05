@@ -68,6 +68,7 @@ export const buildEmptyPreprocessProject = (
 			excludedRows: [],
 			excludedColumns: [],
 			barcodesByPosition: {},
+			log2nGeneByPosition: {},
 			projectedSpots: null,
 		},
 		tissueSelection: {

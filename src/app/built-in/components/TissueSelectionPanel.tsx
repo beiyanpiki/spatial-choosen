@@ -18,6 +18,7 @@ import {
   getTransform,
   relativeToImage,
 } from '../../../lib/canvasViewport';
+import { heatmapColor } from '../../../lib/built-in/expressionColors';
 import type { Point } from '@/types/project';
 import type { ChipPlacement, ProjectedSpot } from '@/types/built-in';
 
@@ -70,6 +71,11 @@ type TissueSelectionPanelProps = {
   heWidth: number | null;
   heHeight: number | null;
   showSpots?: boolean;
+  /** Spot coloring mode: binary tissue activation or normalized expression
+   *  heatmap (`spotValueById` provides the per-spot normalized value). */
+  displayMode?: 'tissue' | 'heatmap';
+  /** Normalized [0, 1] expression values keyed by spot id. */
+  spotValueById?: Map<string, number> | null;
   disabled?: boolean;
   onPlacementChange: (placement: ChipPlacement) => void;
 };
@@ -91,6 +97,8 @@ export function TissueSelectionPanel({
   heWidth,
   heHeight,
   showSpots = true,
+  displayMode = 'tissue',
+  spotValueById = null,
   disabled = false,
   onPlacementChange,
 }: TissueSelectionPanelProps) {
@@ -486,6 +494,7 @@ export function TissueSelectionPanel({
     }
 
     if (showSpots) {
+      const isHeatmap = displayMode === 'heatmap';
       for (const spot of projectedSpots) {
         const nw = spot.width ?? spot.diameterX ?? 0;
         const nh = spot.height ?? spot.diameterY ?? nw;
@@ -493,7 +502,16 @@ export function TissueSelectionPanel({
         const spotHeight = Math.max(1, nh * transform.height);
         const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
         const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
-        ctx.fillStyle = selectedSpotIdSet.has(spot.id) ? assignedSpotFillColor : neutralSpotFillColor;
+        let fillStyle = neutralSpotFillColor;
+        if (isHeatmap && spotValueById) {
+          const value = spotValueById.get(spot.id);
+          if (typeof value === 'number') {
+            fillStyle = heatmapColor(value);
+          }
+        } else if (selectedSpotIdSet.has(spot.id)) {
+          fillStyle = assignedSpotFillColor;
+        }
+        ctx.fillStyle = fillStyle;
         ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
       }
     }
@@ -520,6 +538,7 @@ export function TissueSelectionPanel({
     assignedSpotFillColor,
     blockRect,
     canvasRefresh,
+    displayMode,
     getTransformCb,
     hasPlacementSpace,
     heToCanvas,
@@ -527,6 +546,7 @@ export function TissueSelectionPanel({
     projectedSpots,
     selectedSpotIdSet,
     showSpots,
+    spotValueById,
   ]);
 
   return (

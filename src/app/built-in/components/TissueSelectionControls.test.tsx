@@ -15,6 +15,8 @@ type RenderOptions = {
 	columns?: number;
 	excludedRows?: number[];
 	excludedColumns?: number[];
+	displayMode?: 'tissue' | 'heatmap';
+	hasExpressionData?: boolean;
 };
 
 function renderControls({
@@ -25,11 +27,14 @@ function renderControls({
 	columns = 0,
 	excludedRows = [],
 	excludedColumns = [],
+	displayMode = 'tissue',
+	hasExpressionData = true,
 }: RenderOptions = {}) {
 	const onShowSpotsChange = vi.fn();
 	const onResetPlacement = vi.fn();
 	const onExcludeRowsChange = vi.fn();
 	const onExcludeColumnsChange = vi.fn();
+	const onDisplayModeChange = vi.fn();
 
 	function Harness() {
 		const [currentShowSpots, setCurrentShowSpots] = useState(showSpots);
@@ -58,6 +63,9 @@ function renderControls({
 					onExcludeColumnsChange(next);
 					setCurrentExcludedColumns(next);
 				}}
+				displayMode={displayMode}
+				onDisplayModeChange={onDisplayModeChange}
+				hasExpressionData={hasExpressionData}
 			/>
 		);
 	}
@@ -68,7 +76,13 @@ function renderControls({
 		</ChakraProvider>,
 	);
 
-	return { onShowSpotsChange, onResetPlacement, onExcludeRowsChange, onExcludeColumnsChange };
+	return {
+		onShowSpotsChange,
+		onResetPlacement,
+		onExcludeRowsChange,
+		onExcludeColumnsChange,
+		onDisplayModeChange,
+	};
 }
 
 describe("TissueSelectionControls", () => {
@@ -123,14 +137,17 @@ describe("TissueSelectionControls", () => {
 		expect(screen.getByTestId("tissue-reset-placement")).toBeDisabled();
 	});
 
-	it("toggles row exclusion via checkboxes and reports the sorted list", async () => {
+	it("numbers row exclusion from the bottom: displayed 1 excludes the last arrayRow", async () => {
 		const user = userEvent.setup();
 		const { onExcludeRowsChange } = renderControls({ rows: 3 });
 
-		const row2 = screen.getByRole("checkbox", { name: "2" });
-		await user.click(row2);
+		// Row checkboxes use bottom-left numbering (1 = bottom of the grid,
+		// matching the exported array_row convention), so clicking "1" must
+		// report the internal arrayRow 3.
+		const row1 = screen.getByRole("checkbox", { name: "1" });
+		await user.click(row1);
 
-		expect(onExcludeRowsChange).toHaveBeenCalledWith([2]);
+		expect(onExcludeRowsChange).toHaveBeenCalledWith([3]);
 	});
 
 	it("shows existing exclusions as checked and toggling removes them", async () => {
@@ -140,11 +157,13 @@ describe("TissueSelectionControls", () => {
 			excludedRows: [1, 3],
 		});
 
+		// arrayRow 1 (grid top) is displayed as "3"; arrayRow 3 (grid bottom)
+		// is displayed as "1".
 		expect(screen.getByRole("checkbox", { name: "1" })).toBeChecked();
 		expect(screen.getByRole("checkbox", { name: "3" })).toBeChecked();
 
 		await user.click(screen.getByRole("checkbox", { name: "1" }));
-		expect(onExcludeRowsChange).toHaveBeenCalledWith([3]);
+		expect(onExcludeRowsChange).toHaveBeenCalledWith([1]);
 	});
 
 	it("handles column exclusion independently", async () => {
@@ -155,5 +174,32 @@ describe("TissueSelectionControls", () => {
 
 		expect(onExcludeColumnsChange).toHaveBeenCalledWith([1]);
 		expect(onExcludeRowsChange).not.toHaveBeenCalled();
+	});
+
+	it("toggles the display mode switch between tissue and heatmap", async () => {
+		const user = userEvent.setup();
+		const { onDisplayModeChange } = renderControls({ displayMode: "tissue" });
+
+		const displaySwitch = screen.getByTestId("tissue-display-mode-switch");
+		expect(displaySwitch).not.toHaveAttribute("data-checked");
+
+		await user.click(displaySwitch);
+		expect(onDisplayModeChange).toHaveBeenCalledWith("heatmap");
+	});
+
+	it("disables the heatmap switch without expression data and shows a hint", () => {
+		const { onDisplayModeChange } = renderControls({
+			hasExpressionData: false,
+		});
+
+		expect(screen.getByTestId("tissue-display-mode-switch")).toHaveAttribute("data-disabled");
+		expect(screen.getByText(/Log2_nGene_Spatial/)).toBeInTheDocument();
+		expect(onDisplayModeChange).not.toHaveBeenCalled();
+	});
+
+	it("disables the display switch with the rest of the controls", () => {
+		renderControls({ disabled: true, hasExpressionData: true });
+
+		expect(screen.getByTestId("tissue-display-mode-switch")).toHaveAttribute("data-disabled");
 	});
 });

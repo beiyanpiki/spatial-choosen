@@ -127,6 +127,11 @@ export type ChipConfigSlice = PreprocessSliceBase & {
    *  position `${arrayRow}:${arrayCol}` (bottom-left 1-based, post row-flip).
    *  Absent entries fall back to the `${row}:${col}` placeholder at export. */
   barcodesByPosition: Record<string, string>;
+  /** `Log2_nGene_Spatial` values from the user-imported tissue activation CSV,
+   *  keyed by in-memory position `${arrayRow}:${arrayCol}` (same convention as
+   *  `barcodesByPosition`). Absent cells have no value; the expression
+   *  heatmap only covers cells present here. */
+  log2nGeneByPosition: Record<string, number>;
   projectedSpots: ProjectedSpot[] | null;
 };
 

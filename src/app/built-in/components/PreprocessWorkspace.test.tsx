@@ -211,6 +211,7 @@ const createProject = (): PreprocessProject => ({
     excludedRows: [],
     excludedColumns: [],
     barcodesByPosition: {},
+    log2nGeneByPosition: {},
     projectedSpots: [
       createProjectedSpot('spot-a', 0.25, 0.25, 1, 1),
       createProjectedSpot('spot-b', 0.75, 0.25, 1, 2),

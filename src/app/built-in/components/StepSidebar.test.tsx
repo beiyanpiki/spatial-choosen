@@ -54,6 +54,7 @@ const createProject = (
     excludedRows: [],
     excludedColumns: [],
     barcodesByPosition: {},
+    log2nGeneByPosition: {},
     projectedSpots: [
       {
         id: 'spot-a',

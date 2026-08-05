@@ -57,6 +57,7 @@ const createDefaultChipConfigSlice = (): ChipConfigSlice => ({
 	excludedRows: [],
 	excludedColumns: [],
 	barcodesByPosition: {},
+	log2nGeneByPosition: {},
 	projectedSpots: null,
 });
 
@@ -275,6 +276,7 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		excludedRows,
 		excludedColumns,
 		barcodesByPosition,
+		log2nGeneByPosition,
 	} = value as Record<string, unknown>;
 
 	const allowedStatuses = new Set([
@@ -326,6 +328,18 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 	};
 	const normalizedBarcodesByPosition = normalizeBarcodesByPosition(barcodesByPosition);
 
+	const normalizeLog2nGeneByPosition = (value: unknown): Record<string, number> => {
+		if (!isRecord(value)) return {};
+		const result: Record<string, number> = {};
+		for (const [key, entry] of Object.entries(value)) {
+			if (typeof entry === "number" && Number.isFinite(entry)) {
+				result[key] = entry;
+			}
+		}
+		return result;
+	};
+	const normalizedLog2nGeneByPosition = normalizeLog2nGeneByPosition(log2nGeneByPosition);
+
 	const normalizedOrigin = isRecord(origin)
 		&& typeof (origin as Record<string, unknown>).x === "number"
 		&& typeof (origin as Record<string, unknown>).y === "number"
@@ -354,6 +368,7 @@ const normalizeChipConfigSlice = (value: unknown): ChipConfigSlice => {
 		excludedRows: normalizedExcludedRows,
 		excludedColumns: normalizedExcludedColumns,
 		barcodesByPosition: normalizedBarcodesByPosition,
+		log2nGeneByPosition: normalizedLog2nGeneByPosition,
 		rotationDegrees:
 			typeof rotationDegrees === "number" ? rotationDegrees : 0,
 		// projectedSpots are recomputed in the UI after load; never persist them.

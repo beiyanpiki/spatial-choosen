@@ -173,6 +173,36 @@ describe('migratePreprocessProject', () => {
 		});
 	});
 
+	it('normalizes missing log2nGeneByPosition to an empty map', () => {
+		const project = buildCanonicalProject();
+		const raw = { ...project, chipConfig: { ...project.chipConfig } } as unknown as Record<string, unknown>;
+		delete (raw.chipConfig as Record<string, unknown>).log2nGeneByPosition;
+
+		const migrated = migratePreprocessProject(raw as unknown as PreprocessProject);
+
+		expect(migrated.chipConfig.log2nGeneByPosition).toEqual({});
+	});
+
+	it('keeps valid log2nGeneByPosition entries and drops non-finite values', () => {
+		const project = buildCanonicalProject();
+		project.chipConfig = {
+			...project.chipConfig,
+			log2nGeneByPosition: {
+				'96:1': 8.9,
+				'1:96': 10.1,
+				'1:1': Number.NaN,
+				'1:2': Number.POSITIVE_INFINITY,
+			},
+		};
+
+		const migrated = migratePreprocessProject(project);
+
+		expect(migrated.chipConfig.log2nGeneByPosition).toEqual({
+			'96:1': 8.9,
+			'1:96': 10.1,
+		});
+	});
+
 	it('normalizes a missing exportState slice to its default', () => {
 		const project = buildCanonicalProject();
 		const raw = { ...project } as unknown as Record<string, unknown>;
