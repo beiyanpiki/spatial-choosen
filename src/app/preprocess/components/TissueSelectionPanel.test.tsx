@@ -103,8 +103,8 @@ afterEach(() => {
 describe('TissueSelectionPanel', () => {
 	it('renders spots without borders and with more transparent fills', async () => {
 		const assignedFill = colorForLabel(1).toLowerCase();
-		const expectedAssignedFill = `${assignedFill}40`;
-		const expectedNeutralFill = '#e5e5e520';
+		const expectedAssignedFill = `${assignedFill}60`;
+		const expectedNeutralFill = '#e5e5e540';
 		const fillStyles: string[] = [];
 
 		fillRectMock.mockImplementation(() => {

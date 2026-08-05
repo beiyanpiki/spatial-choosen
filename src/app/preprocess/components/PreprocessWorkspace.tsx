@@ -76,7 +76,7 @@ import {
 	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
 } from "@/lib/preprocess/localization";
-import { getOrientedChipBoundsPixelRect } from "@/lib/preprocess/imageTransforms";
+import { getCanvasAxisChipBoundsPixelRect } from "@/lib/preprocess/imageTransforms";
 import {
 	buildInvertedTissueSelectionState,
 	buildManualTissueSelectionState,
@@ -365,9 +365,11 @@ export const generateFocusedHeDataUrl = async (args: {
 				sourceHeight * Math.abs(Math.cos(radians)),
 		),
 	);
-	const orientedChipBounds = getOrientedChipBoundsPixelRect(
+	// Chip bounds are captured in the canvas-axis (display frame) coordinate
+	// system; the oriented output already carries the transform, so the crop
+	// region is the box mapped directly at source-pixel offsets.
+	const orientedChipBounds = getCanvasAxisChipBoundsPixelRect(
 		args.chipBounds,
-		args.imageTransform,
 		{ width: sourceWidth, height: sourceHeight },
 		{ width: orientedWidth, height: orientedHeight },
 	);
@@ -387,11 +389,11 @@ export const generateFocusedHeDataUrl = async (args: {
 	orientedContext.fillStyle = "#ffffff";
 	orientedContext.fillRect(0, 0, orientedWidth, orientedHeight);
 	orientedContext.translate(orientedWidth / 2, orientedHeight / 2);
+	orientedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
 	orientedContext.scale(
 		args.imageTransform.flipHorizontal ? -1 : 1,
 		args.imageTransform.flipVertical ? -1 : 1,
 	);
-	orientedContext.rotate((args.imageTransform.rotationDegrees * Math.PI) / 180);
 	orientedContext.drawImage(
 		sourceImage,
 		-sourceWidth / 2,
@@ -809,6 +811,16 @@ export function PreprocessWorkspace({
 			? focusedHeMovingImage
 			: (project.sourceAssets.images[project.alignment.movingImage] ?? null)
 		: null;
+	// The focused HE crop has the HE-focus orientation baked in, so the moving
+	// canvas uses an identity transform for it. Until HE focus is complete the
+	// canvas falls back to the raw HE source — display it with the orientation
+	// the user configured in HE focus instead of the untransformed original.
+	const alignmentMovingImageTransform = project
+		? project.alignment.movingImage === "he" &&
+			project.heFocus.status !== "complete"
+			? project.heFocus.imageTransform
+			: project.alignment.movingImageTransform
+		: undefined;
 	const localizationImageDataUrl =
 		localizationImage?.workingDataUrl ?? localizationImage?.dataUrl ?? null;
 	const localizationChipBounds = project?.localization.chipBounds ?? null;
@@ -2569,6 +2581,7 @@ export function PreprocessWorkspace({
 									alignment={project.alignment}
 									chipBounds={project.localization.chipBounds}
 									movingImage={alignmentMovingImage}
+									movingImageTransform={alignmentMovingImageTransform}
 									onSolveAccepted={() => {
 										onStepChange("cropQc");
 									}}

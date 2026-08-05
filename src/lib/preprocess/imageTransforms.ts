@@ -41,12 +41,35 @@ export function normalizeRotationDegrees(value: number): number {
   return Math.min(180, Math.max(-180, Number.isFinite(value) ? value : 0));
 }
 
+// Flips are applied in the source/screen coordinate system first, then the
+// rotation — so `rotationDegrees` always means the visible rotation on screen,
+// regardless of flip state (a reflection would otherwise invert the visual
+// rotation direction).
 export function applyImageDisplayTransform(
   point: PreprocessPoint,
   transform: LocalizationImageTransform,
 ): PreprocessPoint {
   const centered = toCentered(point);
+  const flipped = {
+    x: centered.x * (transform.flipHorizontal ? -1 : 1),
+    y: centered.y * (transform.flipVertical ? -1 : 1),
+  };
   const radians = degreesToRadians(normalizeRotationDegrees(transform.rotationDegrees));
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  return fromCentered({
+    x: flipped.x * cos - flipped.y * sin,
+    y: flipped.x * sin + flipped.y * cos,
+  });
+}
+
+export function invertImageDisplayTransform(
+  point: PreprocessPoint,
+  transform: LocalizationImageTransform,
+): PreprocessPoint {
+  const centered = toCentered(point);
+  const radians = degreesToRadians(-normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   const rotated = {
@@ -60,25 +83,6 @@ export function applyImageDisplayTransform(
   });
 }
 
-export function invertImageDisplayTransform(
-  point: PreprocessPoint,
-  transform: LocalizationImageTransform,
-): PreprocessPoint {
-  const centered = toCentered(point);
-  const unflipped = {
-    x: centered.x * (transform.flipHorizontal ? -1 : 1),
-    y: centered.y * (transform.flipVertical ? -1 : 1),
-  };
-  const radians = degreesToRadians(-normalizeRotationDegrees(transform.rotationDegrees));
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-
-  return fromCentered({
-    x: unflipped.x * cos - unflipped.y * sin,
-    y: unflipped.x * sin + unflipped.y * cos,
-  });
-}
-
 export function projectSourcePointToDisplayRect(
   point: PreprocessPoint,
   transform: LocalizationImageTransform,
@@ -88,15 +92,15 @@ export function projectSourcePointToDisplayRect(
   const centerY = displayRect.originY + displayRect.height / 2;
   const displayDeltaX = (point.x - CENTER) * displayRect.width;
   const displayDeltaY = (point.y - CENTER) * displayRect.height;
+  const flippedDisplayDeltaX = displayDeltaX * (transform.flipHorizontal ? -1 : 1);
+  const flippedDisplayDeltaY = displayDeltaY * (transform.flipVertical ? -1 : 1);
   const radians = degreesToRadians(normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const rotatedDisplayDeltaX = displayDeltaX * cos - displayDeltaY * sin;
-  const rotatedDisplayDeltaY = displayDeltaX * sin + displayDeltaY * cos;
 
   return {
-    x: centerX + rotatedDisplayDeltaX * (transform.flipHorizontal ? -1 : 1),
-    y: centerY + rotatedDisplayDeltaY * (transform.flipVertical ? -1 : 1),
+    x: centerX + flippedDisplayDeltaX * cos - flippedDisplayDeltaY * sin,
+    y: centerY + flippedDisplayDeltaX * sin + flippedDisplayDeltaY * cos,
   };
 }
 
@@ -107,17 +111,19 @@ export function invertDisplayRectPointToSource(
 ): PreprocessPoint {
   const centerX = displayRect.originX + displayRect.width / 2;
   const centerY = displayRect.originY + displayRect.height / 2;
-  const unflippedDisplayDeltaX = (point.x - centerX) * (transform.flipHorizontal ? -1 : 1);
-  const unflippedDisplayDeltaY = (point.y - centerY) * (transform.flipVertical ? -1 : 1);
+  const rotatedDisplayDeltaX = point.x - centerX;
+  const rotatedDisplayDeltaY = point.y - centerY;
   const radians = degreesToRadians(-normalizeRotationDegrees(transform.rotationDegrees));
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const unrotatedDisplayDeltaX = unflippedDisplayDeltaX * cos - unflippedDisplayDeltaY * sin;
-  const unrotatedDisplayDeltaY = unflippedDisplayDeltaX * sin + unflippedDisplayDeltaY * cos;
+  const unrotatedDisplayDeltaX = rotatedDisplayDeltaX * cos - rotatedDisplayDeltaY * sin;
+  const unrotatedDisplayDeltaY = rotatedDisplayDeltaX * sin + rotatedDisplayDeltaY * cos;
+  const unflippedDisplayDeltaX = unrotatedDisplayDeltaX * (transform.flipHorizontal ? -1 : 1);
+  const unflippedDisplayDeltaY = unrotatedDisplayDeltaY * (transform.flipVertical ? -1 : 1);
 
   return {
-    x: unrotatedDisplayDeltaX / displayRect.width + CENTER,
-    y: unrotatedDisplayDeltaY / displayRect.height + CENTER,
+    x: unflippedDisplayDeltaX / displayRect.width + CENTER,
+    y: unflippedDisplayDeltaY / displayRect.height + CENTER,
   };
 }
 
@@ -147,59 +153,22 @@ export function getLowerLeftMarkerPoints(
   ] as const;
 }
 
-export function transformImagePixelPoint(
-  point: PixelPoint,
-  transform: LocalizationImageTransform,
-  sourceSize: PixelSize,
-  outputSize: PixelSize,
-): PixelPoint {
-  const sourceCenter = {
-    x: sourceSize.width / 2,
-    y: sourceSize.height / 2,
-  };
-  const outputCenter = {
-    x: outputSize.width / 2,
-    y: outputSize.height / 2,
-  };
-  const radians = degreesToRadians(normalizeRotationDegrees(transform.rotationDegrees));
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-  const sourceDeltaX = point.x - sourceCenter.x;
-  const sourceDeltaY = point.y - sourceCenter.y;
-  const rotatedDeltaX = sourceDeltaX * cos - sourceDeltaY * sin;
-  const rotatedDeltaY = sourceDeltaX * sin + sourceDeltaY * cos;
-
-  return {
-    x: outputCenter.x + rotatedDeltaX * (transform.flipHorizontal ? -1 : 1),
-    y: outputCenter.y + rotatedDeltaY * (transform.flipVertical ? -1 : 1),
-  };
-}
-
-export function getOrientedChipBoundsPixelRect(
+// Chip bounds are captured in the fixed canvas-axis coordinate system: the
+// stage draws the overlay at raw normalized positions while the image rotates
+// underneath it, so the bounds are source-normalized positions of the *display
+// frame* (aspect = source aspect). The oriented output is the source with the
+// transform already applied, so the crop region is the box mapped directly at
+// source-pixel offsets from the output center — applying the transform again
+// would crop a different region than the box covers.
+export function getCanvasAxisChipBoundsPixelRect(
   rect: PreprocessRect,
-  transform: LocalizationImageTransform,
   sourceSize: PixelSize,
   outputSize: PixelSize,
 ): PixelPoint & PixelSize {
-  const sourceX = rect.x * sourceSize.width;
-  const sourceY = rect.y * sourceSize.height;
-  const sourceWidth = rect.width * sourceSize.width;
-  const sourceHeight = rect.height * sourceSize.height;
-  const points = [
-    { x: sourceX, y: sourceY },
-    { x: sourceX + sourceWidth, y: sourceY },
-    { x: sourceX + sourceWidth, y: sourceY + sourceHeight },
-    { x: sourceX, y: sourceY + sourceHeight },
-  ].map((point) => transformImagePixelPoint(point, transform, sourceSize, outputSize));
-  const minX = Math.min(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const maxY = Math.max(...points.map((point) => point.y));
-
   return {
-    x: Math.round(minX),
-    y: Math.round(minY),
-    width: Math.max(1, Math.round(maxX - minX)),
-    height: Math.max(1, Math.round(maxY - minY)),
+    x: Math.round(outputSize.width / 2 + (rect.x - 0.5) * sourceSize.width),
+    y: Math.round(outputSize.height / 2 + (rect.y - 0.5) * sourceSize.height),
+    width: Math.max(1, Math.round(rect.width * sourceSize.width)),
+    height: Math.max(1, Math.round(rect.height * sourceSize.height)),
   };
 }

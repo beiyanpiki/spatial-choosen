@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LocalizationImageTransform, PreprocessPoint, PreprocessRect } from '@/types/preprocess';
 import {
 	applyImageDisplayTransform,
+	getCanvasAxisChipBoundsPixelRect,
 	getLowerLeftMarkerPoints,
 	getTransformedRectCorners,
 	invertDisplayRectPointToSource,
@@ -48,10 +49,16 @@ const transforms: Array<{ name: string; transform: LocalizationImageTransform; e
 		expected: { x: 0.2, y: 0.2 },
 	},
 	{
-		name: 'combined rotation + view-horizontal flip',
+		name: 'combined horizontal flip + rotation (flip applied in source frame)',
 		transform: { rotationDegrees: 90, flipHorizontal: true, flipVertical: false, scale: 1 },
 		point: { x: 0.12, y: 0.73 },
-		expected: { x: 0.73, y: 0.12 },
+		expected: { x: 0.27, y: 0.88 },
+	},
+	{
+		name: 'vertical flip keeps rotate-left moving the visible top to the left',
+		transform: { rotationDegrees: -90, flipHorizontal: false, flipVertical: true, scale: 1 },
+		point: { x: 0.5, y: 1 },
+		expected: { x: 0, y: 0.5 },
 	},
 ];
 
@@ -88,7 +95,7 @@ describe('imageTransforms', () => {
 		);
 	});
 
-	it('applies horizontal flips in the rotated display coordinate system', () => {
+	it('applies horizontal flips in the source coordinate system before rotation', () => {
 		const transform: LocalizationImageTransform = {
 			rotationDegrees: 90,
 			flipHorizontal: true,
@@ -105,11 +112,49 @@ describe('imageTransforms', () => {
 
 		const displayPoint = projectSourcePointToDisplayRect(sourcePoint, transform, displayRect);
 
-		expectPointCloseTo(displayPoint, { x: 220, y: 60 });
+		expectPointCloseTo(displayPoint, { x: 580, y: 540 });
 		expectPointCloseTo(
 			invertDisplayRectPointToSource(displayPoint, transform, displayRect),
 			sourcePoint,
 		);
+	});
+
+	it('maps canvas-axis chip bounds directly into the oriented output (crop matches the box content)', () => {
+		// Step 2 scenario: eosin rotated 90° with a committed capture box. The
+		// box is drawn at raw canvas-axis positions, so the oriented crop must
+		// be the box mapped at source-pixel offsets from the output center —
+		// independent of the transform that is already baked into the output.
+		const sourceSize = { width: 2048, height: 2248 };
+		const outputSize = { width: 2248, height: 2048 };
+		const chipBounds = {
+			x: 0.3682958199356913,
+			y: 0.33427888608963446,
+			width: 0.28290443666636905,
+			height: 0.2577350027992544,
+		};
+
+		const pixelRect = getCanvasAxisChipBoundsPixelRect(chipBounds, sourceSize, outputSize);
+
+		expect(pixelRect).toEqual({
+			x: 854,
+			y: 651,
+			width: 579,
+			height: 579,
+		});
+	});
+
+	it('keeps the visual rotation direction independent of flips (rotate-left after vertical flip)', () => {
+		const transform: LocalizationImageTransform = {
+			rotationDegrees: -90,
+			flipHorizontal: false,
+			flipVertical: true,
+			scale: 1,
+		};
+		// After a vertical flip the visible top edge is the source bottom edge;
+		// "rotate left" must still move the visible top edge to the left.
+		const visibleTopAfterRotateLeft = applyImageDisplayTransform({ x: 0.5, y: 1 }, transform);
+
+		expectPointCloseTo(visibleTopAfterRotateLeft, { x: 0, y: 0.5 });
 	});
 
 	it('transforms off-axis rect corners under 90 degree rotation', () => {

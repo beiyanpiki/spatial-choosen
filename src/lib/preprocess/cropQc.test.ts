@@ -868,8 +868,8 @@ describe('runCropQc feature match preview', () => {
       args: [20, 10, 40, 40, 0, 0, 40, 40],
     });
     expect(featureSummary.arcPoints).toHaveLength(2);
-    expectPreviewPointCloseTo(featureSummary.arcPoints[0], { x: 0, y: 20 });
-    expectPreviewPointCloseTo(featureSummary.arcPoints[1], { x: 64, y: 20 });
+    expectPreviewPointCloseTo(featureSummary.arcPoints[0], { x: 60, y: 60 });
+    expectPreviewPointCloseTo(featureSummary.arcPoints[1], { x: 124, y: 60 });
   });
 
   it('swaps emitted dimensions and crop-local HE geometry for non-square right-angle rotations', async () => {

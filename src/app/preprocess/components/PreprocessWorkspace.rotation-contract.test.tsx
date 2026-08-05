@@ -18,7 +18,7 @@ import {
   translateChipBounds,
 } from '@/lib/preprocess/localization';
 import {
-	getOrientedChipBoundsPixelRect,
+	getCanvasAxisChipBoundsPixelRect,
 } from '@/lib/preprocess/imageTransforms';
 
 const mockRunCropQc = vi.fn();
@@ -687,7 +687,7 @@ describe('PreprocessWorkspace rotation contract', () => {
 			expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
 			const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
 			expect(drawSource).toMatchObject({ width: 180, height: 240 });
-			expect(drawArgs).toEqual([0, 0, 63, 48, 9, 24, 63, 48]);
+			expect(drawArgs).toEqual([0, 21, 18, 72, 54, 0, 18, 72]);
 	});
 
 	it('renders fully out-of-bounds HEFocus crops as all-white outputs at the requested size', async () => {
@@ -786,6 +786,75 @@ describe('PreprocessWorkspace rotation contract', () => {
 			rotationDegrees: -90,
 			flipHorizontal: false,
 			flipVertical: true,
+		});
+	});
+
+	it('applies the HE-focus orientation to the raw HE moving image until HE focus is complete', async () => {
+		const alignmentProject = createBaseProject();
+		alignmentProject.currentStep = 'alignment';
+		alignmentProject.heFocus = {
+			...alignmentProject.heFocus,
+			status: 'ready',
+			isStale: false,
+			chipBounds: null,
+			handles: [],
+			imageTransform: {
+				rotationDegrees: 90,
+				flipHorizontal: true,
+				flipVertical: false,
+				scale: 1,
+			},
+		};
+
+		render(<WorkspaceHarness initialProject={alignmentProject} />);
+
+		await waitFor(() => {
+			expect(alignmentPanelSpy).toHaveBeenCalled();
+		});
+
+		const alignmentProps = alignmentPanelSpy.mock.calls.at(-1)?.[0] as
+			| { movingImageTransform?: LocalizationImageTransform }
+			| undefined;
+		expect(alignmentProps?.movingImageTransform).toEqual({
+			rotationDegrees: 90,
+			flipHorizontal: true,
+			flipVertical: false,
+			scale: 1,
+		});
+	});
+
+	it('keeps the focused HE moving image on an identity transform once HE focus is complete', async () => {
+		const alignmentProject = createBaseProject();
+		alignmentProject.currentStep = 'alignment';
+		alignmentProject.heFocus = {
+			...alignmentProject.heFocus,
+			status: 'complete',
+			isStale: false,
+			chipBounds: { x: 0.24, y: 0.28, width: 0.3, height: 0.4 },
+			handles: [],
+			imageTransform: {
+				rotationDegrees: 90,
+				flipHorizontal: true,
+				flipVertical: false,
+				scale: 1,
+			},
+			focusedImageDataUrl: null,
+		};
+
+		render(<WorkspaceHarness initialProject={alignmentProject} />);
+
+		await waitFor(() => {
+			expect(alignmentPanelSpy).toHaveBeenCalled();
+		});
+
+		const alignmentProps = alignmentPanelSpy.mock.calls.at(-1)?.[0] as
+			| { movingImageTransform?: LocalizationImageTransform }
+			| undefined;
+		expect(alignmentProps?.movingImageTransform).toEqual({
+			rotationDegrees: 0,
+			flipHorizontal: false,
+			flipVertical: false,
+			scale: 1,
 		});
 	});
 
@@ -1135,9 +1204,8 @@ describe('PreprocessWorkspace rotation contract', () => {
 				expect(screen.getByTestId('he-focus-localize-reference-preview')).toBeInTheDocument();
 			});
 
-				const requestedBounds = getOrientedChipBoundsPixelRect(
+				const requestedBounds = getCanvasAxisChipBoundsPixelRect(
 					expectedCommittedBounds,
-					latestProject.localization.imageTransform,
 					ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE,
 					{
 						width: ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height,

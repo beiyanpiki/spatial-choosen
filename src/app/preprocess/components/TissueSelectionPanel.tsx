@@ -149,8 +149,8 @@ export function TissueSelectionPanel({
   }, [eosinCropDataUrl, imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
-  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}40`, []);
-  const neutralSpotFillColor = '#e5e5e520';
+  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}60`, []);
+  const neutralSpotFillColor = '#e5e5e540';
 
   const computeBaseViewCb = useCallback(
     () => computeBaseView(hostRect, ratio),

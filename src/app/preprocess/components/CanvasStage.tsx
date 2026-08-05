@@ -334,8 +334,8 @@ export function CanvasStage({
       displayTransform.originX + displayTransform.width / 2,
       displayTransform.originY + displayTransform.height / 2,
     );
-    context.scale(imageTransform.flipHorizontal ? -1 : 1, imageTransform.flipVertical ? -1 : 1);
     context.rotate((imageTransform.rotationDegrees * Math.PI) / 180);
+    context.scale(imageTransform.flipHorizontal ? -1 : 1, imageTransform.flipVertical ? -1 : 1);
     context.drawImage(
       activeImageElement,
       -displayTransform.width / 2,
