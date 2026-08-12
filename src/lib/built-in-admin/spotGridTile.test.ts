@@ -27,6 +27,50 @@ describe('buildNormalizedExpressionByPosition', () => {
       .toEqual({});
     expect(buildNormalizedExpressionByPosition({}, 2, 2)).toEqual({});
   });
+
+  it('clips extreme outliers so the mid-range uses the full color scale', () => {
+    // 100 normal cells spread 5.00..9.95 plus one extreme low outlier.
+    const values: Record<string, number> = { '1:1': -1000 };
+    for (let col = 2; col <= 101; col += 1) {
+      values[`1:${col}`] = 5 + (col - 2) * 0.05;
+    }
+
+    const normalized = buildNormalizedExpressionByPosition(values, 1, 101);
+
+    // P2 = sorted[2] = 5.05, P98 = sorted[98] = 9.85 → the mid-range value
+    // 7.5 lands near 0.51 instead of ~0.997 that a plain min-max over the
+    // full 1009.95 range would produce (everything crushed into the hottest
+    // color band).
+    expect(normalized['1:52']).toBeGreaterThan(0.45);
+    expect(normalized['1:52']).toBeLessThan(0.55);
+    // Outliers clip to the endpoints instead of dominating the scale.
+    expect(normalized['1:1']).toBe(0);
+    expect(normalized['1:101']).toBe(1);
+  });
+
+  it('ignores excluded positions when scaling the heatmap', () => {
+    // Extreme lows live on row 2; excluding that row must remove them from
+    // the normalization set entirely.
+    const values: Record<string, number> = { '2:1': -1000, '2:2': 4, '2:3': 8 };
+    for (let col = 1; col <= 3; col += 1) {
+      values[`1:${col}`] = 1 + col;
+    }
+
+    const normalized = buildNormalizedExpressionByPosition(
+      values,
+      2,
+      3,
+      { excludedRows: [2], excludedColumns: [] },
+    );
+
+    expect(normalized['2:1']).toBeUndefined();
+    expect(normalized['2:2']).toBeUndefined();
+    expect(normalized['2:3']).toBeUndefined();
+    // Row 1 normalizes over {2, 3, 4} only.
+    expect(normalized['1:1']).toBe(0);
+    expect(normalized['1:2']).toBeCloseTo(0.5, 10);
+    expect(normalized['1:3']).toBe(1);
+  });
 });
 
 describe('computeGridCellLayout', () => {

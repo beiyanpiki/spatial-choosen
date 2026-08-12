@@ -1,4 +1,5 @@
 import { heatmapColor } from './expressionColors';
+import { isSpotExcluded, type ExclusionConfig } from './exclusion';
 
 /**
  * Offscreen-tile builder for the Step 2 capture-area grid overlay.
@@ -35,6 +36,12 @@ export const NEUTRAL_CELL_FILL = '#cbd5e026';
 /** Dark translucent fill for excluded cells. */
 export const EXCLUDED_CELL_FILL = 'rgba(15, 23, 42, 0.55)';
 
+/** Robust-scale percentiles: values outside this band are clipped to the
+ *  endpoints so a handful of extreme cells cannot crush the mid-range into a
+ *  single color (tune these to change the heatmap's sensitivity). */
+export const HEATMAP_LOW_PERCENTILE = 0.02;
+export const HEATMAP_HIGH_PERCENTILE = 0.98;
+
 const isExcluded = (
   config: Pick<SpotGridConfig, 'excludedRows' | 'excludedColumns'>,
   arrayRow: number,
@@ -42,38 +49,48 @@ const isExcluded = (
 ) => config.excludedRows.includes(arrayRow) || config.excludedColumns.includes(arrayCol);
 
 /**
- * Min-max normalize `Log2_nGene_Spatial` values to [0, 1] over the values
- * present on the grid (positions within 1..rows × 1..columns, image-top
- * convention). Cells without a value are omitted; a degenerate range maps
- * every value to the midpoint. The result is used by the tile builder only.
+ * Normalize `Log2_nGene_Spatial` values to [0, 1] over the cells actually
+ * rendered (positions within 1..rows × 1..columns, image-top convention,
+ * minus excluded rows/columns). Scaling is percentile-based (winsorized
+ * min-max over `HEATMAP_LOW_PERCENTILE`..`HEATMAP_HIGH_PERCENTILE`) so a few
+ * extreme low or high cells do not compress the visible mid-range; values
+ * outside the band are clipped to 0/1. Cells without a value are omitted; a
+ * degenerate range maps every value to the midpoint. The result is used by
+ * the tile builder only.
  */
 export function buildNormalizedExpressionByPosition(
   log2nGeneByPosition: Record<string, number>,
   rows: number,
   columns: number,
+  exclusion?: ExclusionConfig,
 ): Record<string, number> {
   const entries = Object.entries(log2nGeneByPosition).filter(([key, value]) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return false;
     const [row, col] = key.split(':').map(Number);
-    return (
-      Number.isInteger(row) && Number.isInteger(col)
-      && row >= 1 && row <= rows && col >= 1 && col <= columns
-    );
+    if (
+      !Number.isInteger(row) || !Number.isInteger(col)
+      || row < 1 || row > rows || col < 1 || col > columns
+    ) {
+      return false;
+    }
+    return !(exclusion && isSpotExcluded(exclusion, row, col));
   });
 
   if (entries.length === 0) return {};
 
-  let min = Infinity;
-  let max = -Infinity;
-  for (const [, value] of entries) {
-    if (value < min) min = value;
-    if (value > max) max = value;
-  }
-  const range = max - min;
+  const sorted = entries.map(([, value]) => value).sort((left, right) => left - right);
+  const percentile = (p: number) => (
+    sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))]
+  );
+  const low = percentile(HEATMAP_LOW_PERCENTILE);
+  const high = percentile(HEATMAP_HIGH_PERCENTILE);
+  const range = high - low;
 
   const normalized: Record<string, number> = {};
   for (const [key, value] of entries) {
-    normalized[key] = range > 0 ? (value - min) / range : 0.5;
+    normalized[key] = range > 0
+      ? Math.min(1, Math.max(0, (value - low) / range))
+      : 0.5;
   }
   return normalized;
 }

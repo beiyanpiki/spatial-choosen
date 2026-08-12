@@ -907,6 +907,10 @@ export function PreprocessWorkspace({
 				config.log2nGeneByPosition,
 				config.rows,
 				config.columns,
+				{
+					excludedRows: config.excludedRows,
+					excludedColumns: config.excludedColumns,
+				},
 			),
 			excludedRows: config.excludedRows,
 			excludedColumns: config.excludedColumns,
