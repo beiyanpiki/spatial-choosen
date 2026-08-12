@@ -662,13 +662,16 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     render(<WorkspaceHarness initialProject={initialProject} />);
 
     expect(screen.getByText(
-      'Upload the NATA Align image and the corresponding H&E stained tissue image. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.',
+      'Upload the NATA Align image, the corresponding H&E stained tissue image, and the tissue activation CSV from the chip. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.',
     )).toBeInTheDocument();
     expect(screen.getByText('NATA Align image')).toBeInTheDocument();
     expect(screen.getByText('H&E stained tissue image')).toBeInTheDocument();
     expect(screen.getByText('Moving image for HE focus, landmark registration, and registered crop generation.')).toBeInTheDocument();
     expect(screen.getByText('Upload HE image')).toBeInTheDocument();
     expect(screen.getByText('No HE source image uploaded yet.')).toBeInTheDocument();
+    expect(screen.getByText('Tissue activation CSV')).toBeInTheDocument();
+    expect(screen.getByText('No tissue activation CSV uploaded yet.')).toBeInTheDocument();
+    expect(screen.getByText('Upload CSV')).toBeInTheDocument();
   });
 
   it('toggles spot visibility locally without changing the selected spot count', async () => {

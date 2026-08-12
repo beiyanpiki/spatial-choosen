@@ -12,13 +12,13 @@ export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
   {
     id: 'sourceAssets',
     label: 'Upload Images',
-    description: 'Upload the NATA Align image and the corresponding H&E image.',
+    description: 'Upload the NATA Align image, the corresponding H&E image, and the tissue activation CSV.',
     testId: 'preprocess-step-source-assets',
   },
   {
     id: 'localization',
     label: 'Define Capture Area',
-    description: 'Position the capture area on the NATA Align image.',
+    description: 'Align the chip grid heatmap with the tissue on the NATA Align image.',
     testId: 'preprocess-step-localize',
   },
   {
@@ -96,7 +96,7 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
     case 'sourceAssets':
       return true;
     case 'localization':
-      return true;
+      return project.chipConfig.chipType != null;
     case 'heFocus':
       return project.localization.status === 'complete';
     case 'alignment':

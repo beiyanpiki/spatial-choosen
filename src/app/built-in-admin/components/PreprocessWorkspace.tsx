@@ -50,6 +50,7 @@ import {
 	type ChipConfigManifest,
 	loadAllChipConfigManifests,
 	loadChipConfigData,
+	loadChipConfigManifest,
 } from "@/lib/built-in-admin/chipConfigs";
 import { runCropQc } from "@/lib/built-in-admin/cropQc";
 import {
@@ -92,7 +93,9 @@ import {
 import type { PreprocessPersistMode } from "@/lib/built-in-admin/storage";
 import { selectedSpotIdsFromMatrix } from "@/lib/built-in-admin/tissueMatrix";
 import { runTissueAutoSelection } from "@/lib/built-in-admin/tissuePipeline";
+import { parseTissueActivationCsv } from "@/lib/built-in-admin/tissueCsvImport";
 import { resolveTissueSelectionSupport } from "@/lib/built-in-admin/tissueSupport";
+import { buildEmptyPreprocessProject } from "../projectState";
 import { AlignmentPanel } from "./AlignmentPanel";
 import { CanvasStage } from "./CanvasStage";
 import { CropQcPanel } from "./CropQcPanel";
@@ -466,7 +469,7 @@ const placeholderCopyByStep: Record<
 > = {
 	sourceAssets: {
 		title: "Source image intake",
-		body: "Upload the NATA Align image and the corresponding H&E stained tissue image. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.",
+		body: "Upload the NATA Align image, the corresponding H&E stained tissue image, and the tissue activation CSV from the chip. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.",
 	},
 	localization: {
 		title: "Chip localization",
@@ -741,6 +744,81 @@ function SourceAssetUploader({
 					<Input
 						type="file"
 						accept="image/*,.tif,.tiff"
+						display="none"
+						onChange={(event) => {
+							onUpload(event.target.files);
+							event.target.value = "";
+						}}
+					/>
+				</Box>
+			</Stack>
+		</Box>
+	);
+}
+
+function TissueCsvUploader({
+	label,
+	description,
+	buttonLabel,
+	emptyText,
+	imported,
+	summary,
+	onUpload,
+}: {
+	label: string;
+	description: string;
+	buttonLabel: string;
+	emptyText: string;
+	imported: boolean;
+	summary: string | null;
+	onUpload: (fileList: FileList | null) => void;
+}) {
+	return (
+		<Box
+			border="1px solid"
+			borderColor="gray.200"
+			borderRadius="xl"
+			bg="white"
+			px={4}
+			py={4}
+			h="full"
+		>
+			<Stack spacing={3}>
+				<Flex justify="space-between" align="flex-start" gap={3} wrap="wrap">
+					<Stack spacing={1}>
+						<Heading size="sm">{label}</Heading>
+						<Text fontSize="sm" color="gray.500">
+							{description}
+						</Text>
+					</Stack>
+					<Badge
+						colorScheme={imported ? "green" : "orange"}
+						alignSelf="flex-start"
+						borderRadius="full"
+					>
+						{imported ? "Ready" : "Missing"}
+					</Badge>
+				</Flex>
+				<Text fontSize="sm" color="gray.600">
+					{imported && summary ? summary : emptyText}
+				</Text>
+				<Box>
+					<Button
+						colorScheme="brand"
+						variant={imported ? "outline" : "solid"}
+						size="sm"
+						onClick={(event) => {
+							const input = event.currentTarget.nextElementSibling;
+							if (input instanceof HTMLInputElement) {
+								input.click();
+							}
+						}}
+					>
+						{buttonLabel}
+					</Button>
+					<Input
+						type="file"
+						accept=".csv,text/csv"
 						display="none"
 						onChange={(event) => {
 							onUpload(event.target.files);
@@ -1172,6 +1250,105 @@ export function PreprocessWorkspace({
 						error instanceof Error
 							? error.message
 							: "Choose a browser-supported image file.",
+					status: "error",
+				});
+			}
+		},
+		[onProjectMutate, toast],
+	);
+
+	const handleUploadCsv = useCallback(
+		async (fileList: FileList | null) => {
+			const file = fileList?.[0];
+			if (!file) return;
+
+			try {
+				const csvText = await file.text();
+				const parsed = parseTissueActivationCsv(csvText);
+				const manifest = await loadChipConfigManifest(parsed.chipType);
+				const activeSpotCount = parsed.matrix.values.reduce<number>(
+					(count, value) => (value === 1 ? count + 1 : count),
+					0,
+				);
+
+				onProjectMutate((current) => {
+					const timestamp = new Date().toISOString();
+					const eosin = current.sourceAssets.images.eosin;
+					const localizationAspectRatio =
+						eosin?.width && eosin.height ? eosin.width / eosin.height : 1;
+
+					// The tissue activation CSV fixes the chip configuration, so a
+					// (re-)import resets the whole alignment chain: chip geometry,
+					// expression data, and the derived grid all changed, and outputs
+					// from a previous CSV no longer apply.
+					const empty = buildEmptyPreprocessProject(current.name);
+					const nextLocalizationBase = normalizeLocalizationSlice({
+						...empty.localization,
+						targetImage: "eosin",
+						method: "manual",
+						chipBounds: createDefaultChipBounds(localizationAspectRatio),
+						imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+					});
+					const nextLocalization: LocalizationSlice = {
+						...nextLocalizationBase,
+						status: computeLocalizationStatus(
+							true,
+							nextLocalizationBase.chipBounds,
+						),
+						isStale: false,
+						error: null,
+						updatedAt: timestamp,
+					};
+
+					const resetProject = {
+						...current,
+						localization: nextLocalization,
+						heFocus: empty.heFocus,
+						alignment: empty.alignment,
+						cropQc: empty.cropQc,
+						tissueSelection: empty.tissueSelection,
+					};
+					const invalidatedProject = invalidateOnSourceAssetsChange(resetProject);
+
+					return {
+						...invalidatedProject,
+						localization: nextLocalization,
+						chipConfig: {
+							...empty.chipConfig,
+							chipType: parsed.chipType,
+							rows: manifest.gridRows,
+							columns: manifest.gridCols,
+							pitchX: manifest.spotGap,
+							pitchY: manifest.spotGap,
+							spotDiameter: manifest.spotDiameter,
+							origin: { x: 0, y: 0 },
+							rotationDegrees: 0,
+							excludedRows: [],
+							excludedColumns: [],
+							barcodesByPosition: parsed.barcodesByPosition,
+							log2nGeneByPosition: parsed.log2nGeneByPosition,
+							csvFileName: file.name,
+							status: "complete" as const,
+							isStale: false,
+							error: null,
+							updatedAt: timestamp,
+						},
+					};
+				});
+
+				toast({
+					title: "Tissue activation imported",
+					description: `${parsed.chipType} chip (${parsed.rows}×${parsed.columns}) with ${activeSpotCount} active spots.`,
+					status: "success",
+				});
+			} catch (error) {
+				console.error(error);
+				toast({
+					title: "Unable to import tissue CSV",
+					description:
+						error instanceof Error
+							? error.message
+							: "Choose a valid tissue activation CSV file.",
 					status: "error",
 				});
 			}
@@ -2217,6 +2394,25 @@ export function PreprocessWorkspace({
 										/>
 									</Box>
 								</Flex>
+									<TissueCsvUploader
+										label="Tissue activation CSV"
+										description="A tissue activation CSV from the chip (tissue/in_tissue, row/array_row, col/array_col, optional Log2_nGene_Spatial). It fixes the chip type and drives the capture-area heatmap grid."
+										buttonLabel={
+											project.chipConfig.csvFileName
+												? "Replace CSV"
+												: "Upload CSV"
+										}
+										emptyText="No tissue activation CSV uploaded yet."
+										imported={project.chipConfig.chipType != null}
+										summary={
+											project.chipConfig.csvFileName
+												? `${project.chipConfig.csvFileName} — ${project.chipConfig.chipType} chip (${project.chipConfig.rows}×${project.chipConfig.columns})`
+												: null
+										}
+										onUpload={(fileList) => {
+											void handleUploadCsv(fileList);
+										}}
+									/>
 								</Stack>
 							) : project.currentStep === "localization" ? (
 								<Flex

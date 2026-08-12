@@ -200,9 +200,9 @@ describe('StepSidebar', () => {
 
     expect(screen.getByText('Complete each step in sequence to generate the preprocessing results required for downstream analysis.')).toBeInTheDocument();
     expect(screen.getByText('Upload Images')).toBeInTheDocument();
-    expect(screen.getByText('Upload the NATA Align image and the corresponding H&E image.')).toBeInTheDocument();
+    expect(screen.getByText('Upload the NATA Align image, the corresponding H&E image, and the tissue activation CSV.')).toBeInTheDocument();
     expect(screen.getByText('Define Capture Area')).toBeInTheDocument();
-    expect(screen.getByText('Position the capture area on the NATA Align image.')).toBeInTheDocument();
+    expect(screen.getByText('Align the chip grid heatmap with the tissue on the NATA Align image.')).toBeInTheDocument();
     expect(screen.getByText('H&E ROI Alignment')).toBeInTheDocument();
     expect(screen.getByText('Select the corresponding ROI in the H&E image.')).toBeInTheDocument();
     expect(screen.getByText('Image Registration')).toBeInTheDocument();
