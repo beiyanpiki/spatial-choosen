@@ -18,6 +18,10 @@ import {
   ZoomInIcon,
   ZoomOutIcon,
 } from './stageControlsIcons';
+import {
+  buildSpotGridTile,
+  type SpotGridConfig,
+} from '@/lib/built-in-admin/spotGridTile';
 import type {
   LocalizationBoxColor,
   LocalizationImageTransform,
@@ -31,6 +35,8 @@ type CanvasStageProps = {
   allowOutOfBoundsChipBounds?: boolean;
   boxColor: LocalizationBoxColor;
   chipBounds: PreprocessRect | null;
+  /** Optional chip grid overlay (heatmap + exclusions) drawn inside the box. */
+  chipGrid?: ChipGridOverlay | null;
   onChipBoundsCancel?: () => void;
   onChipBoundsCommit?: (chipBounds: PreprocessRect) => void;
   containerTestId?: string;
@@ -91,6 +97,15 @@ type ScreenPoint = {
   y: number;
 };
 
+/** Grid overlay descriptor: the spot matrix plus a stable cache signature. */
+export type ChipGridOverlay = SpotGridConfig & {
+  signature: string;
+};
+
+/** Tile cache buckets by quantized size so gestures never rebuild the tile. */
+const GRID_TILE_BUCKET_PX = 256;
+const GRID_TILE_MAX_BUCKETS = 32;
+
 const CORNER_HANDLE_ORDER: readonly LocalizationResizeHandle[] = ['nw', 'ne', 'se', 'sw'];
 const EDGE_HANDLE_ORDER: readonly LocalizationResizeHandle[] = ['n', 'e', 's', 'w'];
 const ALL_HANDLE_ORDER: readonly LocalizationResizeHandle[] = [
@@ -103,6 +118,28 @@ const clampScale = (scale: number) => Math.min(4, Math.max(0.5, scale));
 const normalizeDegrees = (value: number) => {
   const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
   return Object.is(wrapped, -0) ? 0 : wrapped;
+};
+
+const getGridTile = (
+  cache: Map<string, HTMLCanvasElement>,
+  chipGrid: ChipGridOverlay,
+  targetPx: number,
+): HTMLCanvasElement | null => {
+  const bucket = Math.floor(targetPx / GRID_TILE_BUCKET_PX);
+  const key = `${chipGrid.signature}|${bucket}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  if (cache.size >= GRID_TILE_MAX_BUCKETS) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) cache.delete(oldestKey);
+  }
+  const tile = buildSpotGridTile(
+    chipGrid,
+    Math.max(64, (bucket + 1) * GRID_TILE_BUCKET_PX),
+  );
+  cache.set(key, tile);
+  return tile;
 };
 
 const DEFAULT_CANVAS_STAGE_LABELS: CanvasStageLabels = {
@@ -186,6 +223,7 @@ export function CanvasStage({
   allowOutOfBoundsChipBounds = false,
   boxColor,
   chipBounds,
+  chipGrid = null,
   onChipBoundsCancel,
   onChipBoundsCommit,
   containerTestId = 'preprocess-localization-canvas-column',
@@ -207,6 +245,7 @@ export function CanvasStage({
     ...labels,
   };
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const gridTileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragDidMoveRef = useRef(false);
   const dragLatestBoundsRef = useRef<PreprocessRect | null>(null);
@@ -343,8 +382,41 @@ export function CanvasStage({
       displayTransform.width,
       displayTransform.height,
     );
+
+    // Chip grid overlay: the tile is drawn inside the same transform block, so
+    // it rotates/flips/zooms with the image exactly like the eosin layer.
+    if (chipGrid && normalizedChipBounds) {
+      const boxWidth = displayTransform.width;
+      const boxHeight = displayTransform.height;
+      const box = {
+        x: -boxWidth / 2 + normalizedChipBounds.x * boxWidth,
+        y: -boxHeight / 2 + normalizedChipBounds.y * boxHeight,
+        width: normalizedChipBounds.width * boxWidth,
+        height: normalizedChipBounds.height * boxHeight,
+      };
+      // The chip grid is square while the capture box is a normalized square
+      // (screen-rectangular for non-square images); fit the square grid into
+      // the box's shorter axis, mirroring projectSpotsForCrop's min-scale fit
+      // into the downstream crop frame.
+      const side = Math.min(box.width, box.height);
+      const gridBox = {
+        x: box.x + (box.width - side) / 2,
+        y: box.y + (box.height - side) / 2,
+        width: side,
+        height: side,
+      };
+      const targetPx = Math.max(
+        64,
+        Math.ceil(side * (window.devicePixelRatio || 1)),
+      );
+      const tile = getGridTile(gridTileCacheRef.current, chipGrid, targetPx);
+      if (tile) {
+        context.drawImage(tile, gridBox.x, gridBox.y, gridBox.width, gridBox.height);
+      }
+    }
+
     context.restore();
-  }, [activeImageElement, displayTransform, imageTransform, viewportSize]);
+  }, [activeImageElement, chipGrid, displayTransform, imageTransform, normalizedChipBounds, viewportSize]);
 
   const getRelativePoint = useCallback((clientX: number, clientY: number) => {
     const host = hostRef.current;

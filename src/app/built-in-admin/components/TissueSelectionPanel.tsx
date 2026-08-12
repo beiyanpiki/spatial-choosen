@@ -20,6 +20,7 @@ import {
   getTransform,
   relativeToImage,
 } from '../../../lib/canvasViewport';
+import { EXCLUDED_CELL_FILL } from '@/lib/built-in-admin/spotGridTile';
 import type { Point } from '@/types/project';
 import type { PreprocessPoint, ProjectedSpot } from '@/types/built-in-admin';
 
@@ -31,6 +32,9 @@ type TissueSelectionPanelProps = {
   eosinCropDataUrl: string | null;
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
+  /** Spot ids locked by the capture-area exclusions; they are never toggled
+   *  and render dimmed (see src/lib/built-in-admin/exclusion.ts). */
+  lockedSpotIds?: ReadonlySet<string>;
   showSpots?: boolean;
   disabled?: boolean;
   showControls?: boolean;
@@ -44,6 +48,7 @@ export function TissueSelectionPanel({
   eosinCropDataUrl,
   projectedSpots,
   selectedSpotIds,
+  lockedSpotIds,
   showSpots = true,
   disabled = false,
   showControls = true,
@@ -338,7 +343,7 @@ export function TissueSelectionPanel({
           return Math.abs(clickPoint.x - spot.x) <= width / 2
             && Math.abs(clickPoint.y - spot.y) <= height / 2;
         });
-        if (clickedSpot) {
+        if (clickedSpot && !lockedSpotIds?.has(clickedSpot.id)) {
           onSpotToggle?.(clickedSpot.id);
         }
       } else if (pointerMoved && committedPath.length >= 3) {
@@ -440,7 +445,12 @@ export function TissueSelectionPanel({
         const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
         const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
         const selected = selectedSpotIdSet.has(spot.id);
-        ctx.fillStyle = selected ? assignedSpotFillColor : neutralSpotFillColor;
+        const locked = lockedSpotIds?.has(spot.id) ?? false;
+        ctx.fillStyle = locked
+          ? EXCLUDED_CELL_FILL
+          : selected
+            ? assignedSpotFillColor
+            : neutralSpotFillColor;
         ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
       }
     }
@@ -471,6 +481,7 @@ export function TissueSelectionPanel({
     getTransformCb,
     hostRect,
     isDrawing,
+    lockedSpotIds,
     projectedSpots,
     selectedSpotIdSet,
     showSpots,

@@ -79,6 +79,11 @@ import {
 } from "@/lib/built-in-admin/localization";
 import { getOrientedChipBoundsPixelRect } from "@/lib/built-in-admin/imageTransforms";
 import {
+	lockedSpotIds,
+	lockTissueSelectionSlice,
+	type ExclusionConfig,
+} from "@/lib/built-in-admin/exclusion";
+import {
 	buildInvertedTissueSelectionState,
 	buildManualTissueSelectionState,
 } from "@/lib/built-in-admin/projectUpdates";
@@ -94,11 +99,17 @@ import type { PreprocessPersistMode } from "@/lib/built-in-admin/storage";
 import { selectedSpotIdsFromMatrix } from "@/lib/built-in-admin/tissueMatrix";
 import { runTissueAutoSelection } from "@/lib/built-in-admin/tissuePipeline";
 import { parseTissueActivationCsv } from "@/lib/built-in-admin/tissueCsvImport";
+import {
+	buildNormalizedExpressionByPosition,
+	gridSignature,
+	type SpotGridConfig,
+} from "@/lib/built-in-admin/spotGridTile";
 import { resolveTissueSelectionSupport } from "@/lib/built-in-admin/tissueSupport";
 import { buildEmptyPreprocessProject } from "../projectState";
 import { AlignmentPanel } from "./AlignmentPanel";
-import { CanvasStage } from "./CanvasStage";
+import { CanvasStage, type ChipGridOverlay } from "./CanvasStage";
 import { CropQcPanel } from "./CropQcPanel";
+import { ExclusionControls } from "./ExclusionControls";
 import { ExportPanel } from "./ExportPanel";
 import { StepSidebar } from "./StepSidebar";
 import {
@@ -875,6 +886,33 @@ export function PreprocessWorkspace({
 	const localizationImage = project
 		? (project.sourceAssets.images[project.localization.targetImage] ?? null)
 		: null;
+	const localizationChipGrid = useMemo<ChipGridOverlay | null>(() => {
+		if (!project) return null;
+		const config = project.chipConfig;
+		if (
+			!config.chipType ||
+			typeof config.rows !== "number" ||
+			typeof config.columns !== "number" ||
+			typeof config.spotDiameter !== "number" ||
+			typeof config.pitchX !== "number"
+		) {
+			return null;
+		}
+		const overlay: SpotGridConfig = {
+			rows: config.rows,
+			columns: config.columns,
+			spotDiameter: config.spotDiameter,
+			spotGap: config.pitchX,
+			normalizedByPosition: buildNormalizedExpressionByPosition(
+				config.log2nGeneByPosition,
+				config.rows,
+				config.columns,
+			),
+			excludedRows: config.excludedRows,
+			excludedColumns: config.excludedColumns,
+		};
+		return { ...overlay, signature: gridSignature(overlay) };
+	}, [project?.chipConfig]);
 	const currentHeImageSource = project
 		? (project.sourceAssets.images[project.heFocus.targetImage] ?? null)
 		: null;
@@ -1355,6 +1393,90 @@ export function PreprocessWorkspace({
 		},
 		[onProjectMutate, toast],
 	);
+
+	const exclusionConfigOf = useCallback(
+		(project: PreprocessProject): ExclusionConfig => ({
+			excludedRows: project.chipConfig.excludedRows,
+			excludedColumns: project.chipConfig.excludedColumns,
+		}),
+		[],
+	);
+
+	const handleExcludeRowsChange = useCallback(
+		(next: number[]) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						excludedRows: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	const handleExcludeColumnsChange = useCallback(
+		(next: number[]) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						excludedColumns: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	// Re-lock existing tissue selection when exclusions change after Step 6 has
+	// already produced a matrix/selection (see src/lib/built-in-admin/exclusion.ts).
+	useEffect(() => {
+		if (!project) return;
+		const projectedSpots = project.chipConfig.projectedSpots;
+		if (!projectedSpots || projectedSpots.length === 0) return;
+		const config = exclusionConfigOf(project);
+		if (config.excludedRows.length === 0 && config.excludedColumns.length === 0) return;
+		if (!project.tissueSelection.matrix && !project.tissueSelection.selectedSpotIds) return;
+
+		onProjectMutate(
+			(current) => {
+				const nextTissueSelection = lockTissueSelectionSlice(
+					current.tissueSelection,
+					current.chipConfig.projectedSpots ?? [],
+					exclusionConfigOf(current),
+				);
+				if (nextTissueSelection === current.tissueSelection) {
+					return current;
+				}
+				const updatedAt = new Date().toISOString();
+				return {
+					...current,
+					tissueSelection: {
+						...nextTissueSelection,
+						updatedAt,
+					},
+					exportState: {
+						...current.exportState,
+						status: "stale",
+						isStale: true,
+						updatedAt,
+						lastExportedAt: null,
+						artifacts: [],
+						error: null,
+					},
+				};
+			},
+			{ mode: "tissue", strategy: "debounced" },
+		);
+	}, [exclusionConfigOf, onProjectMutate, project?.chipConfig.excludedColumns, project?.chipConfig.excludedRows, project?.chipConfig.projectedSpots]);
 
 	useEffect(() => {
 		if (currentStepId !== "alignment") return;
@@ -2031,9 +2153,9 @@ export function PreprocessWorkspace({
 						return current;
 					}
 
-					return {
-						...current,
-						tissueSelection: {
+					const updatedAt = new Date().toISOString();
+					const nextTissueSelection = lockTissueSelectionSlice(
+						{
 							...current.tissueSelection,
 							mode: "matrix",
 							supportState: tissueSupport.supportState,
@@ -2051,14 +2173,21 @@ export function PreprocessWorkspace({
 							warning: result.warning,
 							status: result.warning ? "error" : "complete",
 							isStale: false,
-							updatedAt: new Date().toISOString(),
+							updatedAt,
 							error: result.warning,
 						},
+						current.chipConfig.projectedSpots ?? [],
+						exclusionConfigOf(current),
+					);
+
+					return {
+						...current,
+						tissueSelection: nextTissueSelection,
 						exportState: {
 							...current.exportState,
 							status: result.warning ? "stale" : "ready",
 							isStale: Boolean(result.warning),
-							updatedAt: new Date().toISOString(),
+							updatedAt,
 							lastExportedAt: null,
 							artifacts: [],
 							error: null,
@@ -2146,6 +2275,12 @@ export function PreprocessWorkspace({
 
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+	const tissueLockedSpotIds = useMemo<ReadonlySet<string> | undefined>(() => {
+		if (!project) return undefined;
+		const projectedSpots = project.chipConfig.projectedSpots;
+		if (!projectedSpots || projectedSpots.length === 0) return undefined;
+		return lockedSpotIds(projectedSpots, exclusionConfigOf(project));
+	}, [exclusionConfigOf, project?.chipConfig]);
 	const isTissueInteractionDisabled =
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
@@ -2163,14 +2298,18 @@ export function PreprocessWorkspace({
 								nextValue,
 							}
 						: { spotId: edit.spotId };
-					const nextTissueSelection = buildManualTissueSelectionState({
-						current: current.tissueSelection,
+					const nextTissueSelection = lockTissueSelectionSlice(
+						buildManualTissueSelectionState({
+							current: current.tissueSelection,
+							projectedSpots,
+							...editArgs,
+							rows: current.chipConfig.rows,
+							columns: current.chipConfig.columns,
+							updatedAt,
+						}),
 						projectedSpots,
-						...editArgs,
-						rows: current.chipConfig.rows,
-						columns: current.chipConfig.columns,
-						updatedAt,
-					});
+						exclusionConfigOf(current),
+					);
 					if (nextTissueSelection === current.tissueSelection) {
 						return current;
 					}
@@ -2425,6 +2564,7 @@ export function PreprocessWorkspace({
 											project.localization.boxColor as LocalizationBoxColor
 										}
 										chipBounds={localizationStageChipBounds}
+										chipGrid={localizationChipGrid}
 										image={localizationImage}
 										imageTransform={project.localization.imageTransform}
 										onScaleChange={(value) => {
@@ -2526,6 +2666,16 @@ export function PreprocessWorkspace({
 							);
 						}}
 									/>
+								<Box w={{ base: "100%", xl: "320px" }} flexShrink={0}>
+									<ExclusionControls
+										rows={project.chipConfig.rows}
+										columns={project.chipConfig.columns}
+										excludedRows={project.chipConfig.excludedRows}
+										excludedColumns={project.chipConfig.excludedColumns}
+										onExcludeRowsChange={handleExcludeRowsChange}
+										onExcludeColumnsChange={handleExcludeColumnsChange}
+									/>
+								</Box>
 								</Flex>
 							) : project.currentStep === "heFocus" ? (
 								<Stack spacing={5}>
@@ -2859,6 +3009,7 @@ export function PreprocessWorkspace({
 												}
 												projectedSpots={tissueProjectedSpots}
 												selectedSpotIds={tissueSelectedSpotIds}
+												lockedSpotIds={tissueLockedSpotIds}
 												showSpots={showTissueSpots}
 												showControls={false}
 												tool={tissueTool}
@@ -3233,7 +3384,7 @@ export function PreprocessWorkspace({
 															const updatedAt = new Date().toISOString();
 															return {
 																...current,
-																tissueSelection:
+																tissueSelection: lockTissueSelectionSlice(
 																	buildInvertedTissueSelectionState({
 																		current: current.tissueSelection,
 																		projectedSpots,
@@ -3241,6 +3392,9 @@ export function PreprocessWorkspace({
 																		columns: current.chipConfig.columns,
 																		updatedAt,
 																	}),
+																	projectedSpots,
+																	exclusionConfigOf(current),
+																),
 																exportState: {
 																	...current.exportState,
 																	status: "stale",
