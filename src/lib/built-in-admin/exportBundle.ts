@@ -38,6 +38,8 @@ type PreprocessExportReadiness =
         columns: number;
         matrixValues: number[];
         selectedSpotIds: Set<string>;
+        /** Barcodes captured from the tissue activation CSV, keyed by in-memory `${arrayRow}:${arrayCol}` (image-top). */
+        barcodesByPosition: Record<string, string>;
         spotDiameterFullres: number;
         tissueHiresScale: number;
         tissueLowresScale: number;
@@ -134,6 +136,7 @@ const toCsv = (
   selectedSpotIds: Set<string>,
   exportOnlySpotCenters: ExportOnlySpotCenter[],
   rows: number,
+  barcodesByPosition: Record<string, string>,
 ) => {
   const lines = [
     'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres',
@@ -154,8 +157,13 @@ const toCsv = (
     // CSV keeps bottom-left array_row while pxl_* stays in top-left image space.
     const serializedArrayRow = rows + 1 - spot.arrayRow;
 
+    // Barcodes captured from the tissue activation CSV (keyed by in-memory
+    // image-top array position) replace the template placeholders; positions
+    // absent from the CSV keep the placeholder barcode.
+    const csvBarcode = barcodesByPosition[`${spot.arrayRow}:${spot.arrayCol}`];
+
     return {
-      barcode: spot.barcode,
+      barcode: csvBarcode ?? spot.barcode,
       inTissue: selectedSpotIds.has(spot.id) ? '1' : '0',
       arrayRow: serializedArrayRow,
       arrayCol: spot.arrayCol,
@@ -336,6 +344,7 @@ export function getPreprocessZipExportReadiness(
       columns,
       matrixValues: validatedMatrix.values,
       selectedSpotIds: new Set(resolvedSelectedSpotIds),
+      barcodesByPosition: project.chipConfig.barcodesByPosition ?? {},
       spotDiameterFullres,
       tissueHiresScale,
       tissueLowresScale,
@@ -362,6 +371,7 @@ export async function exportPreprocessZip(args: {
     columns,
     matrixValues,
     selectedSpotIds,
+    barcodesByPosition,
     tissueHiresScale,
     tissueLowresScale,
     alignedImageDataUrl,
@@ -388,7 +398,13 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_hires_image.png', await imageSourceToBytes(heCropAssets.hires.dataUrl));
   zip.file('tissue_lowres_image.png', await imageSourceToBytes(heCropAssets.lowres.dataUrl));
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
-  zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, exportOnlyLayout.spotCenters, rows));
+  zip.file('tissue_positions.csv', toCsv(
+    projectedSpots,
+    selectedSpotIds,
+    exportOnlyLayout.spotCenters,
+    rows,
+    barcodesByPosition,
+  ));
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {

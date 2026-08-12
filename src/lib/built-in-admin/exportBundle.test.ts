@@ -659,6 +659,27 @@ describe('exportBundle canonical matrix exports', () => {
     vi.unstubAllGlobals();
   });
 
+  it('uses CSV barcodes in tissue_positions.csv and keeps template placeholders for missing positions', async () => {
+    const project = createBaseProject();
+    // Barcodes captured from the tissue activation CSV, keyed by in-memory
+    // image-top array position (spot-a: row 1 col 1, spot-d: row 64 col 64).
+    project.chipConfig.barcodesByPosition = {
+      '1:1': 'real-barcode-a',
+      '64:64': 'real-barcode-d',
+    };
+
+    const result = await exportProject(project);
+    const rows = await readExportedTissuePositions(result.blob);
+
+    // Exported rows use bottom-left array_row: spot-a (runtime row 1) exports
+    // as array_row 64; the CSV barcode replaces the template placeholder.
+    expect(rows.find((row) => row.array_col === 1 && row.array_row === 64)?.barcode).toBe('real-barcode-a');
+    expect(rows.find((row) => row.array_col === 64 && row.array_row === 1)?.barcode).toBe('real-barcode-d');
+    // Positions absent from the CSV keep the template placeholder barcodes.
+    expect(rows.find((row) => row.array_col === 2 && row.array_row === 64)?.barcode).toBe('barcode-spot-b');
+    expect(rows.find((row) => row.array_col === 1 && row.array_row === 63)?.barcode).toBe('barcode-spot-c');
+  });
+
   it('keeps excluded rows in the full-grid tissue_positions.csv with in_tissue=0', async () => {
     const project = createBaseProject();
     // Simulate the Step 2 exclusion lock: row 1 cells forced inactive while
