@@ -16,6 +16,7 @@ import {
 	Select,
 	Spinner,
 	Stack,
+	Switch,
 	Text,
 	useToast,
 } from "@chakra-ui/react";
@@ -2289,6 +2290,7 @@ export function PreprocessWorkspace({
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
+	const [showLocalizationGrid, setShowLocalizationGrid] = useState(true);
 	const commitManualTissueSelection = useCallback(
 		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
 			onProjectMutate(
@@ -2568,7 +2570,7 @@ export function PreprocessWorkspace({
 											project.localization.boxColor as LocalizationBoxColor
 										}
 										chipBounds={localizationStageChipBounds}
-										chipGrid={localizationChipGrid}
+										chipGrid={showLocalizationGrid ? localizationChipGrid : null}
 										image={localizationImage}
 										imageTransform={project.localization.imageTransform}
 										onScaleChange={(value) => {
@@ -2671,14 +2673,40 @@ export function PreprocessWorkspace({
 						}}
 									/>
 								<Box w={{ base: "100%", xl: "320px" }} flexShrink={0}>
-									<ExclusionControls
-										rows={project.chipConfig.rows}
-										columns={project.chipConfig.columns}
-										excludedRows={project.chipConfig.excludedRows}
-										excludedColumns={project.chipConfig.excludedColumns}
-										onExcludeRowsChange={handleExcludeRowsChange}
-										onExcludeColumnsChange={handleExcludeColumnsChange}
-									/>
+									<Stack spacing={4}>
+										<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
+											<CardBody p={4}>
+												<Stack spacing={3}>
+													<Text fontSize="sm" fontWeight="semibold">Heatmap matrix</Text>
+													<Flex align="center" justify="space-between" gap={3}>
+														<Text fontSize="sm">Show expression heatmap</Text>
+														<Switch
+															data-testid="localization-heatmap-toggle"
+															isChecked={showLocalizationGrid}
+															isDisabled={localizationChipGrid == null}
+															aria-label="Show expression heatmap matrix"
+															onChange={(event) => {
+																setShowLocalizationGrid(event.target.checked);
+															}}
+														/>
+													</Flex>
+													{localizationChipGrid == null ? (
+														<Text fontSize="xs" color="gray.500">
+															Import a tissue activation CSV with expression data to enable the heatmap matrix.
+														</Text>
+													) : null}
+												</Stack>
+											</CardBody>
+										</Card>
+										<ExclusionControls
+											rows={project.chipConfig.rows}
+											columns={project.chipConfig.columns}
+											excludedRows={project.chipConfig.excludedRows}
+											excludedColumns={project.chipConfig.excludedColumns}
+											onExcludeRowsChange={handleExcludeRowsChange}
+											onExcludeColumnsChange={handleExcludeColumnsChange}
+										/>
+									</Stack>
 								</Box>
 								</Flex>
 							) : project.currentStep === "heFocus" ? (

@@ -39,6 +39,7 @@ type CanvasStageMockLabels = Partial<{
 
 type CanvasStageMockProps = {
 	chipBounds?: PreprocessRect | null;
+	chipGrid?: unknown;
 	controlTestIdPrefix?: string;
   labels?: CanvasStageMockLabels;
 	onChipBoundsCommit?: (chipBounds: PreprocessRect) => void;
@@ -186,8 +187,9 @@ vi.mock('./AlignmentPanel', () => ({
 }));
 
 vi.mock('./CanvasStage', () => ({
-  CanvasStage: ({ chipBounds, controlTestIdPrefix = 'localize', labels, onChipBoundsCommit, onFlipHorizontal, onRotationDelta }: CanvasStageMockProps) => (
+  CanvasStage: ({ chipBounds, chipGrid, controlTestIdPrefix = 'localize', labels, onChipBoundsCommit, onFlipHorizontal, onRotationDelta }: CanvasStageMockProps) => (
     <div data-testid="canvas-stage-mock">
+      <span data-testid={`${controlTestIdPrefix}-chip-grid-status`}>{chipGrid ? 'on' : 'off'}</span>
       <button
         type="button"
         data-testid={`${controlTestIdPrefix}-mock-rotate-right-90`}
@@ -557,7 +559,7 @@ const createProject = (): PreprocessProject => ({
     pitchY: 1,
     origin: { x: 0, y: 0 },
     rotationDegrees: 0,
-    spotDiameter: null,
+    spotDiameter: 25,
     excludedRows: [],
     excludedColumns: [],
     barcodesByPosition: {},
@@ -1545,5 +1547,22 @@ describe('PreprocessWorkspace tissue CSV import', () => {
     });
     expect(latestProject.chipConfig.chipType).toBe('15um');
     expect(latestProject.chipConfig.csvFileName).toBeNull();
+  });
+});
+
+describe('PreprocessWorkspace localization heatmap toggle', () => {
+  it('shows the heatmap matrix by default and hides it when toggled off', async () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'localization';
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    const status = screen.getByTestId('localize-chip-grid-status');
+    expect(status).toHaveTextContent('on');
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('localization-heatmap-toggle'));
+
+    expect(status).toHaveTextContent('off');
   });
 });
