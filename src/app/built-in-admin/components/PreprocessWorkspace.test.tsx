@@ -1,5 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -164,6 +164,7 @@ vi.mock('../../../lib/built-in-admin/spotProjection', () => ({
 const mockRunTissueAutoSelection = vi.fn();
 const mockLoadAllChipConfigManifests = vi.fn();
 const mockLoadChipConfigData = vi.fn();
+const mockLoadChipConfigManifest = vi.fn();
 
 vi.mock('../../../lib/built-in-admin/tissuePipeline', () => ({
   runTissueAutoSelection: (...args: unknown[]) => mockRunTissueAutoSelection(...args),
@@ -176,6 +177,7 @@ vi.mock('../../../lib/built-in-admin/chipConfigs', async () => {
     ...actual,
     loadAllChipConfigManifests: (...args: unknown[]) => mockLoadAllChipConfigManifests(...args),
     loadChipConfigData: (...args: unknown[]) => mockLoadChipConfigData(...args),
+    loadChipConfigManifest: (...args: unknown[]) => mockLoadChipConfigManifest(...args),
   };
 });
 
@@ -342,6 +344,7 @@ beforeEach(() => {
   mockLoadAllChipConfigManifests.mockResolvedValue([]);
   mockLoadChipConfigData.mockReset();
   mockLoadChipConfigData.mockResolvedValue(null);
+  mockLoadChipConfigManifest.mockReset();
   mockExportPreprocessZip.mockReset();
   mockGetPreprocessZipExportReadiness.mockClear();
 });
@@ -1442,5 +1445,105 @@ describe('PreprocessWorkspace chip projection auto-run guards', () => {
     expect(latestProject.cropQc.cropHeight).toBe(96);
     expect(latestProject.cropQc.eosinReferenceGeometry?.width).toBe(30);
     expect(latestProject.cropQc.eosinReferenceGeometry?.height).toBe(40);
+  });
+});
+
+describe('PreprocessWorkspace tissue CSV import', () => {
+  const MANIFEST_50UM = {
+    id: '50um' as const,
+    label: 'Square grid 50um',
+    gridRows: 64,
+    gridCols: 64,
+    spotDiameter: 50,
+    spotGap: 50,
+    barcodeTemplatePath: '/built-in-admin-chip-configs/50um/tissue_positions.csv',
+    tissuePositionsPath: '/built-in-admin-chip-configs/50um/tissue_positions.csv',
+  };
+
+  it('imports a tissue activation CSV, fixes the chip config, and resets the alignment chain', async () => {
+    mockLoadChipConfigManifest.mockResolvedValue(MANIFEST_50UM);
+
+    const initialProject = createProject();
+    initialProject.currentStep = 'sourceAssets';
+    initialProject.localization.chipBounds = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 };
+    initialProject.heFocus.status = 'complete';
+    initialProject.alignment.status = 'complete';
+    initialProject.cropQc.status = 'complete';
+    initialProject.tissueSelection.status = 'complete';
+
+    let latestProject = initialProject;
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectChange={(project) => {
+          latestProject = project;
+        }}
+      />,
+    );
+
+    const csvInput = document.querySelector('input[accept=".csv,text/csv"]');
+    expect(csvInput).not.toBeNull();
+
+    const file = {
+      name: 'tissue.csv',
+      text: async () => 'barcode,Log2_nGene_Spatial,tissue,row,col\nBC1,9.5,1,1,1\nBC2,10.1,1,64,64\n',
+    } as unknown as File;
+    Object.defineProperty(csvInput, 'files', { value: [file], configurable: true });
+    fireEvent.change(csvInput as HTMLInputElement);
+
+    await waitFor(() => {
+      expect(latestProject.chipConfig.chipType).toBe('50um');
+    });
+    expect(latestProject.chipConfig.rows).toBe(64);
+    expect(latestProject.chipConfig.columns).toBe(64);
+    expect(latestProject.chipConfig.spotDiameter).toBe(50);
+    expect(latestProject.chipConfig.pitchX).toBe(50);
+    expect(latestProject.chipConfig.csvFileName).toBe('tissue.csv');
+    // CSV row 1 (image-top) flips to in-memory row 64.
+    expect(latestProject.chipConfig.log2nGeneByPosition['64:1']).toBe(9.5);
+    expect(latestProject.chipConfig.log2nGeneByPosition['1:64']).toBe(10.1);
+    expect(latestProject.chipConfig.excludedRows).toEqual([]);
+    expect(latestProject.chipConfig.excludedColumns).toEqual([]);
+
+    // Alignment chain reset and downstream stale.
+    expect(latestProject.localization.chipBounds).not.toEqual({ x: 0.2, y: 0.2, width: 0.4, height: 0.4 });
+    expect(latestProject.heFocus.status).toBe('idle');
+    expect(latestProject.alignment.status).toBe('idle');
+    expect(latestProject.cropQc.status).toBe('idle');
+    expect(latestProject.tissueSelection.status).toBe('idle');
+  });
+
+  it('rejects an invalid tissue activation CSV without changing the project', async () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'sourceAssets';
+
+    let latestProject = initialProject;
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectChange={(project) => {
+          latestProject = project;
+        }}
+      />,
+    );
+
+    const csvInput = document.querySelector('input[accept=".csv,text/csv"]');
+    expect(csvInput).not.toBeNull();
+
+    const file = {
+      name: 'bad.csv',
+      text: async () => 'tissue,row,col\n1,1,1\n1,7,7\n',
+    } as unknown as File;
+    Object.defineProperty(csvInput, 'files', { value: [file], configurable: true });
+    fireEvent.change(csvInput as HTMLInputElement);
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Unable to import tissue CSV',
+        status: 'error',
+      }));
+    });
+    expect(latestProject.chipConfig.chipType).toBe('15um');
+    expect(latestProject.chipConfig.csvFileName).toBeNull();
   });
 });

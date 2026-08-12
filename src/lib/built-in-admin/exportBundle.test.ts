@@ -17,6 +17,7 @@ import {
   serializePreprocessProject,
 } from './package';
 import { projectSpotsForCrop } from './spotProjection';
+import { applyExclusionLockToMatrix } from './exclusion';
 
 const mockLoadChipConfigData = vi.hoisted(() => vi.fn());
 
@@ -656,6 +657,35 @@ describe('exportBundle canonical matrix exports', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('keeps excluded rows in the full-grid tissue_positions.csv with in_tissue=0', async () => {
+    const project = createBaseProject();
+    // Simulate the Step 2 exclusion lock: row 1 cells forced inactive while
+    // the grid keeps every array position (no compaction, no renumbering).
+    project.chipConfig.excludedRows = [1];
+    const matrix = project.tissueSelection.matrix;
+    if (!matrix) throw new Error('fixture matrix missing');
+    project.tissueSelection.matrix = applyExclusionLockToMatrix(matrix, {
+      excludedRows: [1],
+      excludedColumns: [],
+    });
+
+    const result = await exportProject(project);
+    const rows = await readExportedTissuePositions(result.blob);
+
+    // Full grid retained: all four spots present with unchanged array rows.
+    expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
+      'barcode-spot-a',
+      'barcode-spot-b',
+    ]);
+    // spot-a (row 1) was active in the matrix before the lock; excluded rows
+    // export as in_tissue=0 while remaining in the CSV.
+    expect(rows.find((row) => row.barcode === 'barcode-spot-a')?.in_tissue).toBe(0);
+    // Unaffected rows keep their matrix truth.
+    expect(rows.find((row) => row.barcode === 'barcode-spot-d')?.in_tissue).toBe(1);
   });
 
   it('writes tissue_matrix.csv from canonical matrix truth for both active and inactive cells', async () => {
