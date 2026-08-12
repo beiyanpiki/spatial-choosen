@@ -924,84 +924,14 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 		expect(mockRunTissueAutoSelection).not.toHaveBeenCalled();
 	});
 
-  it('keeps chip switching available for unsupported tissue support and clears matrix-backed selection state on chip change', async () => {
-    mockLoadChipConfigData.mockResolvedValue({
-      manifest: {
-        id: '50um',
-        gridRows: 78,
-        gridCols: 64,
-        spotGap: 2,
-      },
-      templateEntries: [],
-    });
-
-    const user = userEvent.setup();
+  it('shows the CSV-fixed chip type instead of a chip selector', () => {
     render(<WorkspaceHarness />);
 
-    const chipSizeSelect = screen.getByTestId('tissue-chip-size-select');
-    const thresholdModeSelect = screen.getByTestId('tissue-threshold-mode-select');
-    const runAutoButton = screen.getByTestId('tissue-run-auto');
-    const activateButton = screen.getByTestId('tissue-tool-activate');
-    const deactivateButton = screen.getByTestId('tissue-tool-deactivate');
-
-    mockRunTissueAutoSelection.mockResolvedValueOnce({
-      selectedIds: ['spot-a'],
-      matrix: {
-        rows: 96,
-        columns: 96,
-        values: [1, 0, ...Array.from({ length: 96 * 96 - 2 }, () => 0 as 0 | 1)],
-      },
-      summary: {
-        selectedCount: 1,
-        selectedPercent: 50,
-        maskCoverage: 50,
-      },
-      params: {
-        thresholdMode: 'raw',
-        activationThreshold: 0.1,
-        blockThreshold: 120,
-        dbscanEps: 0.2,
-        dbscanMinSamples: 2,
-        minConnectedSpotCount: 2,
-      },
-      warning: null,
-    });
-
-    expect(chipSizeSelect).toBeEnabled();
-    expect(thresholdModeSelect).not.toBeDisabled();
-    expect(runAutoButton).not.toBeDisabled();
-    expect(activateButton).not.toBeDisabled();
-    expect(deactivateButton).not.toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
-
-    await user.click(runAutoButton);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
-      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
-    });
-
-    await user.selectOptions(thresholdModeSelect, 'gray-max');
-    expect(thresholdModeSelect).toHaveValue('gray-max');
-    expect(chipSizeSelect).toBeEnabled();
-
-    await user.selectOptions(chipSizeSelect, '50um');
-
-    await waitFor(() => {
-      expect(chipSizeSelect).toHaveValue('50um');
-    });
-
-    expect(
-      screen.getByText('Tissue auto-selection currently supports only 15um and 50um capture chips.'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('50um tissue auto-selection requires a 64x64 spot grid.')).toBeInTheDocument();
-    expect(chipSizeSelect).toBeEnabled();
-    expect(thresholdModeSelect).toBeDisabled();
-    expect(runAutoButton).toBeDisabled();
-    expect(activateButton).toBeDisabled();
-    expect(deactivateButton).toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
-    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(screen.queryByTestId('tissue-chip-size-select')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tissue-chip-size-fixed')).toHaveTextContent('15um');
+    expect(screen.getByTestId('tissue-chip-size-source')).toHaveTextContent(
+      'Fixed by the tissue activation CSV — 96×96 grid.',
+    );
   });
 
   it('keeps only the latest auto-detection result when an older request resolves last', async () => {
@@ -1221,7 +1151,7 @@ describe('Preprocess page autosave failure handling', () => {
       expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
     });
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-chip-size-select')).toBeInTheDocument();
+      expect(screen.getByTestId('tissue-chip-size-fixed')).toBeInTheDocument();
     });
 
 		await user.click(screen.getByTestId('tissue-panel-commit-manual-edit'));
