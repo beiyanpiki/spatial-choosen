@@ -2,13 +2,15 @@ import type { PreprocessCropAssetScale, PreprocessImageKind, PreprocessStepId } 
 
 export const PREPROCESS_STORAGE_KEY = "spatial-builtin-admin-projects";
 export const PREPROCESS_DB_NAME = "spatial-builtin-admin";
-export const PREPROCESS_DB_VERSION = 5;
+export const PREPROCESS_DB_VERSION = 8;
 export const PREPROCESS_STORAGE_SCHEMA_VERSION = 6;
 export const PREPROCESS_SOURCE_IMAGE_STORE = "builtin-admin-source-images";
 export const PREPROCESS_THUMBNAIL_STORE = "builtin-admin-thumbnails";
 export const PREPROCESS_WORKING_IMAGE_STORE = "builtin-admin-working-images";
 export const PREPROCESS_DERIVED_IMAGE_STORE = "builtin-admin-derived-images";
 export const PREPROCESS_TISSUE_SELECTION_STORE = "builtin-admin-tissue-selection";
+export const PREPROCESS_CHIP_CONFIG_STORE = "builtin-admin-chip-config";
+export const PREPROCESS_PROJECT_META_STORE = "builtin-admin-project-metas";
 
 export const PREPROCESS_STEP_IDS = [
   "sourceAssets",

@@ -23,6 +23,8 @@ import {
   PREPROCESS_STORAGE_SCHEMA_VERSION,
   PREPROCESS_THUMBNAIL_STORE,
   PREPROCESS_TISSUE_SELECTION_STORE,
+  PREPROCESS_CHIP_CONFIG_STORE,
+  PREPROCESS_PROJECT_META_STORE,
   PREPROCESS_WORKING_IMAGE_STORE,
 } from '@/lib/built-in-admin/constants';
 import { migratePreprocessProject } from './migrations';
@@ -288,33 +290,56 @@ export const parseTissueSelectionPayload = (rawValue: unknown): ParsedTissueSele
   };
 };
 
+const EXPECTED_PROJECT_META_STORES = [
+  PREPROCESS_SOURCE_IMAGE_STORE,
+  PREPROCESS_THUMBNAIL_STORE,
+  PREPROCESS_WORKING_IMAGE_STORE,
+  PREPROCESS_DERIVED_IMAGE_STORE,
+  PREPROCESS_TISSUE_SELECTION_STORE,
+  PREPROCESS_CHIP_CONFIG_STORE,
+  PREPROCESS_PROJECT_META_STORE,
+] as const;
+
+const createMissingObjectStores = (db: IDBDatabase) => {
+  for (const storeName of EXPECTED_PROJECT_META_STORES) {
+    if (!db.objectStoreNames.contains(storeName)) {
+      db.createObjectStore(storeName);
+    }
+  }
+};
+
 const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
   if (!isBrowser()) {
     reject(new Error('IndexedDB unavailable on server'));
     return;
   }
 
-  const request = window.indexedDB.open(PREPROCESS_DB_NAME, PREPROCESS_DB_VERSION);
-  request.onupgradeneeded = () => {
-    const db = request.result;
-    if (!db.objectStoreNames.contains(PREPROCESS_SOURCE_IMAGE_STORE)) {
-      db.createObjectStore(PREPROCESS_SOURCE_IMAGE_STORE);
-    }
-    if (!db.objectStoreNames.contains(PREPROCESS_THUMBNAIL_STORE)) {
-      db.createObjectStore(PREPROCESS_THUMBNAIL_STORE);
-    }
-    if (!db.objectStoreNames.contains(PREPROCESS_WORKING_IMAGE_STORE)) {
-      db.createObjectStore(PREPROCESS_WORKING_IMAGE_STORE);
-    }
-    if (!db.objectStoreNames.contains(PREPROCESS_DERIVED_IMAGE_STORE)) {
-      db.createObjectStore(PREPROCESS_DERIVED_IMAGE_STORE);
-    }
-    if (!db.objectStoreNames.contains(PREPROCESS_TISSUE_SELECTION_STORE)) {
-      db.createObjectStore(PREPROCESS_TISSUE_SELECTION_STORE);
-    }
+  // IndexedDB commits the requested version even when an upgrade transaction
+  // was interrupted, and a committed version never re-runs onupgradeneeded.
+  // If a store is missing from an already-committed database (e.g. a dev
+  // hot-reload raced the version bump), repair it by reopening one version
+  // higher; the upgrade then creates every missing store.
+  const openWithVersion = (version: number, attempt: number) => {
+    const request = window.indexedDB.open(PREPROCESS_DB_NAME, version);
+    request.onupgradeneeded = () => {
+      createMissingObjectStores(request.result);
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      const missingStore = EXPECTED_PROJECT_META_STORES.find(
+        (storeName) => !db.objectStoreNames.contains(storeName),
+      );
+      if (missingStore && attempt < 2) {
+        db.close();
+        openWithVersion(version + 1, attempt + 1);
+        return;
+      }
+      resolve(db);
+    };
+    request.onerror = () => reject(request.error);
   };
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(request.error);
+
+  openWithVersion(PREPROCESS_DB_VERSION, 0);
 });
 
 const txDone = (tx: IDBTransaction) => new Promise<void>((resolve, reject) => {
@@ -323,14 +348,14 @@ const txDone = (tx: IDBTransaction) => new Promise<void>((resolve, reject) => {
   tx.onabort = () => reject(tx.error);
 });
 
-const readRawProjects = (): unknown[] => {
+const readLegacyLocalStorageProjects = (): unknown[] => {
   if (!isBrowser()) return [];
   const raw = window.localStorage.getItem(PREPROCESS_STORAGE_KEY);
   if (!raw) return [];
   try {
     return JSON.parse(raw) as unknown[];
   } catch (error) {
-    console.error('Failed to parse preprocess projects', error);
+    console.error('Failed to parse legacy preprocess projects', error);
     return [];
   }
 };
@@ -493,9 +518,21 @@ const repairProjectedSpotIndex = async (
     }));
 };
 
-const persistMetas = (metas: PreprocessProjectMeta[]) => {
+/**
+ * The whole project list lives in IndexedDB as a single JSON blob (the list
+ * is small; the payloads that used to bloat it were split out into the
+ * per-project stores). The legacy localStorage key is only read during the
+ * one-time migration inside readMetas.
+ */
+const PROJECT_META_BLOB_KEY = 'metas';
+
+const persistMetas = async (metas: PreprocessProjectMeta[]) => {
   if (!isBrowser()) return;
-  window.localStorage.setItem(PREPROCESS_STORAGE_KEY, JSON.stringify(metas));
+  await saveStoreValue(
+    PREPROCESS_PROJECT_META_STORE,
+    PROJECT_META_BLOB_KEY,
+    JSON.stringify(metas),
+  );
 };
 
 const assetStoreKey = (projectId: string, kind: PreprocessImageKind) => `${projectId}:${kind}`;
@@ -830,6 +867,12 @@ const toProjectMeta = (
     cropQc: stripCropQcPayload(project.cropQc),
     chipConfig: {
       ...project.chipConfig,
+      // CSV-derived payloads (barcodes and expression values) are large enough
+      // to exhaust the localStorage quota; they live in the IndexedDB
+      // chip-config store and are hydrated back on load (see
+      // syncChipConfigPayloadStore / readChipConfigPayloadStore).
+      barcodesByPosition: {},
+      log2nGeneByPosition: {},
       projectedSpots: null,
       projectedSpotIndex: toProjectedSpotIndex(project.chipConfig.projectedSpots)
         ?? toProjectedSpotIndex(fallbackProjectedSpots)
@@ -981,6 +1024,7 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
     heWorkingDataUrl,
     focusedHePayload,
     cropQc,
+    chipConfigPayload,
   ] = await Promise.all([
     readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'eosin')),
     readStoreValue(PREPROCESS_SOURCE_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he')),
@@ -990,6 +1034,7 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
     readStoreValue(PREPROCESS_WORKING_IMAGE_STORE, assetStoreKey(repairedMeta.id, 'he')),
     readStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, heFocusDerivedImageStoreKey(repairedMeta.id)),
     hydrateCropQcSlice(repairedMeta.id, repairedMeta.cropQc),
+    readChipConfigPayloadStore(repairedMeta.id),
   ]);
 
   const [eosinResult, heResult] = await Promise.all([
@@ -1073,6 +1118,16 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
     cropQc,
     chipConfig: {
       ...repairedMeta.chipConfig,
+      // CSV-derived payloads hydrate from the IndexedDB store; projects saved
+      // before the split fall back to the maps still present in their metadata.
+      barcodesByPosition:
+        chipConfigPayload?.barcodesByPosition
+        ?? repairedMeta.chipConfig.barcodesByPosition
+        ?? {},
+      log2nGeneByPosition:
+        chipConfigPayload?.log2nGeneByPosition
+        ?? repairedMeta.chipConfig.log2nGeneByPosition
+        ?? {},
       projectedSpots: null,
     },
     tissueSelection: {
@@ -1123,10 +1178,32 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
   return hydratedProject;
 };
 
-const readMetas = async (): Promise<PreprocessProjectMeta[]> => readRawProjects() as PreprocessProjectMeta[];
+const readMetas = async (): Promise<PreprocessProjectMeta[]> => {
+  const stored = await readStoreValue(PREPROCESS_PROJECT_META_STORE, PROJECT_META_BLOB_KEY);
+  if (stored !== undefined && typeof stored === 'string') {
+    try {
+      return JSON.parse(stored) as PreprocessProjectMeta[];
+    } catch (error) {
+      console.error('Failed to parse preprocess project metas', error);
+    }
+  }
 
-export const upsertPreprocessProjectMetadata = (project: PreprocessProject) => {
-  const metas = readRawProjects() as PreprocessProjectMeta[];
+  // One-time migration: projects saved before the IndexedDB split still live
+  // under the legacy localStorage key; move them over and clear the key.
+  const legacyProjects = readLegacyLocalStorageProjects() as PreprocessProjectMeta[];
+  if (legacyProjects.length > 0) {
+    await persistMetas(legacyProjects);
+    if (isBrowser()) {
+      window.localStorage.removeItem(PREPROCESS_STORAGE_KEY);
+    }
+    return legacyProjects;
+  }
+
+  return [];
+};
+
+export const upsertPreprocessProjectMetadata = async (project: PreprocessProject) => {
+  const metas = await readMetas();
   const repairedProject = repairCurrentSchemaCropGeometry(project);
   const migratedProject = migratePreprocessProject(repairedProject);
   const meta = toProjectMeta(
@@ -1140,7 +1217,20 @@ export const upsertPreprocessProjectMetadata = (project: PreprocessProject) => {
   } else {
     metas.unshift(meta);
   }
-  persistMetas(metas);
+  await persistMetas(metas);
+  // The metadata snapshot above strips the CSV payloads; make sure they reach
+  // the IndexedDB chip-config store. This also migrates projects saved before
+  // the split (their maps still sit in the old metadata).
+  if (
+    Object.keys(project.chipConfig.barcodesByPosition).length > 0
+    || Object.keys(project.chipConfig.log2nGeneByPosition).length > 0
+  ) {
+    void syncChipConfigPayloadStore(project.id, project.chipConfig).catch(
+      (error) => {
+        console.error('Failed to sync chip config payload store', error);
+      },
+    );
+  }
   return migratedProject;
 };
 
@@ -1199,6 +1289,59 @@ const syncCropQcDerivedImageStores = async (projectId: string, cropQc: Preproces
     cropQcFeatureMatchesDerivedImageStoreKey(projectId),
     hasCanonicalCropAssets(cropQc) ? cropQc.featureMatchesPreview?.dataUrl ?? null : null,
   );
+};
+
+type StoredChipConfigPayload = {
+  barcodesByPosition: Record<string, string>;
+  log2nGeneByPosition: Record<string, number>;
+};
+
+const chipConfigPayloadStoreKey = (projectId: string) => `${projectId}:chip-config`;
+
+const syncChipConfigPayloadStore = async (
+  projectId: string,
+  chipConfig: PreprocessProject['chipConfig'],
+) => {
+  const key = chipConfigPayloadStoreKey(projectId);
+  const hasPayload =
+    Object.keys(chipConfig.barcodesByPosition).length > 0
+    || Object.keys(chipConfig.log2nGeneByPosition).length > 0;
+
+  if (!hasPayload) {
+    await deleteStoreValue(PREPROCESS_CHIP_CONFIG_STORE, key);
+    return;
+  }
+
+  await saveStoreValue(
+    PREPROCESS_CHIP_CONFIG_STORE,
+    key,
+    JSON.stringify({
+      barcodesByPosition: chipConfig.barcodesByPosition,
+      log2nGeneByPosition: chipConfig.log2nGeneByPosition,
+    } satisfies StoredChipConfigPayload),
+  );
+};
+
+const readChipConfigPayloadStore = async (
+  projectId: string,
+): Promise<StoredChipConfigPayload | undefined> => {
+  const value = await readStoreValue(PREPROCESS_CHIP_CONFIG_STORE, chipConfigPayloadStoreKey(projectId));
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<StoredChipConfigPayload>;
+    return {
+      barcodesByPosition: parsed.barcodesByPosition ?? {},
+      log2nGeneByPosition: parsed.log2nGeneByPosition ?? {},
+    };
+  } catch (error) {
+    console.error('Failed to parse chip config payload', error);
+    return undefined;
+  }
 };
 
 const tissueSelectionStoreKey = (projectId: string) => `${projectId}:tissue-selection`;
@@ -1269,30 +1412,25 @@ export async function upsertPreprocessProject(
   const mode = options?.mode ?? 'full';
 
   if (mode === 'tissue') {
-    const metas = readRawProjects() as PreprocessProjectMeta[];
-    const existingMeta = metas.find((entry) => entry.id === project.id);
-    const previousMetadata = window.localStorage.getItem(PREPROCESS_STORAGE_KEY);
+    const previousMetas = await readMetas();
+    const existingMeta = previousMetas.find((entry) => entry.id === project.id);
     let metadataUpdated = false;
     if (!existingMeta || existingMeta.updatedAt <= project.updatedAt) {
-      upsertPreprocessProjectMetadata(project);
+      await upsertPreprocessProjectMetadata(project);
       metadataUpdated = true;
     }
     try {
       await syncTissueSelectionStore(project.id, project.tissueSelection);
     } catch (error) {
       if (metadataUpdated) {
-        if (previousMetadata === null) {
-          window.localStorage.removeItem(PREPROCESS_STORAGE_KEY);
-        } else {
-          window.localStorage.setItem(PREPROCESS_STORAGE_KEY, previousMetadata);
-        }
+        await persistMetas(previousMetas);
       }
       throw error;
     }
     return;
   }
 
-  const migratedProject = upsertPreprocessProjectMetadata(project);
+  const migratedProject = await upsertPreprocessProjectMetadata(project);
 
   if (mode === 'metadata') {
     return;
@@ -1303,6 +1441,7 @@ export async function upsertPreprocessProject(
     syncDerivedImageStore(heFocusDerivedImageStoreKey(migratedProject.id), migratedProject.heFocus.focusedImageDataUrl),
     syncCropQcDerivedImageStores(migratedProject.id, migratedProject.cropQc),
     syncTissueSelectionStore(migratedProject.id, project.tissueSelection),
+    syncChipConfigPayloadStore(migratedProject.id, migratedProject.chipConfig),
   ]);
 }
 
@@ -1315,7 +1454,7 @@ export async function getPreprocessProject(projectId: string): Promise<Preproces
 
 export async function deletePreprocessProject(projectId: string) {
   const metas = await readMetas();
-  persistMetas(metas.filter((entry) => entry.id !== projectId));
+  await persistMetas(metas.filter((entry) => entry.id !== projectId));
   await Promise.all(
     [
       ...PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => [
@@ -1331,6 +1470,7 @@ export async function deletePreprocessProject(projectId: string) {
       deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcCheckerboardDerivedImageStoreKey(projectId)),
       deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, cropQcFeatureMatchesDerivedImageStoreKey(projectId)),
       deleteStoreValue(PREPROCESS_TISSUE_SELECTION_STORE, tissueSelectionStoreKey(projectId)),
+      deleteStoreValue(PREPROCESS_CHIP_CONFIG_STORE, chipConfigPayloadStoreKey(projectId)),
     ],
   );
 }

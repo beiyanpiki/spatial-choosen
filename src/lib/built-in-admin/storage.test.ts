@@ -409,6 +409,7 @@ const createIndexedDbMock = (shouldFailPut: (storeName: string) => boolean = () 
   };
 
   return {
+    __getStore: (name: string) => ensureStore(name),
     open: () => {
       const request = {
         result: database,
@@ -438,6 +439,25 @@ describe('preprocess storage tissue metadata', () => {
       indexedDB: createIndexedDbMock(),
     });
   });
+
+  const readStoredMetas = () => {
+    const mockWindow = window as typeof window & {
+      indexedDB: { __getStore: (name: string) => Map<string, string | Blob> };
+    };
+    const store = mockWindow.indexedDB.__getStore('builtin-admin-project-metas');
+    const raw = store.get('metas');
+    return typeof raw === 'string' ? (JSON.parse(raw) as Array<Record<string, unknown>>) : [];
+  };
+
+  const writeStoredMetas = (metas: Array<Record<string, unknown>>) => {
+    const mockWindow = window as typeof window & {
+      indexedDB: { __getStore: (name: string) => Map<string, string | Blob> };
+    };
+    mockWindow.indexedDB.__getStore('builtin-admin-project-metas').set(
+      'metas',
+      JSON.stringify(metas),
+    );
+  };
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -488,9 +508,9 @@ describe('preprocess storage tissue metadata', () => {
   it('hydrates legacy PNG working previews without regenerating them', async () => {
     const project = createProject();
     project.sourceAssets.images.eosin = createSourceImage('eosin');
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<{
+    const stored = readStoredMetas() as Array<{
       sourceAssets: {
         images: {
           eosin: Record<string, unknown>;
@@ -504,7 +524,7 @@ describe('preprocess storage tissue metadata', () => {
       workingWidth: 1000,
       workingHeight: 1000,
     };
-    localStorage.setItem('spatial-builtin-admin-projects', JSON.stringify(stored));
+    writeStoredMetas(stored);
 
     const hydrated = await getPreprocessProject(project.id);
 
@@ -518,9 +538,9 @@ describe('preprocess storage tissue metadata', () => {
     installImageProxyMocks();
     const project = createProject();
     project.sourceAssets.images.eosin = createSourceImage('eosin');
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<{
+    const stored = readStoredMetas() as Array<{
       sourceAssets: {
         images: {
           eosin: Record<string, unknown>;
@@ -532,7 +552,7 @@ describe('preprocess storage tissue metadata', () => {
       dataUrl: PNG_DATA_URL,
       thumbnailDataUrl: JPEG_DATA_URL,
     };
-    localStorage.setItem('spatial-builtin-admin-projects', JSON.stringify(stored));
+    writeStoredMetas(stored);
 
     const hydrated = await getPreprocessProject(project.id);
     const image = hydrated?.sourceAssets.images.eosin;
@@ -635,7 +655,7 @@ describe('preprocess storage tissue metadata', () => {
 
     await upsertPreprocessProject(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<Record<string, unknown>>;
+    const stored = readStoredMetas() as Array<Record<string, unknown>>;
     const storedChipConfig = stored[0]?.chipConfig as Record<string, unknown>;
     const storedTissue = stored[0]?.tissueSelection as Record<string, unknown>;
 
@@ -736,9 +756,9 @@ describe('preprocess storage tissue metadata', () => {
       exportChipConfigData as Awaited<ReturnType<typeof chipConfigs.loadChipConfigData>>,
     );
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<Record<string, unknown>>;
+    const stored = readStoredMetas() as Array<Record<string, unknown>>;
     const storedChipConfig = stored[0]?.chipConfig as {
       projectedSpots: unknown;
       projectedSpotIndex: Array<{ id: string; arrayRow: number; arrayCol: number }>;
@@ -823,7 +843,7 @@ describe('preprocess storage tissue metadata', () => {
     };
     project.alignment.solveAccepted = false;
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
     const hydrated = await getPreprocessProject(project.id);
 
     expect(hydrated?.alignment.status).toBe('error');
@@ -847,7 +867,7 @@ describe('preprocess storage tissue metadata', () => {
       selectedSpotIds: [],
     };
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
     const hydrated = await getPreprocessProject(project.id);
 
 		expect(hydrated).toBeDefined();
@@ -857,9 +877,9 @@ describe('preprocess storage tissue metadata', () => {
 	it('does not reconstruct stale crop geometry from legacy aliases when explicit repaired geometry is null', async () => {
 		const project = createProject();
 
-		upsertPreprocessProjectMetadata(project);
+		await upsertPreprocessProjectMetadata(project);
 
-		const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<Record<string, unknown>>;
+		const stored = readStoredMetas() as Array<Record<string, unknown>>;
 		stored[0] = {
 			...stored[0],
 			cropQc: {
@@ -886,7 +906,7 @@ describe('preprocess storage tissue metadata', () => {
 				cropHeight: 2413,
 			},
 		};
-		localStorage.setItem('spatial-builtin-admin-projects', JSON.stringify(stored));
+		writeStoredMetas(stored);
 
 		const hydrated = await getPreprocessProject(project.id);
 
@@ -898,7 +918,7 @@ describe('preprocess storage tissue metadata', () => {
 		expect(hydrated?.cropQc.cropHeight).toBeNull();
 	});
 
-  it('preserves emitted crop dimensions separately from eosin geometry evidence during metadata persistence', () => {
+  it('preserves emitted crop dimensions separately from eosin geometry evidence during metadata persistence', async () => {
     const project = createProject();
     project.alignment = {
       ...project.alignment,
@@ -932,9 +952,9 @@ describe('preprocess storage tissue metadata', () => {
       },
     };
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<{
+    const stored = readStoredMetas() as Array<{
       cropQc?: {
         cropWidth?: unknown;
         cropHeight?: unknown;
@@ -988,7 +1008,7 @@ describe('preprocess storage tissue metadata', () => {
 
     await upsertPreprocessProject(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<Record<string, unknown>>;
+    const stored = readStoredMetas() as Array<Record<string, unknown>>;
     stored[0] = {
       ...stored[0],
       cropQc: {
@@ -1005,7 +1025,7 @@ describe('preprocess storage tissue metadata', () => {
         },
       },
     };
-    localStorage.setItem('spatial-builtin-admin-projects', JSON.stringify(stored));
+    writeStoredMetas(stored);
 
     const hydrated = await getPreprocessProject(project.id);
 
@@ -1040,6 +1060,120 @@ describe('preprocess storage tissue metadata', () => {
   // These expose the bug where hydration reconstructs the matrix from
   // autoSelectedSpotIds instead of persisting the canonical matrix independently.
   // When autoSelectedSpotIds disagrees with the matrix, the matrix should win.
+
+  it('keeps CSV payloads out of the localStorage metadata and restores them from IndexedDB on hydration', async () => {
+    const project = createProject();
+    project.chipConfig.barcodesByPosition = {
+      '1:1': 'real-barcode-a',
+      '2:3': 'real-barcode-b',
+    };
+    project.chipConfig.log2nGeneByPosition = {
+      '1:1': 8.96289600533726,
+      '2:3': 9.31741261376487,
+    };
+
+    await upsertPreprocessProject(project);
+
+    // The localStorage metadata must stay lightweight: the CSV payloads are
+    // stripped (this is what previously exhausted the storage quota).
+    const stored = readStoredMetas() as Array<{
+      chipConfig: {
+        barcodesByPosition: Record<string, string>;
+        log2nGeneByPosition: Record<string, number>;
+      };
+    }>;
+    expect(stored[0]?.chipConfig.barcodesByPosition).toEqual({});
+    expect(stored[0]?.chipConfig.log2nGeneByPosition).toEqual({});
+
+    const hydrated = await getPreprocessProject(project.id);
+    expect(hydrated?.chipConfig.barcodesByPosition).toEqual({
+      '1:1': 'real-barcode-a',
+      '2:3': 'real-barcode-b',
+    });
+    expect(hydrated?.chipConfig.log2nGeneByPosition).toEqual({
+      '1:1': 8.96289600533726,
+      '2:3': 9.31741261376487,
+    });
+  });
+
+  it('migrates CSV payloads to the IndexedDB store on metadata-only persistence', async () => {
+    const project = createProject();
+    project.chipConfig.barcodesByPosition = { '5:5': 'migrating-barcode' };
+    project.chipConfig.log2nGeneByPosition = { '5:5': 6.25 };
+
+    await upsertPreprocessProjectMetadata(project);
+    // The fire-and-forget store sync runs asynchronously; give it a tick.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const stored = readStoredMetas() as Array<{
+      chipConfig: {
+        barcodesByPosition: Record<string, string>;
+      };
+    }>;
+    expect(stored[0]?.chipConfig.barcodesByPosition).toEqual({});
+
+    const hydrated = await getPreprocessProject(project.id);
+    expect(hydrated?.chipConfig.barcodesByPosition).toEqual({ '5:5': 'migrating-barcode' });
+    expect(hydrated?.chipConfig.log2nGeneByPosition).toEqual({ '5:5': 6.25 });
+  });
+
+  it('falls back to metadata payloads for projects saved before the chip-config store split', async () => {
+    const project = createProject();
+    // Write a canonical metadata snapshot first, then simulate a pre-split
+    // save by injecting the CSV maps into the stored metadata while the
+    // IndexedDB chip-config store stays unwritten.
+    await upsertPreprocessProjectMetadata(project);
+    const stored = readStoredMetas() as Array<{
+      chipConfig: Record<string, unknown>;
+    }>;
+    stored[0].chipConfig = {
+      ...stored[0].chipConfig,
+      barcodesByPosition: { '1:1': 'legacy-barcode' },
+      log2nGeneByPosition: { '1:1': 7.75 },
+    };
+    writeStoredMetas(stored);
+
+    const hydrated = await getPreprocessProject(project.id);
+    expect(hydrated?.chipConfig.barcodesByPosition).toEqual({ '1:1': 'legacy-barcode' });
+    expect(hydrated?.chipConfig.log2nGeneByPosition).toEqual({ '1:1': 7.75 });
+  });
+
+  it('migrates projects from the legacy localStorage key into IndexedDB on first read', async () => {
+    const project = createProject();
+    // Seed the legacy localStorage blob exactly as the pre-IndexedDB storage
+    // layer wrote it (canonical metadata shape), then read through the API.
+    const storedMeta = normalizeProjectForPersistence(project);
+    localStorage.setItem('spatial-builtin-admin-projects', JSON.stringify([{
+      ...storedMeta,
+      cropQc: {
+        ...storedMeta.cropQc,
+        cropAssets: { eosin: null, he: null },
+        tissue_hires_scalef: null,
+        tissue_lowres_scalef: null,
+        spot_diameter_fullres: null,
+        fiducial_diameter_fullres: null,
+      },
+      chipConfig: {
+        ...storedMeta.chipConfig,
+        projectedSpots: null,
+        projectedSpotIndex: [
+          { id: 'spot-a', arrayRow: 1, arrayCol: 1 },
+          { id: 'spot-b', arrayRow: 2, arrayCol: 2 },
+        ],
+      },
+    }]));
+
+    const summaries = await readPreprocessProjectSummaries();
+
+    expect(summaries.map((summary) => summary.id)).toEqual([project.id]);
+    // The legacy key is consumed by the one-time migration.
+    expect(localStorage.getItem('spatial-builtin-admin-projects')).toBeNull();
+    // The metadata now lives in IndexedDB.
+    expect(readStoredMetas().map((meta) => meta.id)).toEqual([project.id]);
+
+    const hydrated = await getPreprocessProject(project.id);
+    expect(hydrated?.id).toBe(project.id);
+  });
 
   it('hydrates selectedSpotIds from canonical matrix when autoSelectedSpotIds is empty', async () => {
     const project = createProject();
@@ -1199,7 +1333,7 @@ describe('preprocess storage tissue metadata', () => {
     recreatedProject.tissueSelection.matrix = null;
     recreatedProject.tissueSelection.autoSelectedSpotIds = [];
     recreatedProject.tissueSelection.selectedSpotIds = null;
-    upsertPreprocessProjectMetadata(recreatedProject);
+    await upsertPreprocessProjectMetadata(recreatedProject);
 
     const hydrated = await getPreprocessProject(project.id);
 
@@ -1221,7 +1355,7 @@ describe('preprocess storage tissue metadata', () => {
     project.tissueSelection.autoSelectedSpotIds = ['spot-b'];
     project.tissueSelection.selectedSpotIds = ['spot-b'];
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
     await upsertPreprocessProject(project, { mode: 'tissue' });
 
     const olderProject = createProject();
@@ -1313,7 +1447,7 @@ describe('preprocess storage tissue metadata', () => {
     const project = createProject();
     project.storageVersion = PREPROCESS_STORAGE_SCHEMA_VERSION;
     await upsertPreprocessProject(project);
-    const previousMetadata = localStorage.getItem('spatial-builtin-admin-projects');
+    const previousMetas = readStoredMetas();
 
     project.updatedAt = '2026-04-15T00:00:00.000Z';
     project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
@@ -1331,13 +1465,13 @@ describe('preprocess storage tissue metadata', () => {
       'Forced builtin-admin-tissue-selection write failure',
     );
 
-    expect(localStorage.getItem('spatial-builtin-admin-projects')).toBe(previousMetadata);
+    expect(readStoredMetas()).toEqual(previousMetas);
   });
 
   it('strips storage-only projectedSpotIndex from hydrated runtime projects and package serialization', async () => {
     const project = createProject();
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
     const hydrated = await getPreprocessProject(project.id);
     const blob = await serializePreprocessProject(hydrated as PreprocessProject);
     const parsed = JSON.parse(await blob.text()) as {
@@ -1367,7 +1501,7 @@ describe('preprocess storage tissue metadata', () => {
 
     await upsertPreprocessProject(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<Record<string, unknown>>;
+    const stored = readStoredMetas() as Array<Record<string, unknown>>;
     const legacyStored = {
       ...stored[0],
       storageVersion: 4,
@@ -1376,7 +1510,7 @@ describe('preprocess storage tissue metadata', () => {
         projectedSpotIndex: null,
       },
     };
-    localStorage.setItem('spatial-builtin-admin-projects', JSON.stringify([legacyStored]));
+    writeStoredMetas([legacyStored]);
 
     const fetchMock = vi.fn(async (input: string) => {
       if (input === '/built-in-admin-chip-configs/50um/manifest.json') {
@@ -1412,12 +1546,12 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
   });
 
-	it('does not reintroduce legacy region-first tissue fields into canonical stored state after migration', () => {
+	it('does not reintroduce legacy region-first tissue fields into canonical stored state after migration', async () => {
 	  const project = createProject();
 
-    upsertPreprocessProjectMetadata(project);
+    await upsertPreprocessProjectMetadata(project);
 
-    const stored = JSON.parse(localStorage.getItem('spatial-builtin-admin-projects') ?? '[]') as Array<Record<string, unknown>>;
+    const stored = readStoredMetas() as Array<Record<string, unknown>>;
     const storedTissue = stored[0]?.tissueSelection as Record<string, unknown>;
 
     expect(Object.hasOwn(storedTissue, 'regions')).toBe(false);
@@ -1440,11 +1574,9 @@ describe('preprocess storage tissue metadata', () => {
 		project.heFocus.chipBounds = heFocusBounds;
 		project.heFocus.handles = [];
 
-		upsertPreprocessProjectMetadata(normalizeProjectForPersistence(project));
+		await upsertPreprocessProjectMetadata(normalizeProjectForPersistence(project));
 
-		const stored = JSON.parse(
-			localStorage.getItem('spatial-builtin-admin-projects') ?? '[]',
-		) as Array<Record<string, unknown>>;
+		const stored = readStoredMetas() as Array<Record<string, unknown>>;
 		expect(
 			(stored[0]?.heFocus as Record<string, unknown>).chipBounds,
 		).toEqual(heFocusBounds);
