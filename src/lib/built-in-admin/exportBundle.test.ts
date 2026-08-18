@@ -877,6 +877,9 @@ describe('exportBundle canonical matrix exports', () => {
 
     project.cropQc.cropWidth = staleCropWidth;
     project.cropQc.cropHeight = staleCropWidth;
+    if (!project.cropQc.cropAssets?.eosin || !project.cropQc.cropAssets?.he) {
+      throw new Error('Expected canonical crop assets in test fixture.');
+    }
     project.cropQc.cropAssets.eosin.fullres.dataUrl = emittedFullresDataUrl;
     project.cropQc.cropAssets.eosin.hires.dataUrl = emittedFullresDataUrl;
     project.cropQc.cropAssets.eosin.lowres.dataUrl = emittedFullresDataUrl;
@@ -948,6 +951,9 @@ describe('exportBundle canonical matrix exports', () => {
 
     project.cropQc.cropWidth = 1050;
     project.cropQc.cropHeight = 1050;
+    if (!project.cropQc.cropAssets?.eosin || !project.cropQc.cropAssets?.he) {
+      throw new Error('Expected canonical crop assets in test fixture.');
+    }
     project.cropQc.cropAssets.eosin.fullres.dataUrl = emittedFullresDataUrl;
     project.cropQc.cropAssets.eosin.hires.dataUrl = emittedFullresDataUrl;
     project.cropQc.cropAssets.eosin.lowres.dataUrl = emittedFullresDataUrl;
@@ -1329,6 +1335,9 @@ describe('exportBundle canonical matrix exports', () => {
   it('throws a clear error when data URL fullres PNG dimensions are unavailable', async () => {
     const project = createBaseProject();
     const malformedPngBytes = createPngBytes(0, 1);
+    if (!project.cropQc.cropAssets?.eosin || !project.cropQc.cropAssets?.he) {
+      throw new Error('Expected canonical crop assets in test fixture.');
+    }
     project.cropQc.cropAssets.he.fullres.dataUrl = createDataUrlFromBytes(malformedPngBytes);
 
     await expect(exportProject(project)).rejects.toThrow(FULLRES_DIMENSIONS_UNAVAILABLE_ERROR);
@@ -1341,6 +1350,9 @@ describe('exportBundle canonical matrix exports', () => {
     const blobUrl = URL.createObjectURL(blob);
 
     const project = createBaseProject();
+    if (!project.cropQc.cropAssets?.eosin || !project.cropQc.cropAssets?.he) {
+      throw new Error('Expected canonical crop assets in test fixture.');
+    }
     project.cropQc.cropAssets.he.fullres.dataUrl = blobUrl;
 
     try {
@@ -1356,6 +1368,9 @@ describe('exportBundle canonical matrix exports', () => {
     const blobUrl = URL.createObjectURL(blob);
 
     const project = createBaseProject();
+    if (!project.cropQc.cropAssets?.eosin || !project.cropQc.cropAssets?.he) {
+      throw new Error('Expected canonical crop assets in test fixture.');
+    }
     project.cropQc.cropAssets.he.fullres.dataUrl = blobUrl;
     project.cropQc.cropAssets.he.hires.dataUrl = blobUrl;
     project.cropQc.cropAssets.he.lowres.dataUrl = blobUrl;
