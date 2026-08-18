@@ -677,6 +677,66 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
   });
 
+  it('decodes data: URLs synchronously so an aborted fetch never fails the autosave', async () => {
+    installImageProxyMocks();
+    const project = createProject();
+    project.sourceAssets.images.eosin = {
+      ...createSourceImage('eosin'),
+      // No in-memory blobs: the save falls back to the data: URLs.
+      dataUrl: PNG_DATA_URL,
+      thumbnailDataUrl: PNG_DATA_URL,
+      workingDataUrl: PNG_DATA_URL,
+    };
+    project.heFocus.focusedImageDataUrl = PNG_DATA_URL;
+    const cropRect = {
+      x: 0.05,
+      y: 0.15,
+      width: 0.7,
+      height: 0.8,
+    };
+    project.cropQc = {
+      ...project.cropQc,
+      cropRect,
+      cropWidth: 4200,
+      cropHeight: 5705,
+      cropAssets: createCanonicalCropAssets(),
+      tissue_hires_scalef: 0.5,
+      tissue_lowres_scalef: 0.25,
+      spot_diameter_fullres: 18,
+      fiducial_diameter_fullres: 27,
+      checkerboardPreview: { dataUrl: PNG_DATA_URL },
+      featureMatchesPreview: { dataUrl: PNG_DATA_URL },
+      previewDataUrl: PNG_DATA_URL,
+      eosinPreviewDataUrl: PNG_DATA_URL,
+      checkerboardPreviewDataUrl: PNG_DATA_URL,
+      featureMatchesPreviewDataUrl: PNG_DATA_URL,
+      // Repaired-metadata marker: keeps the migration from resetting the
+      // canonical crop state of a "complete" slice.
+      eosinReferenceGeometry: {
+        rect: cropRect,
+        width: 1050,
+        height: 900,
+      },
+    };
+
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // The whole save exercises every derived data: URL; none of it may touch
+    // the network (a pagehide/HMR abort used to fail the entire autosave).
+    await expect(upsertPreprocessProject(project)).resolves.toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // The data: payloads still round-trip through the stores: the hydrated
+    // blob URLs carry the decoded payload's size (24 = PNG_DATA_URL bytes).
+    const hydrated = await getPreprocessProject(project.id);
+    expect(hydrated?.sourceAssets.images.eosin?.dataUrl).toBe('blob:image/png:24');
+    expect(hydrated?.cropQc.cropAssets?.eosin?.fullres?.dataUrl).toBe('blob:image/png:24');
+    expect(hydrated?.heFocus.focusedImageDataUrl).toBe('blob:image/png:24');
+  });
+
   it('hydrates selectedSpotIds from canonical matrix truth instead of persisted runtime ids', async () => {
     const project = createProject();
 

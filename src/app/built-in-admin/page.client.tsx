@@ -117,6 +117,10 @@ function PreprocessContent() {
 	const activeObjectUrlsRef = useRef<Set<string>>(new Set());
 	const savingObjectUrlCountsRef = useRef<Map<string, number>>(new Map());
 	const deferredObjectUrlsRef = useRef<Set<string>>(new Set());
+	// Set when the page is being torn down (reload, navigation, bfcache
+	// freeze): in-flight fetches abort with "Failed to fetch" and retrying is
+	// futile. Reset on pageshow so a bfcache restore resumes saving.
+	const pageLifecycleEndedRef = useRef(false);
 
 	const clearPendingPersistTimer = useCallback(() => {
 		if (pendingPersistTimerRef.current !== null) {
@@ -307,6 +311,13 @@ function PreprocessContent() {
 					setAutosaveDetail(`last saved at ${new Date().toLocaleTimeString()}`);
 				}
 			} catch (error) {
+				if (pageLifecycleEndedRef.current) {
+					// The page is being torn down (HMR reload, navigation,
+					// bfcache freeze): in-flight fetches abort with
+					// "Failed to fetch" and retrying is futile. The last good
+					// snapshot is already safe in storage — stay silent.
+					return;
+				}
 				console.error("Failed to autosave preprocessing project", {
 					mode,
 					projectId: normalizedSnapshot.id,
@@ -321,6 +332,7 @@ function PreprocessContent() {
 						}
 						await persistWithProtectedUrls(lastSavedProjectRef.current);
 					} catch (restoreError) {
+						if (pageLifecycleEndedRef.current) return;
 						console.error(
 							"Failed to restore last preprocessing snapshot",
 							{
@@ -372,7 +384,14 @@ function PreprocessContent() {
 				if (mode === "metadata") {
 					latestSaveAttemptRef.current += 1;
 					lastSavedProjectRef.current = normalizedSnapshot;
-					upsertPreprocessProjectMetadata(normalizedSnapshot);
+					// IndexedDB writes cannot be awaited on pagehide; fire the
+					// metadata flush as best-effort. While the page stays open the
+					// regular debounced path keeps the snapshot in sync.
+					void upsertPreprocessProjectMetadata(normalizedSnapshot).catch(
+						(error) => {
+							console.error("Failed to flush preprocessing metadata", error);
+						},
+					);
 				}
 				return;
 			}
@@ -427,8 +446,8 @@ function PreprocessContent() {
 
 	useEffect(() => {
 		const flushOnExit = () => {
-			// Pagehide/beforeunload handlers cannot reliably await IndexedDB writes;
-			// only pending metadata snapshots are flushed synchronously here.
+			// Pagehide/beforeunload handlers cannot await IndexedDB writes; the
+			// pending metadata snapshot is flushed as best-effort here.
 			flushPendingProjectSnapshot(true);
 		};
 		const flushOnHidden = () => {
@@ -436,13 +455,25 @@ function PreprocessContent() {
 				flushOnExit();
 			}
 		};
+		const markLifecycleEnded = () => {
+			pageLifecycleEndedRef.current = true;
+		};
+		const restoreLifecycle = () => {
+			pageLifecycleEndedRef.current = false;
+		};
 
 		window.addEventListener("pagehide", flushOnExit);
 		window.addEventListener("beforeunload", flushOnExit);
+		window.addEventListener("pagehide", markLifecycleEnded);
+		window.addEventListener("beforeunload", markLifecycleEnded);
+		window.addEventListener("pageshow", restoreLifecycle);
 		document.addEventListener("visibilitychange", flushOnHidden);
 		return () => {
 			window.removeEventListener("pagehide", flushOnExit);
 			window.removeEventListener("beforeunload", flushOnExit);
+			window.removeEventListener("pagehide", markLifecycleEnded);
+			window.removeEventListener("beforeunload", markLifecycleEnded);
+			window.removeEventListener("pageshow", restoreLifecycle);
 			document.removeEventListener("visibilitychange", flushOnHidden);
 			flushPendingProjectSnapshot(true);
 		};

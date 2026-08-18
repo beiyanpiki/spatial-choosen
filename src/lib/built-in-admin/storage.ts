@@ -571,7 +571,34 @@ const deleteStoreValue = async (storeName: string, key: string) => {
   await txDone(tx);
 };
 
-const urlToBlob = async (url: string) => {
+/** Decode a base64 `data:` URL without fetch (canvas.toDataURL output). */
+const decodeDataUrlToBlob = (dataUrl: string): Blob | undefined => {
+  const [meta, payload] = dataUrl.split(',', 2);
+  if (!meta || !payload) return undefined;
+  const mimeMatch = /^data:([^;]*)/.exec(meta);
+  try {
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mimeMatch?.[1] ?? 'application/octet-stream' });
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Resolve an image URL to its Blob. `data:` URLs are decoded synchronously —
+ * fetch() on a data: URL rejects with TypeError "Failed to fetch" when the
+ * page lifecycle aborts in-flight requests (dev HMR, navigating away during
+ * autosave) or for oversized payloads, which would fail the whole autosave.
+ * `blob:` URLs still go through fetch (their backing blob may be huge).
+ */
+const urlToBlob = async (url: string): Promise<Blob | undefined> => {
+  if (url.startsWith('data:')) {
+    return decodeDataUrlToBlob(url);
+  }
   const response = await fetch(url);
   return response.blob();
 };
