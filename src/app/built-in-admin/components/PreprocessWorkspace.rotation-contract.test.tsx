@@ -12,14 +12,14 @@ import type {
   PreprocessProject,
   PreprocessRect,
   PreprocessStepId,
-} from '@/types/preprocess';
+} from '@/types/built-in-admin';
 import {
   clampNormalizedSquareRect,
   translateChipBounds,
-} from '@/lib/preprocess/localization';
+} from '@/lib/built-in-admin/localization';
 import {
 	getOrientedChipBoundsPixelRect,
-} from '@/lib/preprocess/imageTransforms';
+} from '@/lib/built-in-admin/imageTransforms';
 
 const mockRunCropQc = vi.fn();
 const mockLoadOpenCv = vi.fn(async () => ({ cv: {} }));
@@ -137,21 +137,21 @@ const getFocusedPreviewRenderByCropSize = (width: number, height: number) => {
 	throw new Error(`Expected focused preview crop ${width}×${height} to be rendered`);
 };
 
-vi.mock('../../../lib/preprocess/alignment', () => ({
+vi.mock('../../../lib/built-in-admin/alignment', () => ({
   computeAlignmentStatus: () => 'ready',
   normalizeAlignmentSlice: (value: Record<string, unknown>) => value,
 }));
 
-vi.mock('../../../lib/preprocess/cropQc', () => ({
+vi.mock('../../../lib/built-in-admin/cropQc', () => ({
   runCropQc: (...args: unknown[]) => mockRunCropQc(...args),
 }));
 
-vi.mock('../../../lib/preprocess/exportBundle', () => ({
+vi.mock('../../../lib/built-in-admin/exportBundle', () => ({
   exportPreprocessZip: vi.fn(),
   getPreprocessZipExportReadiness: () => ({ canExport: false, reason: 'Not used in this test.' }),
 }));
 
-vi.mock('../../../lib/preprocess/invalidation', () => ({
+vi.mock('../../../lib/built-in-admin/invalidation', () => ({
   invalidateOnAlignmentChange: (project: unknown) => project,
   invalidateOnCropQcChange: (project: unknown) => project,
   invalidateOnHeFocusChange: (project: unknown) => invalidateOnHeFocusChangeSpy(project),
@@ -161,26 +161,26 @@ vi.mock('../../../lib/preprocess/invalidation', () => ({
   invalidateOnSourceAssetsChange: (project: unknown) => project,
 }));
 
-vi.mock('../../../lib/preprocess/loadOpenCv', () => ({
+vi.mock('../../../lib/built-in-admin/loadOpenCv', () => ({
   loadOpenCv: () => mockLoadOpenCv(),
 }));
 
-vi.mock('../../../lib/preprocess/sourceImage', () => ({
+vi.mock('../../../lib/built-in-admin/sourceImage', () => ({
   buildSourceImage: vi.fn(),
   createThumbnailBlob: vi.fn(async () => new Blob(['thumbnail'], { type: 'image/png' })),
 }));
 
-vi.mock('../../../lib/preprocess/spotProjection', () => ({
+vi.mock('../../../lib/built-in-admin/spotProjection', () => ({
   projectSpotsForCrop: vi.fn(),
   resolveAuthoritativeSpotDiameterFullres: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/tissuePipeline', () => ({
+vi.mock('../../../lib/built-in-admin/tissuePipeline', () => ({
   runTissueAutoSelection: vi.fn(),
 }));
 
-vi.mock('../../../lib/preprocess/chipConfigs', async () => {
-  const actual = await vi.importActual<typeof import('../../../lib/preprocess/chipConfigs')>('../../../lib/preprocess/chipConfigs');
+vi.mock('../../../lib/built-in-admin/chipConfigs', async () => {
+  const actual = await vi.importActual<typeof import('../../../lib/built-in-admin/chipConfigs')>('../../../lib/built-in-admin/chipConfigs');
 
   return {
     ...actual,

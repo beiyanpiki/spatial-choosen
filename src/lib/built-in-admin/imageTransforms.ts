@@ -2,7 +2,7 @@ import type {
   LocalizationImageTransform,
   PreprocessPoint,
   PreprocessRect,
-} from '@/types/preprocess';
+} from '@/types/built-in-admin';
 
 const CENTER = 0.5;
 

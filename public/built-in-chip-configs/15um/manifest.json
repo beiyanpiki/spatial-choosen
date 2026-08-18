@@ -1,0 +1,10 @@
+{
+  "id": "15um",
+  "label": "Square grid 15um",
+  "gridRows": 96,
+  "gridCols": 96,
+  "spotDiameter": 25,
+  "spotGap": 15,
+  "barcodeTemplatePath": "/built-in-chip-configs/15um/tissue_positions.csv",
+  "tissuePositionsPath": "/built-in-chip-configs/15um/tissue_positions.csv"
+}

@@ -14,8 +14,13 @@ import {
 	Image,
 	Input,
 	Select,
+	Slider,
+	SliderFilledTrack,
+	SliderThumb,
+	SliderTrack,
 	Spinner,
 	Stack,
+	Switch,
 	Text,
 	useToast,
 } from "@chakra-ui/react";
@@ -41,21 +46,22 @@ import type {
 	PreprocessSourceImage,
 	PreprocessStepId,
 	TissueActivationValue,
-} from "@/types/preprocess";
+} from "@/types/built-in-admin";
 import {
 	normalizeAlignmentSlice,
-} from "@/lib/preprocess/alignment";
+} from "@/lib/built-in-admin/alignment";
 import {
 	type ChipConfigData,
 	type ChipConfigManifest,
 	loadAllChipConfigManifests,
 	loadChipConfigData,
-} from "@/lib/preprocess/chipConfigs";
-import { runCropQc } from "@/lib/preprocess/cropQc";
+	loadChipConfigManifest,
+} from "@/lib/built-in-admin/chipConfigs";
+import { runCropQc } from "@/lib/built-in-admin/cropQc";
 import {
 	exportPreprocessZip,
 	getPreprocessZipExportReadiness,
-} from "@/lib/preprocess/exportBundle";
+} from "@/lib/built-in-admin/exportBundle";
 import {
 	invalidateOnAlignmentChange,
 	invalidateOnCropQcChange,
@@ -64,8 +70,8 @@ import {
 	invalidateOnHeFocusCommit,
 	invalidateOnLocalizationChange,
 	invalidateOnSourceAssetsChange,
-} from "@/lib/preprocess/invalidation";
-import { loadOpenCv } from "@/lib/preprocess/loadOpenCv";
+} from "@/lib/built-in-admin/invalidation";
+import { loadOpenCv } from "@/lib/built-in-admin/loadOpenCv";
 import {
 	buildLocalizationHandles,
 	buildPermissiveHeFocusHandles,
@@ -75,27 +81,41 @@ import {
 	DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
 	normalizeLocalizationImageTransform,
 	normalizeLocalizationSlice,
-} from "@/lib/preprocess/localization";
-import { getOrientedChipBoundsPixelRect } from "@/lib/preprocess/imageTransforms";
+} from "@/lib/built-in-admin/localization";
+import { getOrientedChipBoundsPixelRect } from "@/lib/built-in-admin/imageTransforms";
+import {
+	lockedSpotIds,
+	lockTissueSelectionSlice,
+	type ExclusionConfig,
+} from "@/lib/built-in-admin/exclusion";
 import {
 	buildInvertedTissueSelectionState,
 	buildManualTissueSelectionState,
-} from "@/lib/preprocess/projectUpdates";
+} from "@/lib/built-in-admin/projectUpdates";
 import {
 	buildSourceImage,
 	createThumbnailBlob,
-} from "@/lib/preprocess/sourceImage";
+} from "@/lib/built-in-admin/sourceImage";
 import {
 	projectSpotsForCrop,
 	resolveAuthoritativeSpotDiameterFullres,
-} from "@/lib/preprocess/spotProjection";
-import type { PreprocessPersistMode } from "@/lib/preprocess/storage";
-import { selectedSpotIdsFromMatrix } from "@/lib/preprocess/tissueMatrix";
-import { runTissueAutoSelection } from "@/lib/preprocess/tissuePipeline";
-import { resolveTissueSelectionSupport } from "@/lib/preprocess/tissueSupport";
+} from "@/lib/built-in-admin/spotProjection";
+import type { PreprocessPersistMode } from "@/lib/built-in-admin/storage";
+import { selectedSpotIdsFromMatrix } from "@/lib/built-in-admin/tissueMatrix";
+import { runTissueAutoSelection } from "@/lib/built-in-admin/tissuePipeline";
+import { parseTissueActivationCsv } from "@/lib/built-in-admin/tissueCsvImport";
+import {
+	buildNormalizedExpressionByPosition,
+	compactSpotGridForDisplay,
+	gridSignature,
+	type SpotGridConfig,
+} from "@/lib/built-in-admin/spotGridTile";
+import { resolveTissueSelectionSupport } from "@/lib/built-in-admin/tissueSupport";
+import { buildEmptyPreprocessProject } from "../projectState";
 import { AlignmentPanel } from "./AlignmentPanel";
-import { CanvasStage } from "./CanvasStage";
+import { CanvasStage, type ChipGridOverlay } from "./CanvasStage";
 import { CropQcPanel } from "./CropQcPanel";
+import { ExclusionControls } from "./ExclusionControls";
 import { ExportPanel } from "./ExportPanel";
 import { StepSidebar } from "./StepSidebar";
 import {
@@ -465,7 +485,7 @@ const placeholderCopyByStep: Record<
 > = {
 	sourceAssets: {
 		title: "Source image intake",
-		body: "Upload the NATA Align image and the corresponding H&E stained tissue image. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.",
+		body: "Upload the NATA Align image, the corresponding H&E stained tissue image, and the tissue activation CSV from the chip. Supported image formats: PNG, JPG, and JPEG. All image processing performed on this page is saved locally.",
 	},
 	localization: {
 		title: "Chip localization",
@@ -752,6 +772,81 @@ function SourceAssetUploader({
 	);
 }
 
+function TissueCsvUploader({
+	label,
+	description,
+	buttonLabel,
+	emptyText,
+	imported,
+	summary,
+	onUpload,
+}: {
+	label: string;
+	description: string;
+	buttonLabel: string;
+	emptyText: string;
+	imported: boolean;
+	summary: string | null;
+	onUpload: (fileList: FileList | null) => void;
+}) {
+	return (
+		<Box
+			border="1px solid"
+			borderColor="gray.200"
+			borderRadius="xl"
+			bg="white"
+			px={4}
+			py={4}
+			h="full"
+		>
+			<Stack spacing={3}>
+				<Flex justify="space-between" align="flex-start" gap={3} wrap="wrap">
+					<Stack spacing={1}>
+						<Heading size="sm">{label}</Heading>
+						<Text fontSize="sm" color="gray.500">
+							{description}
+						</Text>
+					</Stack>
+					<Badge
+						colorScheme={imported ? "green" : "orange"}
+						alignSelf="flex-start"
+						borderRadius="full"
+					>
+						{imported ? "Ready" : "Missing"}
+					</Badge>
+				</Flex>
+				<Text fontSize="sm" color="gray.600">
+					{imported && summary ? summary : emptyText}
+				</Text>
+				<Box>
+					<Button
+						colorScheme="brand"
+						variant={imported ? "outline" : "solid"}
+						size="sm"
+						onClick={(event) => {
+							const input = event.currentTarget.nextElementSibling;
+							if (input instanceof HTMLInputElement) {
+								input.click();
+							}
+						}}
+					>
+						{buttonLabel}
+					</Button>
+					<Input
+						type="file"
+						accept=".csv,text/csv"
+						display="none"
+						onChange={(event) => {
+							onUpload(event.target.files);
+							event.target.value = "";
+						}}
+					/>
+				</Box>
+			</Stack>
+		</Box>
+	);
+}
+
 export function PreprocessWorkspace({
 	autosaveStatus,
 	autosaveDetail,
@@ -796,6 +891,46 @@ export function PreprocessWorkspace({
 	const localizationImage = project
 		? (project.sourceAssets.images[project.localization.targetImage] ?? null)
 		: null;
+	const localizationChipGrid = useMemo<ChipGridOverlay | null>(() => {
+		if (!project) return null;
+		const config = project.chipConfig;
+		if (
+			!config.chipType ||
+			typeof config.rows !== "number" ||
+			typeof config.columns !== "number" ||
+			typeof config.spotDiameter !== "number" ||
+			typeof config.pitchX !== "number"
+		) {
+			return null;
+		}
+		const overlay: SpotGridConfig = {
+			rows: config.rows,
+			columns: config.columns,
+			spotDiameter: config.spotDiameter,
+			spotGap: config.pitchX,
+			normalizedByPosition: buildNormalizedExpressionByPosition(
+				config.log2nGeneByPosition,
+				config.rows,
+				config.columns,
+				{
+					excludedRows: config.excludedRows,
+					excludedColumns: config.excludedColumns,
+				},
+			),
+			excludedRows: config.excludedRows,
+			excludedColumns: config.excludedColumns,
+		};
+		return { ...overlay, signature: gridSignature(overlay) };
+	}, [project?.chipConfig]);
+	const [compactLocalizationGrid, setCompactLocalizationGrid] = useState(false);
+	const localizationDisplayGrid = useMemo<ChipGridOverlay | null>(() => {
+		if (!localizationChipGrid) return null;
+		if (!compactLocalizationGrid) return localizationChipGrid;
+		// Display-only compaction: excluded rows/columns drop out and the
+		// remaining matrix re-fits the capture box instead of dark spots.
+		const compacted = compactSpotGridForDisplay(localizationChipGrid);
+		return { ...compacted, signature: gridSignature(compacted) };
+	}, [compactLocalizationGrid, localizationChipGrid]);
 	const currentHeImageSource = project
 		? (project.sourceAssets.images[project.heFocus.targetImage] ?? null)
 		: null;
@@ -1177,6 +1312,206 @@ export function PreprocessWorkspace({
 		},
 		[onProjectMutate, toast],
 	);
+
+	const handleUploadCsv = useCallback(
+		async (fileList: FileList | null) => {
+			const file = fileList?.[0];
+			if (!file) return;
+
+			try {
+				const csvText = await file.text();
+				const parsed = parseTissueActivationCsv(csvText);
+				const manifest = await loadChipConfigManifest(parsed.chipType);
+				const activeSpotCount = parsed.matrix.values.reduce<number>(
+					(count, value) => (value === 1 ? count + 1 : count),
+					0,
+				);
+
+				onProjectMutate((current) => {
+					const timestamp = new Date().toISOString();
+					const eosin = current.sourceAssets.images.eosin;
+					const localizationAspectRatio =
+						eosin?.width && eosin.height ? eosin.width / eosin.height : 1;
+
+					// The tissue activation CSV fixes the chip configuration, so a
+					// (re-)import resets the whole alignment chain: chip geometry,
+					// expression data, and the derived grid all changed, and outputs
+					// from a previous CSV no longer apply.
+					const empty = buildEmptyPreprocessProject(current.name);
+					const nextLocalizationBase = normalizeLocalizationSlice({
+						...empty.localization,
+						targetImage: "eosin",
+						method: "manual",
+						chipBounds: createDefaultChipBounds(localizationAspectRatio),
+						imageTransform: DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
+					});
+					const nextLocalization: LocalizationSlice = {
+						...nextLocalizationBase,
+						status: computeLocalizationStatus(
+							true,
+							nextLocalizationBase.chipBounds,
+						),
+						isStale: false,
+						error: null,
+						updatedAt: timestamp,
+					};
+
+					const resetProject = {
+						...current,
+						localization: nextLocalization,
+						heFocus: empty.heFocus,
+						alignment: empty.alignment,
+						cropQc: empty.cropQc,
+						tissueSelection: empty.tissueSelection,
+					};
+					const invalidatedProject = invalidateOnSourceAssetsChange(resetProject);
+
+					return {
+						...invalidatedProject,
+						localization: nextLocalization,
+						chipConfig: {
+							...empty.chipConfig,
+							chipType: parsed.chipType,
+							rows: manifest.gridRows,
+							columns: manifest.gridCols,
+							pitchX: manifest.spotGap,
+							pitchY: manifest.spotGap,
+							spotDiameter: manifest.spotDiameter,
+							origin: { x: 0, y: 0 },
+							rotationDegrees: 0,
+							excludedRows: [],
+							excludedColumns: [],
+							barcodesByPosition: parsed.barcodesByPosition,
+							log2nGeneByPosition: parsed.log2nGeneByPosition,
+							csvFileName: file.name,
+							status: "complete" as const,
+							isStale: false,
+							error: null,
+							updatedAt: timestamp,
+						},
+					};
+				});
+
+				toast({
+					title: "Tissue activation imported",
+					description: `${parsed.chipType} chip (${parsed.rows}×${parsed.columns}) with ${activeSpotCount} active spots.`,
+					status: "success",
+				});
+			} catch (error) {
+				console.error(error);
+				toast({
+					title: "Unable to import tissue CSV",
+					description:
+						error instanceof Error
+							? error.message
+							: "Choose a valid tissue activation CSV file.",
+					status: "error",
+				});
+			}
+		},
+		[onProjectMutate, toast],
+	);
+
+	const exclusionConfigOf = useCallback(
+		(project: PreprocessProject): ExclusionConfig => ({
+			excludedRows: project.chipConfig.excludedRows,
+			excludedColumns: project.chipConfig.excludedColumns,
+		}),
+		[],
+	);
+
+	const handleExcludeRowsChange = useCallback(
+		(next: number[]) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						excludedRows: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	const handleRemoveExcludedRowsFromExportChange = useCallback(
+		(next: boolean) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						removeExcludedRowsFromExport: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	const handleExcludeColumnsChange = useCallback(
+		(next: number[]) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						excludedColumns: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	// Re-lock existing tissue selection when exclusions change after Step 6 has
+	// already produced a matrix/selection (see src/lib/built-in-admin/exclusion.ts).
+	useEffect(() => {
+		if (!project) return;
+		const projectedSpots = project.chipConfig.projectedSpots;
+		if (!projectedSpots || projectedSpots.length === 0) return;
+		const config = exclusionConfigOf(project);
+		if (config.excludedRows.length === 0 && config.excludedColumns.length === 0) return;
+		if (!project.tissueSelection.matrix && !project.tissueSelection.selectedSpotIds) return;
+
+		onProjectMutate(
+			(current) => {
+				const nextTissueSelection = lockTissueSelectionSlice(
+					current.tissueSelection,
+					current.chipConfig.projectedSpots ?? [],
+					exclusionConfigOf(current),
+				);
+				if (nextTissueSelection === current.tissueSelection) {
+					return current;
+				}
+				const updatedAt = new Date().toISOString();
+				return {
+					...current,
+					tissueSelection: {
+						...nextTissueSelection,
+						updatedAt,
+					},
+					exportState: {
+						...current.exportState,
+						status: "stale",
+						isStale: true,
+						updatedAt,
+						lastExportedAt: null,
+						artifacts: [],
+						error: null,
+					},
+				};
+			},
+			{ mode: "tissue", strategy: "debounced" },
+		);
+	}, [exclusionConfigOf, onProjectMutate, project?.chipConfig.excludedColumns, project?.chipConfig.excludedRows, project?.chipConfig.projectedSpots]);
 
 	useEffect(() => {
 		if (currentStepId !== "alignment") return;
@@ -1853,9 +2188,9 @@ export function PreprocessWorkspace({
 						return current;
 					}
 
-					return {
-						...current,
-						tissueSelection: {
+					const updatedAt = new Date().toISOString();
+					const nextTissueSelection = lockTissueSelectionSlice(
+						{
 							...current.tissueSelection,
 							mode: "matrix",
 							supportState: tissueSupport.supportState,
@@ -1873,14 +2208,21 @@ export function PreprocessWorkspace({
 							warning: result.warning,
 							status: result.warning ? "error" : "complete",
 							isStale: false,
-							updatedAt: new Date().toISOString(),
+							updatedAt,
 							error: result.warning,
 						},
+						current.chipConfig.projectedSpots ?? [],
+						exclusionConfigOf(current),
+					);
+
+					return {
+						...current,
+						tissueSelection: nextTissueSelection,
 						exportState: {
 							...current.exportState,
 							status: result.warning ? "stale" : "ready",
 							isStale: Boolean(result.warning),
-							updatedAt: new Date().toISOString(),
+							updatedAt,
 							lastExportedAt: null,
 							artifacts: [],
 							error: null,
@@ -1968,10 +2310,18 @@ export function PreprocessWorkspace({
 
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+	const tissueLockedSpotIds = useMemo<ReadonlySet<string> | undefined>(() => {
+		if (!project) return undefined;
+		const projectedSpots = project.chipConfig.projectedSpots;
+		if (!projectedSpots || projectedSpots.length === 0) return undefined;
+		return lockedSpotIds(projectedSpots, exclusionConfigOf(project));
+	}, [exclusionConfigOf, project?.chipConfig]);
 	const isTissueInteractionDisabled =
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
+	const [showLocalizationGrid, setShowLocalizationGrid] = useState(true);
+	const [localizationGridOpacity, setLocalizationGridOpacity] = useState(1);
 	const commitManualTissueSelection = useCallback(
 		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
 			onProjectMutate(
@@ -1985,14 +2335,18 @@ export function PreprocessWorkspace({
 								nextValue,
 							}
 						: { spotId: edit.spotId };
-					const nextTissueSelection = buildManualTissueSelectionState({
-						current: current.tissueSelection,
+					const nextTissueSelection = lockTissueSelectionSlice(
+						buildManualTissueSelectionState({
+							current: current.tissueSelection,
+							projectedSpots,
+							...editArgs,
+							rows: current.chipConfig.rows,
+							columns: current.chipConfig.columns,
+							updatedAt,
+						}),
 						projectedSpots,
-						...editArgs,
-						rows: current.chipConfig.rows,
-						columns: current.chipConfig.columns,
-						updatedAt,
-					});
+						exclusionConfigOf(current),
+					);
 					if (nextTissueSelection === current.tissueSelection) {
 						return current;
 					}
@@ -2216,6 +2570,25 @@ export function PreprocessWorkspace({
 										/>
 									</Box>
 								</Flex>
+									<TissueCsvUploader
+										label="Tissue activation CSV"
+										description="A tissue activation CSV from the chip (tissue/in_tissue, row/array_row, col/array_col, optional Log2_nGene_Spatial). It fixes the chip type and drives the capture-area heatmap grid."
+										buttonLabel={
+											project.chipConfig.csvFileName
+												? "Replace CSV"
+												: "Upload CSV"
+										}
+										emptyText="No tissue activation CSV uploaded yet."
+										imported={project.chipConfig.chipType != null}
+										summary={
+											project.chipConfig.csvFileName
+												? `${project.chipConfig.csvFileName} — ${project.chipConfig.chipType} chip (${project.chipConfig.rows}×${project.chipConfig.columns})`
+												: null
+										}
+										onUpload={(fileList) => {
+											void handleUploadCsv(fileList);
+										}}
+									/>
 								</Stack>
 							) : project.currentStep === "localization" ? (
 								<Flex
@@ -2228,6 +2601,8 @@ export function PreprocessWorkspace({
 											project.localization.boxColor as LocalizationBoxColor
 										}
 										chipBounds={localizationStageChipBounds}
+										chipGrid={showLocalizationGrid ? localizationDisplayGrid : null}
+										gridOpacity={localizationGridOpacity}
 										image={localizationImage}
 										imageTransform={project.localization.imageTransform}
 										onScaleChange={(value) => {
@@ -2329,6 +2704,86 @@ export function PreprocessWorkspace({
 							);
 						}}
 									/>
+								<Box w={{ base: "100%", xl: "320px" }} flexShrink={0}>
+									<Stack spacing={4}>
+										<Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
+											<CardBody p={4}>
+												<Stack spacing={3}>
+													<Text fontSize="sm" fontWeight="semibold">Heatmap matrix</Text>
+													<Flex align="center" justify="space-between" gap={3}>
+														<Text fontSize="sm">Show expression heatmap</Text>
+														<Switch
+															data-testid="localization-heatmap-toggle"
+															isChecked={showLocalizationGrid}
+															isDisabled={localizationChipGrid == null}
+															aria-label="Show expression heatmap matrix"
+															onChange={(event) => {
+																setShowLocalizationGrid(event.target.checked);
+															}}
+														/>
+													</Flex>
+													<Stack spacing={2}>
+														<Flex align="center" justify="space-between" gap={3}>
+															<Text fontSize="sm">Heatmap opacity</Text>
+															<Text fontSize="sm" color="gray.600" data-testid="localization-heatmap-opacity-value">
+																{localizationGridOpacity.toFixed(2)}
+															</Text>
+														</Flex>
+														<Slider
+															min={0}
+															max={1}
+															step={0.01}
+															value={localizationGridOpacity}
+															isDisabled={localizationChipGrid == null}
+															aria-label="Heatmap matrix opacity"
+															data-testid="localization-heatmap-opacity"
+															onChange={setLocalizationGridOpacity}
+														>
+															<SliderTrack>
+																<SliderFilledTrack />
+															</SliderTrack>
+															<SliderThumb />
+														</Slider>
+													</Stack>
+													<Flex align="center" justify="space-between" gap={3}>
+														<Text fontSize="sm">Remove excluded rows/columns</Text>
+														<Switch
+															data-testid="localization-heatmap-compact-toggle"
+															isChecked={compactLocalizationGrid}
+															isDisabled={localizationChipGrid == null}
+															aria-label="Remove excluded rows and columns from the heatmap display"
+															onChange={(event) => {
+																setCompactLocalizationGrid(event.target.checked);
+															}}
+														/>
+													</Flex>
+													<Text fontSize="xs" color="gray.500">
+														Display only — excluded spots are removed and the heatmap re-fits the capture area.
+													</Text>
+													{localizationChipGrid == null ? (
+														<Text fontSize="xs" color="gray.500">
+															Import a tissue activation CSV with expression data to enable the heatmap matrix.
+														</Text>
+													) : null}
+												</Stack>
+											</CardBody>
+										</Card>
+										<ExclusionControls
+											rows={project.chipConfig.rows}
+											columns={project.chipConfig.columns}
+											excludedRows={project.chipConfig.excludedRows}
+											excludedColumns={project.chipConfig.excludedColumns}
+											removeExcludedRowsFromExport={
+												project.chipConfig.removeExcludedRowsFromExport
+											}
+											onRemoveExcludedRowsFromExportChange={
+												handleRemoveExcludedRowsFromExportChange
+											}
+											onExcludeRowsChange={handleExcludeRowsChange}
+											onExcludeColumnsChange={handleExcludeColumnsChange}
+										/>
+									</Stack>
+								</Box>
 								</Flex>
 							) : project.currentStep === "heFocus" ? (
 								<Stack spacing={5}>
@@ -2662,6 +3117,7 @@ export function PreprocessWorkspace({
 												}
 												projectedSpots={tissueProjectedSpots}
 												selectedSpotIds={tissueSelectedSpotIds}
+												lockedSpotIds={tissueLockedSpotIds}
 												showSpots={showTissueSpots}
 												showControls={false}
 												tool={tissueTool}
@@ -2700,186 +3156,17 @@ export function PreprocessWorkspace({
 															>
 																Spot Size
 															</FormLabel>
-															<Select
-																value={project.chipConfig.chipType ?? ""}
-																placeholder="Select capture pitch"
-																data-testid="tissue-chip-size-select"
-																onChange={(event) => {
-																	const chipId = event.target.value;
-																	if (chipId !== "15um" && chipId !== "50um")
-																		return;
-																	if (
-																		!project.cropQc.cropWidth ||
-																		!project.cropQc.cropHeight
-																	)
-																		return;
-																	const cropWidth = project.cropQc.cropWidth;
-																	const cropHeight = project.cropQc.cropHeight;
-																	const chipRequestToken =
-																		++chipConfigRequestTokenRef.current;
-																	void (async () => {
-																		try {
-																			setChipConfigError(null);
-																			const config =
-																				await loadChipConfigData(chipId);
-																			if (
-																				chipConfigRequestTokenRef.current !==
-																				chipRequestToken
-																			) {
-																				return;
-																			}
-																			const {
-																				projectedSpots,
-																				spotDiameterFullres,
-																				tissueSupport: nextSupport,
-																			} = deriveChipProjectionForCrop({
-																				config,
-																				cropWidth,
-																				cropHeight,
-																			});
-																			const timestamp =
-																				new Date().toISOString();
-
-																			onProjectMutate((current) => {
-																				if (
-																					chipConfigRequestTokenRef.current !==
-																						chipRequestToken ||
-																					current.cropQc.cropWidth !==
-																						cropWidth ||
-																					current.cropQc.cropHeight !==
-																						cropHeight
-																				) {
-																					return current;
-																				}
-																				return {
-																					...current,
-																					cropQc: {
-																						...current.cropQc,
-																						spot_diameter_fullres:
-																							spotDiameterFullres,
-																						updatedAt: timestamp,
-																					},
-																					chipConfig: {
-																						...current.chipConfig,
-																						chipType: config.manifest.id,
-																						rows: config.manifest.gridRows,
-																						columns: config.manifest.gridCols,
-																						pitchX: config.manifest.spotGap,
-																						pitchY: config.manifest.spotGap,
-																						origin: { x: 0, y: 0 },
-																						rotationDegrees: 0,
-																						projectedSpots,
-																						status: "complete",
-																						isStale: false,
-																						updatedAt: timestamp,
-																						error: null,
-																					},
-																					tissueSelection: {
-																						...current.tissueSelection,
-																						supportState:
-																							nextSupport.supportState,
-																						unsupportedReason:
-																							nextSupport.unsupportedReason,
-																						matrix: null,
-																						autoSelectedSpotIds: [],
-																						selectedSpotIds: null,
-																						paritySummary: null,
-																						warning: null,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: timestamp,
-																						error: null,
-																					},
-																					exportState: {
-																						...current.exportState,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: timestamp,
-																						lastExportedAt: null,
-																						artifacts: [],
-																						error: null,
-																					},
-																				};
-																			});
-																		} catch (error) {
-																			if (
-																				chipConfigRequestTokenRef.current !==
-																				chipRequestToken
-																			) {
-																				return;
-																			}
-																			const message =
-																				error instanceof Error
-																					? error.message
-																					: "Failed to load chip config";
-																			const nextSupport =
-																				resolveTissueSelectionSupport({
-																					chipType: chipId,
-																					rows: null,
-																					columns: null,
-																				});
-																			setChipConfigError(message);
-																			onProjectMutate((current) => {
-																				if (
-																					chipConfigRequestTokenRef.current !==
-																						chipRequestToken ||
-																					current.cropQc.cropWidth !==
-																						cropWidth ||
-																					current.cropQc.cropHeight !==
-																						cropHeight
-																				) {
-																					return current;
-																				}
-																				return {
-																					...current,
-																					chipConfig: {
-																						...current.chipConfig,
-																						chipType: chipId,
-																						projectedSpots: null,
-																						status: "error",
-																						isStale: false,
-																						updatedAt: new Date().toISOString(),
-																						error: message,
-																					},
-																					tissueSelection: {
-																						...current.tissueSelection,
-																						supportState:
-																							nextSupport.supportState,
-																						unsupportedReason:
-																							nextSupport.unsupportedReason,
-																						matrix: null,
-																						autoSelectedSpotIds: [],
-																						selectedSpotIds: null,
-																						paritySummary: null,
-																						warning: null,
-																						status: "error",
-																						isStale: false,
-																						updatedAt: new Date().toISOString(),
-																						error: message,
-																					},
-																					exportState: {
-																						...current.exportState,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: new Date().toISOString(),
-																						lastExportedAt: null,
-																						artifacts: [],
-																						error: null,
-																					},
-																				};
-																			});
-																		}
-																	})();
-																}}
-															>
-																<option value="15um">15um</option>
-																<option value="50um">50um</option>
-															</Select>
+															<Text fontSize="md" fontWeight="semibold" data-testid="tissue-chip-size-fixed">
+																{project.chipConfig.chipType === "15um" || project.chipConfig.chipType === "50um"
+																	? project.chipConfig.chipType
+																	: "—"}
+															</Text>
+															<Text fontSize="xs" color="gray.500" data-testid="tissue-chip-size-source">
+																Fixed by the tissue activation CSV{project.chipConfig.csvFileName ? ` (${project.chipConfig.csvFileName})` : ""} — {project.chipConfig.rows}×{project.chipConfig.columns} grid.
+															</Text>
 														</FormControl>
 														<Text fontSize="xs" color="gray.500">
-															Changing the capture resolution will clear previous tissue edits,
-															regenerate the projected spot grid, and require tissue auto-selection
-															to be performed again.
+															The chip type and grid are fixed by the tissue activation CSV uploaded in Step 1. Excluded rows/columns are locked as inactive.
 														</Text>
 														{(chipConfigError ?? project.chipConfig.error) ? (
 															<Text fontSize="sm" color="red.600">
@@ -3036,7 +3323,7 @@ export function PreprocessWorkspace({
 															const updatedAt = new Date().toISOString();
 															return {
 																...current,
-																tissueSelection:
+																tissueSelection: lockTissueSelectionSlice(
 																	buildInvertedTissueSelectionState({
 																		current: current.tissueSelection,
 																		projectedSpots,
@@ -3044,6 +3331,9 @@ export function PreprocessWorkspace({
 																		columns: current.chipConfig.columns,
 																		updatedAt,
 																	}),
+																	projectedSpots,
+																	exclusionConfigOf(current),
+																),
 																exportState: {
 																	...current.exportState,
 																	status: "stale",
