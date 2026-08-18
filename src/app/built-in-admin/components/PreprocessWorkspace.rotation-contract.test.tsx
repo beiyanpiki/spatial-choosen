@@ -687,7 +687,56 @@ describe('PreprocessWorkspace rotation contract', () => {
 			expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
 			const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
 			expect(drawSource).toMatchObject({ width: 180, height: 240 });
-			expect(drawArgs).toEqual([0, 0, 63, 48, 9, 24, 63, 48]);
+			expect(drawArgs).toEqual([0, 21, 18, 72, 54, 0, 18, 72]);
+	});
+
+	it('crops the fixed canvas-axis box after a horizontal flip (flip must not shift the box)', async () => {
+		await generateFocusedHeDataUrl({
+			sourceDataUrl: 'data:image/png;base64,he',
+			chipBounds: { x: 0.2, y: 0.3, width: 0.5, height: 0.5 },
+			imageTransform: {
+				rotationDegrees: 0,
+				flipHorizontal: true,
+				flipVertical: false,
+				scale: 1,
+			},
+		});
+
+		const { cropCanvas, cropContext } = getLastFocusedPreviewRender();
+
+		expect(cropCanvas.width).toBe(120);
+		expect(cropCanvas.height).toBe(90);
+		expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
+		const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
+		expect(drawSource).toMatchObject({ width: 240, height: 180 });
+		// The box stays at its canvas-axis position (48,54); the old envelope
+		// math mirrored it to x=72 and sampled a different tissue region.
+		expect(drawArgs).toEqual([48, 54, 120, 90, 0, 0, 120, 90]);
+	});
+
+	it('crops the fixed canvas-axis box after a 90 degree rotation', async () => {
+		await generateFocusedHeDataUrl({
+			sourceDataUrl: 'data:image/png;base64,he',
+			chipBounds: { x: 0.2, y: 0.3, width: 0.5, height: 0.5 },
+			imageTransform: {
+				rotationDegrees: 90,
+				flipHorizontal: false,
+				flipVertical: false,
+				scale: 1,
+			},
+		});
+
+		const { cropCanvas, cropContext } = getLastFocusedPreviewRender();
+
+		expect(cropCanvas.width).toBe(120);
+		expect(cropCanvas.height).toBe(90);
+		expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
+		const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
+		expect(drawSource).toMatchObject({ width: 180, height: 240 });
+		// The box keeps its normalized position inside the unrotated source
+		// frame centered in the oriented canvas: x=(180-240)/2+48=18,
+		// y=(240-180)/2+54=84.
+		expect(drawArgs).toEqual([18, 84, 120, 90, 0, 0, 120, 90]);
 	});
 
 	it('renders fully out-of-bounds HEFocus crops as all-white outputs at the requested size', async () => {
@@ -1137,7 +1186,6 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 				const requestedBounds = getOrientedChipBoundsPixelRect(
 					expectedCommittedBounds,
-					latestProject.localization.imageTransform,
 					ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE,
 					{
 						width: ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height,

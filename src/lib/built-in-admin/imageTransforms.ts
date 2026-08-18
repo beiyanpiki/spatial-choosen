@@ -175,31 +175,29 @@ export function transformImagePixelPoint(
   };
 }
 
+/**
+ * Returns the capture-box pixel rect in the oriented (canvas-axis) frame.
+ *
+ * CanvasStage keeps the capture box in the fixed canvas-axis coordinate
+ * system: the box sits at its normalized position inside the unrotated source
+ * frame, which is centered within the oriented output frame. The crop window
+ * must use that same fixed position — not the envelope of the transform's
+ * corners — so the crop shows exactly the region the user sees under the box
+ * after rotating or flipping the image. The transform only affects this via
+ * the outputSize computed by the caller; flips do not move the box at all.
+ */
 export function getOrientedChipBoundsPixelRect(
   rect: PreprocessRect,
-  transform: LocalizationImageTransform,
   sourceSize: PixelSize,
   outputSize: PixelSize,
 ): PixelPoint & PixelSize {
-  const sourceX = rect.x * sourceSize.width;
-  const sourceY = rect.y * sourceSize.height;
-  const sourceWidth = rect.width * sourceSize.width;
-  const sourceHeight = rect.height * sourceSize.height;
-  const points = [
-    { x: sourceX, y: sourceY },
-    { x: sourceX + sourceWidth, y: sourceY },
-    { x: sourceX + sourceWidth, y: sourceY + sourceHeight },
-    { x: sourceX, y: sourceY + sourceHeight },
-  ].map((point) => transformImagePixelPoint(point, transform, sourceSize, outputSize));
-  const minX = Math.min(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const maxY = Math.max(...points.map((point) => point.y));
+  const frameOffsetX = (outputSize.width - sourceSize.width) / 2;
+  const frameOffsetY = (outputSize.height - sourceSize.height) / 2;
 
   return {
-    x: Math.round(minX),
-    y: Math.round(minY),
-    width: Math.max(1, Math.round(maxX - minX)),
-    height: Math.max(1, Math.round(maxY - minY)),
+    x: Math.round(frameOffsetX + rect.x * sourceSize.width),
+    y: Math.round(frameOffsetY + rect.y * sourceSize.height),
+    width: Math.max(1, Math.round(rect.width * sourceSize.width)),
+    height: Math.max(1, Math.round(rect.height * sourceSize.height)),
   };
 }

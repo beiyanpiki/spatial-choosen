@@ -367,7 +367,6 @@ export const generateFocusedHeDataUrl = async (args: {
 	);
 	const orientedChipBounds = getOrientedChipBoundsPixelRect(
 		args.chipBounds,
-		args.imageTransform,
 		{ width: sourceWidth, height: sourceHeight },
 		{ width: orientedWidth, height: orientedHeight },
 	);

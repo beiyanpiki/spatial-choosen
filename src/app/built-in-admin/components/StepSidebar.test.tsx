@@ -150,6 +150,7 @@ const createProject = (
     rotationDegrees: 0,
     spotDiameter: null,
     excludedRows: [],
+    removeExcludedRowsFromExport: false,
     excludedColumns: [],
     barcodesByPosition: {},
     log2nGeneByPosition: {},

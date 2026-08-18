@@ -172,6 +172,7 @@ const createLegacyProject = (): LegacyPreprocessProject => ({
     rotationDegrees: 0,
     spotDiameter: null,
     excludedRows: [],
+    removeExcludedRowsFromExport: false,
     excludedColumns: [],
     barcodesByPosition: {},
     log2nGeneByPosition: {},

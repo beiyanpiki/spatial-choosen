@@ -293,6 +293,7 @@ export const buildEmptyPreprocessProject = (
 			spotDiameter: null,
 			excludedRows: [],
 			excludedColumns: [],
+			removeExcludedRowsFromExport: false,
 			barcodesByPosition: {},
 			log2nGeneByPosition: {},
 			csvFileName: null,

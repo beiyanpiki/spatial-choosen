@@ -448,6 +448,8 @@ export type ChipConfigSlice = PreprocessSliceBase & {
   excludedRows: number[];
   /** 1-based in-memory array columns excluded at capture-area definition. */
   excludedColumns: number[];
+  /** When true, excluded rows are removed entirely from the exported CSVs (rows compacted, lower-left origin renumbered) instead of being kept at in_tissue=0. */
+  removeExcludedRowsFromExport: boolean;
   /** Barcodes keyed by in-memory `${arrayRow}:${arrayCol}` (image-top convention). */
   barcodesByPosition: Record<string, string>;
   /** Log2_nGene_Spatial values keyed by in-memory `${arrayRow}:${arrayCol}` (image-top convention). */

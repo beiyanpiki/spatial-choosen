@@ -382,7 +382,6 @@ export const generateFocusedHeDataUrl = async (args: {
 	);
 	const orientedChipBounds = getOrientedChipBoundsPixelRect(
 		args.chipBounds,
-		args.imageTransform,
 		{ width: sourceWidth, height: sourceHeight },
 		{ width: orientedWidth, height: orientedHeight },
 	);
@@ -1415,6 +1414,23 @@ export function PreprocessWorkspace({
 					chipConfig: {
 						...current.chipConfig,
 						excludedRows: next,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				METADATA_DEBOUNCED_PERSIST_OPTIONS,
+			);
+		},
+		[onProjectMutate],
+	);
+
+	const handleRemoveExcludedRowsFromExportChange = useCallback(
+		(next: boolean) => {
+			onProjectMutate(
+				(current) => ({
+					...current,
+					chipConfig: {
+						...current.chipConfig,
+						removeExcludedRowsFromExport: next,
 						updatedAt: new Date().toISOString(),
 					},
 				}),
@@ -2703,6 +2719,12 @@ export function PreprocessWorkspace({
 											columns={project.chipConfig.columns}
 											excludedRows={project.chipConfig.excludedRows}
 											excludedColumns={project.chipConfig.excludedColumns}
+											removeExcludedRowsFromExport={
+												project.chipConfig.removeExcludedRowsFromExport
+											}
+											onRemoveExcludedRowsFromExportChange={
+												handleRemoveExcludedRowsFromExportChange
+											}
 											onExcludeRowsChange={handleExcludeRowsChange}
 											onExcludeColumnsChange={handleExcludeColumnsChange}
 										/>

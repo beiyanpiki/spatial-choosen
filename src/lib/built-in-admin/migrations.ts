@@ -742,11 +742,15 @@ const normalizeProjectedSpot = (
 };
 
 const normalizeChipConfigSlice = (slice: LegacyChipConfigSlice) => {
+	const hydratedSlice = {
+		...slice,
+		removeExcludedRowsFromExport: slice.removeExcludedRowsFromExport ?? false,
+	};
 	if (slice.projectedSpots === null) {
 		return {
 			resetProjectedSpots: false,
 			slice: {
-				...slice,
+				...hydratedSlice,
 				projectedSpots: null,
 			} satisfies PreprocessProject["chipConfig"],
 		};
@@ -772,7 +776,7 @@ const normalizeChipConfigSlice = (slice: LegacyChipConfigSlice) => {
 	return {
 		resetProjectedSpots: false,
 		slice: {
-			...slice,
+			...hydratedSlice,
 			projectedSpots: canonicalProjectedSpots,
 		} satisfies PreprocessProject["chipConfig"],
 	};

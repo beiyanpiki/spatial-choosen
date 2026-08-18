@@ -561,6 +561,7 @@ const createProject = (): PreprocessProject => ({
     rotationDegrees: 0,
     spotDiameter: 25,
     excludedRows: [],
+    removeExcludedRowsFromExport: false,
     excludedColumns: [],
     barcodesByPosition: {},
     log2nGeneByPosition: {},

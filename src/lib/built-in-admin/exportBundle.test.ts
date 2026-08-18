@@ -380,6 +380,7 @@ const createBaseProject = (): PreprocessProject => {
       rotationDegrees: 0,
       spotDiameter: null,
       excludedRows: [],
+      removeExcludedRowsFromExport: false,
       excludedColumns: [],
       barcodesByPosition: {},
       log2nGeneByPosition: {},
@@ -707,6 +708,89 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows.find((row) => row.barcode === 'barcode-spot-a')?.in_tissue).toBe(0);
     // Unaffected rows keep their matrix truth.
     expect(rows.find((row) => row.barcode === 'barcode-spot-d')?.in_tissue).toBe(1);
+  });
+
+  it('removes excluded rows from tissue_positions.csv, compacts the grid, and renumbers the lower-left origin when the export toggle is on', async () => {
+    const project = createBaseProject();
+    project.chipConfig.excludedRows = [1];
+    project.chipConfig.removeExcludedRowsFromExport = true;
+
+    const result = await exportProject(project);
+    const rows = await readExportedTissuePositions(result.blob);
+
+    // Row 1 spots (spot-a, spot-b) are dropped entirely; the remaining grid is
+    // compacted and array_row restarts at the bottom-most valid row.
+    expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
+    ]);
+    // spot-c: original row 2 → compressed row 1 → array_row 63.
+    expect(rows.find((row) => row.barcode === 'barcode-spot-c')?.array_row).toBe(63);
+    // spot-d: original row 64 → compressed row 63 → array_row 1 (new origin).
+    expect(rows.find((row) => row.barcode === 'barcode-spot-d')?.array_row).toBe(1);
+    // Pixel coordinates stay at the physical template positions (mapped into
+    // the emitted fullres frame by the existing layout pipeline).
+    expect(rows.find((row) => row.barcode === 'barcode-spot-d')).toMatchObject({
+      pxl_row_in_fullres: 640,
+      pxl_col_in_fullres: 640,
+    });
+  });
+
+  it('drops excluded rows from tissue_matrix.csv when the export toggle is on', async () => {
+    const project = createBaseProject();
+    project.chipConfig.excludedRows = [1];
+    project.chipConfig.removeExcludedRowsFromExport = true;
+
+    const result = await exportProject(project);
+    const matrixCsv = await readZipText(result.blob, 'tissue_matrix.csv');
+    const rows = matrixCsv.trim().split('\n').map((line) => line.split(','));
+
+    // 64 rows minus the excluded top row; each line still has 64 columns.
+    expect(rows).toHaveLength(63);
+    expect(rows.every((line) => line.length === 64)).toBe(true);
+    // Original row 1 ([1,1] active) is gone; row 10 moved up to line 8 and
+    // row 64 to line 62.
+    expect(rows[0]?.[0]).toBe('0');
+    expect(rows[8]?.[9]).toBe('1');
+    expect(rows[62]?.[63]).toBe('1');
+  });
+
+  it('keeps excluded bottom rows removed with array_row renumbered when the export toggle is on', async () => {
+    const project = createBaseProject();
+    project.chipConfig.excludedRows = [64];
+    project.chipConfig.removeExcludedRowsFromExport = true;
+
+    const result = await exportProject(project);
+    const rows = await readExportedTissuePositions(result.blob);
+
+    // spot-d (bottom row) dropped; spot-a/b stay at compressed row 1 (array_row
+    // 63) and spot-c at compressed row 2 (array_row 62).
+    expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-c',
+      'barcode-spot-a',
+      'barcode-spot-b',
+    ]);
+    expect(rows.find((row) => row.barcode === 'barcode-spot-c')?.array_row).toBe(62);
+    expect(rows.find((row) => row.barcode === 'barcode-spot-a')?.array_row).toBe(63);
+    expect(rows.find((row) => row.barcode === 'barcode-spot-a')?.in_tissue).toBe(1);
+  });
+
+  it('remaps CSV barcodes to compressed rows when the export toggle is on', async () => {
+    const project = createBaseProject();
+    project.chipConfig.excludedRows = [1];
+    project.chipConfig.removeExcludedRowsFromExport = true;
+    project.chipConfig.barcodesByPosition = {
+      '1:1': 'real-barcode-a',
+      '2:1': 'real-barcode-c',
+    };
+
+    const result = await exportProject(project);
+    const rows = await readExportedTissuePositions(result.blob);
+
+    // Barcode of the dropped row is gone; the surviving row 2 barcode follows
+    // its spot onto compressed row 1 (array_row 63).
+    expect(rows.some((row) => row.barcode === 'real-barcode-a')).toBe(false);
+    expect(rows.find((row) => row.barcode === 'real-barcode-c')?.array_row).toBe(63);
   });
 
   it('writes tissue_matrix.csv from canonical matrix truth for both active and inactive cells', async () => {

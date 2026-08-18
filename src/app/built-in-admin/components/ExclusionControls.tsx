@@ -4,8 +4,10 @@ import {
   Box,
   Card,
   CardBody,
+  Flex,
   SimpleGrid,
   Stack,
+  Switch,
   Text,
 } from '@chakra-ui/react';
 
@@ -89,16 +91,20 @@ export function ExclusionControls({
   columns,
   excludedRows,
   excludedColumns,
+  removeExcludedRowsFromExport = false,
   onExcludeRowsChange,
   onExcludeColumnsChange,
+  onRemoveExcludedRowsFromExportChange = () => {},
   disabled = false,
 }: {
   rows: number | null;
   columns: number | null;
   excludedRows: number[];
   excludedColumns: number[];
+  removeExcludedRowsFromExport?: boolean;
   onExcludeRowsChange: (next: number[]) => void;
   onExcludeColumnsChange: (next: number[]) => void;
+  onRemoveExcludedRowsFromExportChange?: (next: boolean) => void;
   disabled?: boolean;
 }) {
   return (
@@ -109,14 +115,41 @@ export function ExclusionControls({
             <Text fontSize="sm" fontWeight="semibold">Exclude rows / columns</Text>
             <Text fontSize="xs" color="gray.500">
               Excluded rows and columns are locked as inactive in tissue selection
-              (kept at in_tissue=0 in the export) without changing the capture box
-              or the grid layout.
+              (in_tissue=0) without changing the capture box or the grid layout.
+              The switch below decides whether excluded rows are removed from the
+              final export or kept at in_tissue=0.
             </Text>
           </Stack>
         </CardBody>
       </Card>
       {rows && columns ? (
         <>
+          <Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
+            <CardBody p={4}>
+              <Stack spacing={2}>
+                <Flex align="center" justify="space-between" gap={3}>
+                  <Text fontSize="sm" fontWeight="semibold">
+                    Remove excluded rows from export
+                  </Text>
+                  <Switch
+                    isChecked={removeExcludedRowsFromExport}
+                    isDisabled={disabled}
+                    aria-label="Remove excluded rows from export"
+                    data-testid="exclusion-remove-rows-from-export-toggle"
+                    onChange={(event) => {
+                      onRemoveExcludedRowsFromExportChange(event.target.checked);
+                    }}
+                  />
+                </Flex>
+                <Text fontSize="xs" color="gray.500">
+                  When on, excluded rows are dropped from the exported
+                  tissue_positions.csv and tissue_matrix.csv: the remaining rows
+                  are compacted, statistics count valid rows only, and array_row
+                  numbering restarts from the lower-left valid row.
+                </Text>
+              </Stack>
+            </CardBody>
+          </Card>
           <ExclusionList
             label="Exclude rows"
             count={rows}
