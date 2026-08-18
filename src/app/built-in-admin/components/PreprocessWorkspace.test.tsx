@@ -1,7 +1,7 @@
 import { ChakraProvider } from '@chakra-ui/react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PreprocessProject, PreprocessRect } from '@/types/built-in-admin';
@@ -41,6 +41,7 @@ type CanvasStageMockProps = {
 	chipBounds?: PreprocessRect | null;
 	chipGrid?: unknown;
 	controlTestIdPrefix?: string;
+	gridOpacity?: number;
   labels?: CanvasStageMockLabels;
 	onChipBoundsCommit?: (chipBounds: PreprocessRect) => void;
 	onFlipHorizontal?: () => void;
@@ -187,9 +188,21 @@ vi.mock('./AlignmentPanel', () => ({
 }));
 
 vi.mock('./CanvasStage', () => ({
-  CanvasStage: ({ chipBounds, chipGrid, controlTestIdPrefix = 'localize', labels, onChipBoundsCommit, onFlipHorizontal, onRotationDelta }: CanvasStageMockProps) => (
+  CanvasStage: ({ chipBounds, chipGrid, controlTestIdPrefix = 'localize', gridOpacity, labels, onChipBoundsCommit, onFlipHorizontal, onRotationDelta }: CanvasStageMockProps) => {
+    const gridDims = (
+      chipGrid
+      && typeof chipGrid === 'object'
+      && 'rows' in chipGrid
+      && 'columns' in chipGrid
+      && typeof chipGrid.rows === 'number'
+      && typeof chipGrid.columns === 'number'
+    ) ? `${chipGrid.rows}x${chipGrid.columns}` : 'none';
+
+    return (
     <div data-testid="canvas-stage-mock">
       <span data-testid={`${controlTestIdPrefix}-chip-grid-status`}>{chipGrid ? 'on' : 'off'}</span>
+      <span data-testid={`${controlTestIdPrefix}-grid-opacity`}>{gridOpacity ?? 1}</span>
+      <span data-testid={`${controlTestIdPrefix}-chip-grid-dims`}>{gridDims}</span>
       <button
         type="button"
         data-testid={`${controlTestIdPrefix}-mock-rotate-right-90`}
@@ -219,7 +232,8 @@ vi.mock('./CanvasStage', () => ({
         </>
       ) : null}
     </div>
-  ),
+    );
+  },
 }));
 
 vi.mock('./CropQcPanel', () => ({
@@ -368,6 +382,20 @@ function WorkspaceHarness({
     onProjectChange?.(project);
   }, [onProjectChange, project]);
 
+  // Stable identity like the real page (updateProject is useCallback'd):
+  // the workspace effects depend on this prop, so an inline arrow would
+  // re-run them after every mutation and loop.
+  const handleProjectMutate = useCallback((
+    updater: (current: PreprocessProject) => PreprocessProject,
+    persistOptions?: CapturedPersistOptions,
+  ) => {
+    setProject((current) => {
+      const nextProject = updater(current);
+      onProjectMutateCapture?.({ project: nextProject, persistOptions });
+      return nextProject;
+    });
+  }, [onProjectMutateCapture]);
+
   return (
     <ChakraProvider theme={theme}>
       <PreprocessWorkspace
@@ -376,13 +404,7 @@ function WorkspaceHarness({
         isLoading={false}
         loadError={null}
         onBackToLanding={vi.fn()}
-        onProjectMutate={(updater: (current: PreprocessProject) => PreprocessProject, persistOptions) => {
-          setProject((current) => {
-            const nextProject = updater(current);
-            onProjectMutateCapture?.({ project: nextProject, persistOptions });
-            return nextProject;
-          });
-        }}
+        onProjectMutate={handleProjectMutate}
         onProjectNameChange={vi.fn()}
         onStepChange={onStepChange}
         project={project}
@@ -1565,5 +1587,57 @@ describe('PreprocessWorkspace localization heatmap toggle', () => {
     await user.click(screen.getByTestId('localization-heatmap-toggle'));
 
     expect(status).toHaveTextContent('off');
+  });
+
+  it('defaults the heatmap opacity to 1 and applies slider changes to the grid overlay', async () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'localization';
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    const slider = screen.getByRole('slider', { name: 'Heatmap matrix opacity' });
+    expect(slider).toHaveAttribute('aria-valuenow', '1');
+    expect(screen.getByTestId('localization-heatmap-opacity-value')).toHaveTextContent('1.00');
+    expect(screen.getByTestId('localize-grid-opacity')).toHaveTextContent('1');
+
+    fireEvent.keyDown(slider, { key: 'Home' });
+    for (let index = 0; index < 35; index += 1) {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    }
+
+    expect(Number(slider.getAttribute('aria-valuenow'))).toBeCloseTo(0.35);
+    expect(screen.getByTestId('localization-heatmap-opacity-value')).toHaveTextContent('0.35');
+    expect(Number(screen.getByTestId('localize-grid-opacity').textContent)).toBeCloseTo(0.35);
+  });
+
+  it('disables the heatmap opacity slider when no tissue activation CSV is present', () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'localization';
+    initialProject.chipConfig.chipType = null;
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByRole('slider', { name: 'Heatmap matrix opacity' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('removes excluded rows/columns from the displayed heatmap grid when the display option is on', async () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'localization';
+    initialProject.chipConfig.excludedRows = [1];
+    initialProject.chipConfig.excludedColumns = [2];
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByTestId('localize-chip-grid-dims')).toHaveTextContent('96x96');
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('localization-heatmap-compact-toggle'));
+
+    expect(screen.getByTestId('localize-chip-grid-dims')).toHaveTextContent('95x95');
+
+    // Display-only: toggling back restores the full matrix.
+    const user2 = userEvent.setup();
+    await user2.click(screen.getByTestId('localization-heatmap-compact-toggle'));
+    expect(screen.getByTestId('localize-chip-grid-dims')).toHaveTextContent('96x96');
   });
 });

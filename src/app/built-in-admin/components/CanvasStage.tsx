@@ -37,6 +37,8 @@ type CanvasStageProps = {
   chipBounds: PreprocessRect | null;
   /** Optional chip grid overlay (heatmap + exclusions) drawn inside the box. */
   chipGrid?: ChipGridOverlay | null;
+  /** Opacity (0–1) of the chip grid overlay tile; default 1 (fully opaque). */
+  gridOpacity?: number;
   onChipBoundsCancel?: () => void;
   onChipBoundsCommit?: (chipBounds: PreprocessRect) => void;
   containerTestId?: string;
@@ -224,6 +226,7 @@ export function CanvasStage({
   boxColor,
   chipBounds,
   chipGrid = null,
+  gridOpacity = 1,
   onChipBoundsCancel,
   onChipBoundsCommit,
   containerTestId = 'preprocess-localization-canvas-column',
@@ -383,14 +386,18 @@ export function CanvasStage({
       displayTransform.height,
     );
 
-    // Chip grid overlay: the tile is drawn inside the same transform block, so
-    // it rotates/flips/zooms with the image exactly like the eosin layer.
+    context.restore();
+
+    // Chip grid overlay. The tile is drawn in canvas-axis space (outside the
+    // rotate/flip transform block) so it stays aligned with the canvas-axis
+    // capture box outline. Rotating or flipping the image therefore moves the
+    // grid with the box, not with the rotated raster.
     if (chipGrid && normalizedChipBounds) {
       const boxWidth = displayTransform.width;
       const boxHeight = displayTransform.height;
       const box = {
-        x: -boxWidth / 2 + normalizedChipBounds.x * boxWidth,
-        y: -boxHeight / 2 + normalizedChipBounds.y * boxHeight,
+        x: displayTransform.originX + normalizedChipBounds.x * boxWidth,
+        y: displayTransform.originY + normalizedChipBounds.y * boxHeight,
         width: normalizedChipBounds.width * boxWidth,
         height: normalizedChipBounds.height * boxHeight,
       };
@@ -411,12 +418,12 @@ export function CanvasStage({
       );
       const tile = getGridTile(gridTileCacheRef.current, chipGrid, targetPx);
       if (tile) {
+        context.globalAlpha = gridOpacity;
         context.drawImage(tile, gridBox.x, gridBox.y, gridBox.width, gridBox.height);
+        context.globalAlpha = 1;
       }
     }
-
-    context.restore();
-  }, [activeImageElement, chipGrid, displayTransform, imageTransform, normalizedChipBounds, viewportSize]);
+  }, [activeImageElement, chipGrid, displayTransform, gridOpacity, imageTransform, normalizedChipBounds, viewportSize]);
 
   const getRelativePoint = useCallback((clientX: number, clientY: number) => {
     const host = hostRef.current;

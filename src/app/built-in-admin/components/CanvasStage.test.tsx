@@ -10,7 +10,7 @@ import type {
 	PreprocessRect,
 	PreprocessSourceImage,
 } from '../../../types/built-in-admin';
-import { CanvasStage } from './CanvasStage';
+import { CanvasStage, type ChipGridOverlay } from './CanvasStage';
 
 const HOST_WIDTH = 800;
 const HOST_HEIGHT = 600;
@@ -35,7 +35,9 @@ const contextStub = {
 	rotate: rotateMock,
 	scale: scaleMock,
 	restore: restoreMock,
+	fillRect: vi.fn(),
 	fillStyle: '',
+	globalAlpha: 1,
 	strokeStyle: '',
 	lineWidth: 1,
 };
@@ -135,6 +137,7 @@ afterEach(() => {
 	vi.clearAllMocks();
 	imageSrcAssignments.length = 0;
 	contextStub.fillStyle = '';
+	contextStub.globalAlpha = 1;
 	contextStub.strokeStyle = '';
 	contextStub.lineWidth = 1;
 });
@@ -303,6 +306,45 @@ function StageCommitHarness({
 	);
 }
 
+const TEST_CHIP_GRID: ChipGridOverlay = {
+	rows: 2,
+	columns: 2,
+	spotDiameter: 1,
+	spotGap: 0.1,
+	normalizedByPosition: {},
+	excludedRows: [],
+	excludedColumns: [],
+	signature: '2|2|1|0.1|||',
+};
+
+function GridStageHarness() {
+	const [chipBounds, setChipBounds] = useState<PreprocessRect>(createChipBounds());
+	const [transform, setTransform] = useState<LocalizationImageTransform>(createTransform());
+
+	return (
+		<ChakraProvider theme={theme}>
+			<div data-testid="stage-chip-bounds">{JSON.stringify(chipBounds)}</div>
+			<div data-testid="stage-transform">{JSON.stringify(transform)}</div>
+			<CanvasStage
+				boxColor="green"
+				chipBounds={chipBounds}
+				chipGrid={TEST_CHIP_GRID}
+				controlTestIdPrefix="localize"
+				image={createImage()}
+				imageTransform={transform}
+				onChipBoundsChange={(nextBounds) => setChipBounds(nextBounds)}
+				onFlipHorizontal={() => setTransform((current) => ({ ...current, flipHorizontal: !current.flipHorizontal }))}
+				onFlipVertical={() => setTransform((current) => ({ ...current, flipVertical: !current.flipVertical }))}
+				onResetTransform={() => setTransform(createTransform())}
+				onRotationChange={(rotationDegrees) => setTransform((current) => ({ ...current, rotationDegrees }))}
+				onRotationDelta={(delta) => setTransform((current) => ({ ...current, rotationDegrees: current.rotationDegrees + delta }))}
+				onScaleChange={(scale) => setTransform((current) => ({ ...current, scale }))}
+				onScaleDelta={(delta) => setTransform((current) => ({ ...current, scale: current.scale + delta }))}
+			/>
+		</ChakraProvider>
+	);
+}
+
 describe('CanvasStage', () => {
 	it('omits only the localization ready pill while preserving the waiting status', () => {
 		const commonProps = {
@@ -408,6 +450,159 @@ describe('CanvasStage', () => {
 		expectPointPairsCloseTo(readOutlinePoints(), initialPoints);
 		expectMarkerAnchorCloseToVisualLowerLeft(readLowerLeftMarkerPoints(), initialPoints);
 		expect(readChipBounds()).toEqual(initialBounds);
+	});
+
+	it('keeps the chip grid tile aligned with the axis-aligned box through rotation, flips, and drags', async () => {
+		render(<GridStageHarness />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const getGridBoxFromOutline = () => {
+			const points = readOutlinePoints();
+			const xs = points.map((point) => point[0]);
+			const ys = points.map((point) => point[1]);
+			const minX = Math.min(...xs);
+			const maxX = Math.max(...xs);
+			const minY = Math.min(...ys);
+			const maxY = Math.max(...ys);
+			const width = maxX - minX;
+			const height = maxY - minY;
+			const side = Math.min(width, height);
+			return {
+				x: minX + (width - side) / 2,
+				y: minY + (height - side) / 2,
+				width: side,
+				height: side,
+			};
+		};
+
+		const countGridTileDraws = () => drawImageMock.mock.calls
+			.filter((call) => call[0] instanceof HTMLCanvasElement).length;
+
+		const readLastGridTileDraw = () => {
+			for (let index = drawImageMock.mock.calls.length - 1; index >= 0; index -= 1) {
+				const call = drawImageMock.mock.calls[index];
+				if (call[0] instanceof HTMLCanvasElement) {
+					return {
+						x: Number(call[1]),
+						y: Number(call[2]),
+						width: Number(call[3]),
+						height: Number(call[4]),
+					};
+				}
+			}
+			return null;
+		};
+
+		const expectTileAlignedWithBox = () => {
+			const expected = getGridBoxFromOutline();
+			const actual = readLastGridTileDraw();
+			expect(actual).not.toBeNull();
+			if (!actual) return;
+			expect(actual.x).toBeCloseTo(expected.x, 6);
+			expect(actual.y).toBeCloseTo(expected.y, 6);
+			expect(actual.width).toBeCloseTo(expected.width, 6);
+			expect(actual.height).toBeCloseTo(expected.height, 6);
+		};
+
+		await waitFor(() => {
+			expectTileAlignedWithBox();
+		});
+
+		fireEvent.click(screen.getByTestId('localize-stage-rotate-right-90'));
+
+		await waitFor(() => {
+			expect(readTransform()).toMatchObject({ rotationDegrees: 90 });
+		});
+		await waitFor(() => {
+			expect(countGridTileDraws()).toBeGreaterThan(0);
+			expectTileAlignedWithBox();
+		});
+
+		fireEvent.click(screen.getByTestId('localize-stage-flip-horizontal'));
+
+		await waitFor(() => {
+			expect(readTransform()).toMatchObject({ flipHorizontal: true });
+		});
+		await waitFor(() => {
+			expectTileAlignedWithBox();
+		});
+
+		const startPoint = {
+			x: 0.3,
+			y: 0.3,
+		};
+		const [startScreenX, startScreenY] = sourcePointToScreen(startPoint);
+		const [moveScreenX, moveScreenY] = sourcePointToScreen({ x: 0.4, y: 0.35 });
+
+		const body = screen.getByTestId('localize-box-body');
+		await act(async () => {
+			dispatchPointerEvent(body, 'pointerdown', {
+				buttons: 1,
+				clientX: startScreenX,
+				clientY: startScreenY,
+				pointerId: 1,
+			});
+		});
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: moveScreenX,
+				clientY: moveScreenY,
+				pointerId: 1,
+			});
+			dispatchPointerEvent(window, 'pointerup', {
+				clientX: moveScreenX,
+				clientY: moveScreenY,
+				pointerId: 1,
+			});
+		});
+
+		await waitFor(() => {
+			expect(readChipBounds()).not.toEqual(createChipBounds());
+		});
+		await waitFor(() => {
+			expectTileAlignedWithBox();
+		});
+	});
+
+	it('draws the chip grid tile at the requested opacity and restores full opacity afterwards', async () => {
+		const alphasAtGridDraw: number[] = [];
+		drawImageMock.mockImplementation((...args: unknown[]) => {
+			if (args[0] instanceof HTMLCanvasElement) {
+				alphasAtGridDraw.push(Number(contextStub.globalAlpha));
+			}
+		});
+
+		render(
+			<ChakraProvider theme={theme}>
+				<CanvasStage
+					boxColor="green"
+					chipBounds={createChipBounds()}
+					chipGrid={TEST_CHIP_GRID}
+					controlTestIdPrefix="localize"
+					gridOpacity={0.35}
+					image={createImage()}
+					imageTransform={createTransform()}
+					onChipBoundsChange={vi.fn()}
+					onFlipHorizontal={vi.fn()}
+					onFlipVertical={vi.fn()}
+					onResetTransform={vi.fn()}
+					onRotationChange={vi.fn()}
+					onRotationDelta={vi.fn()}
+					onScaleChange={vi.fn()}
+					onScaleDelta={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		await waitFor(() => {
+			expect(alphasAtGridDraw.length).toBeGreaterThan(0);
+		});
+		expect(alphasAtGridDraw[alphasAtGridDraw.length - 1]).toBeCloseTo(0.35);
+		expect(contextStub.globalAlpha).toBe(1);
 	});
 
 	it('uses canvas-axis pointer coordinates for body drag updates and commits', async () => {

@@ -136,6 +136,52 @@ export function computeGridCellLayout(
 }
 
 /**
+ * Display-only compaction: drop the excluded rows/columns from the grid and
+ * re-fit the remaining cells so the tile still fills the capture box (fewer
+ * cells at a larger spot scale). Expression keys are remapped to the
+ * compacted indices and the returned config has no exclusions left, so the
+ * tile builder never draws the dark excluded fill. Nothing here touches the
+ * export path — the caller decides whether to display the compacted grid.
+ * Returns the same config object when there is nothing to remove.
+ */
+export function compactSpotGridForDisplay(config: SpotGridConfig): SpotGridConfig {
+  if (config.excludedRows.length === 0 && config.excludedColumns.length === 0) {
+    return config;
+  }
+  const excludedRows = new Set(config.excludedRows);
+  const excludedColumns = new Set(config.excludedColumns);
+  const rows: number[] = [];
+  const columns: number[] = [];
+  for (let arrayRow = 1; arrayRow <= config.rows; arrayRow += 1) {
+    if (!excludedRows.has(arrayRow)) rows.push(arrayRow);
+  }
+  for (let arrayCol = 1; arrayCol <= config.columns; arrayCol += 1) {
+    if (!excludedColumns.has(arrayCol)) columns.push(arrayCol);
+  }
+  const compactRow = new Map(rows.map((arrayRow, index) => [arrayRow, index + 1]));
+  const compactCol = new Map(columns.map((arrayCol, index) => [arrayCol, index + 1]));
+
+  const normalizedByPosition: Record<string, number> = {};
+  for (const [key, value] of Object.entries(config.normalizedByPosition)) {
+    const [arrayRow, arrayCol] = key.split(':').map(Number);
+    const row = compactRow.get(arrayRow);
+    const col = compactCol.get(arrayCol);
+    if (row && col) {
+      normalizedByPosition[`${row}:${col}`] = value;
+    }
+  }
+
+  return {
+    ...config,
+    rows: rows.length,
+    columns: columns.length,
+    excludedRows: [],
+    excludedColumns: [],
+    normalizedByPosition,
+  };
+}
+
+/**
  * Deterministic cache key for a grid config. Computed by the caller when the
  * config changes (not per frame), so CanvasStage only pays a string compare.
  */

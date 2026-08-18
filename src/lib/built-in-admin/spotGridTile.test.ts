@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildNormalizedExpressionByPosition,
   buildSpotGridTile,
+  compactSpotGridForDisplay,
   computeGridCellLayout,
   EXCLUDED_CELL_FILL,
   gridSignature,
@@ -184,5 +185,120 @@ describe('buildSpotGridTile', () => {
 
     const styles = calls.filter((call) => call.startsWith('style:'));
     expect(styles.filter((style) => style === `style:${EXCLUDED_CELL_FILL}`)).toHaveLength(2);
+  });
+});
+
+describe('compactSpotGridForDisplay', () => {
+  const baseConfig = {
+    rows: 3,
+    columns: 3,
+    spotDiameter: 50,
+    spotGap: 50,
+    normalizedByPosition: {
+      '1:1': 0,
+      '1:2': 0.25,
+      '2:2': 1,
+      '2:3': 0.75,
+      '3:3': 0.5,
+    },
+    excludedRows: [],
+    excludedColumns: [],
+  };
+
+  it('returns the same config when nothing is excluded', () => {
+    expect(compactSpotGridForDisplay(baseConfig)).toBe(baseConfig);
+  });
+
+  it('drops excluded rows/columns and remaps expression keys to compact indices', () => {
+    const compacted = compactSpotGridForDisplay({
+      ...baseConfig,
+      excludedRows: [2],
+      excludedColumns: [2],
+    });
+
+    expect(compacted.rows).toBe(2);
+    expect(compacted.columns).toBe(2);
+    expect(compacted.excludedRows).toEqual([]);
+    expect(compacted.excludedColumns).toEqual([]);
+    // Remaining positions are 1:1 and 3:3 (the 2:2 and 2:3 cells were on the
+    // excluded row/column); they renumber to 1:1 and 2:2 in compact space.
+    expect(compacted.normalizedByPosition).toEqual({
+      '1:1': 0,
+      '2:2': 0.5,
+    });
+  });
+
+  it('compacts when only rows or only columns are excluded', () => {
+    const rowsOnly = compactSpotGridForDisplay({
+      ...baseConfig,
+      excludedRows: [1],
+    });
+    expect(rowsOnly.rows).toBe(2);
+    expect(rowsOnly.columns).toBe(3);
+    // Original row 2 becomes compact row 1, so '2:2' (value 1) renumbers to '1:2'.
+    expect(rowsOnly.normalizedByPosition).toEqual({
+      '1:2': 1,
+      '1:3': 0.75,
+      '2:3': 0.5,
+    });
+
+    const columnsOnly = compactSpotGridForDisplay({
+      ...baseConfig,
+      excludedColumns: [3],
+    });
+    expect(columnsOnly.rows).toBe(3);
+    expect(columnsOnly.columns).toBe(2);
+    // Original col 2 becomes compact col 2 unchanged; '2:2' (value 1) stays.
+    expect(columnsOnly.normalizedByPosition['2:2']).toBe(1);
+  });
+
+  it('renders a re-fit tile without the excluded fill and with larger spots', () => {
+    const createMockContext = () => {
+      const calls: string[] = [];
+      return {
+        context: {
+          get fillStyle() {
+            return '';
+          },
+          set fillStyle(value: string) {
+            calls.push(`style:${value}`);
+          },
+          fillRect: vi.fn((x: number, y: number, w: number, h: number) => {
+            calls.push(`rect:${x},${y},${w},${h}`);
+          }),
+        },
+        calls,
+      };
+    };
+
+    const { context, calls } = createMockContext();
+    vi.stubGlobal('document', {
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => context,
+      }),
+    });
+
+    const compacted = compactSpotGridForDisplay({
+      ...baseConfig,
+      excludedRows: [2],
+      excludedColumns: [2],
+    });
+    buildSpotGridTile(compacted, 400);
+
+    const styles = calls.filter((call) => call.startsWith('style:'));
+    // 2x2 compacted grid: the excluded dark fill is gone; the two unvalued
+    // cells fall back to the neutral fill instead.
+    expect(styles).toHaveLength(4);
+    expect(styles.some((style) => style === `style:${EXCLUDED_CELL_FILL}`)).toBe(false);
+    expect(styles.filter((style) => style === `style:${NEUTRAL_CELL_FILL}`)).toHaveLength(2);
+
+    // Re-fit: the 2x2 grid's extent is 250 chip units vs 350 for the full
+    // 3x3, so the tile scale grows and the spots get bigger.
+    const compactLayout = computeGridCellLayout(2, 2, 50, 50, 400);
+    const fullLayout = computeGridCellLayout(3, 3, 50, 50, 400);
+    expect(compactLayout.spotPx).toBeGreaterThan(fullLayout.spotPx);
+    expect(calls.filter((call) => call.startsWith('rect:')).length).toBe(4);
   });
 });

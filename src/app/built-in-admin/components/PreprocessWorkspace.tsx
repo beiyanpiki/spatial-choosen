@@ -14,6 +14,10 @@ import {
 	Image,
 	Input,
 	Select,
+	Slider,
+	SliderFilledTrack,
+	SliderThumb,
+	SliderTrack,
 	Spinner,
 	Stack,
 	Switch,
@@ -102,6 +106,7 @@ import { runTissueAutoSelection } from "@/lib/built-in-admin/tissuePipeline";
 import { parseTissueActivationCsv } from "@/lib/built-in-admin/tissueCsvImport";
 import {
 	buildNormalizedExpressionByPosition,
+	compactSpotGridForDisplay,
 	gridSignature,
 	type SpotGridConfig,
 } from "@/lib/built-in-admin/spotGridTile";
@@ -917,6 +922,15 @@ export function PreprocessWorkspace({
 		};
 		return { ...overlay, signature: gridSignature(overlay) };
 	}, [project?.chipConfig]);
+	const [compactLocalizationGrid, setCompactLocalizationGrid] = useState(false);
+	const localizationDisplayGrid = useMemo<ChipGridOverlay | null>(() => {
+		if (!localizationChipGrid) return null;
+		if (!compactLocalizationGrid) return localizationChipGrid;
+		// Display-only compaction: excluded rows/columns drop out and the
+		// remaining matrix re-fits the capture box instead of dark spots.
+		const compacted = compactSpotGridForDisplay(localizationChipGrid);
+		return { ...compacted, signature: gridSignature(compacted) };
+	}, [compactLocalizationGrid, localizationChipGrid]);
 	const currentHeImageSource = project
 		? (project.sourceAssets.images[project.heFocus.targetImage] ?? null)
 		: null;
@@ -2307,6 +2321,7 @@ export function PreprocessWorkspace({
 	const isChipSelectorDisabled = isDetectingTissue;
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
 	const [showLocalizationGrid, setShowLocalizationGrid] = useState(true);
+	const [localizationGridOpacity, setLocalizationGridOpacity] = useState(1);
 	const commitManualTissueSelection = useCallback(
 		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
 			onProjectMutate(
@@ -2586,7 +2601,8 @@ export function PreprocessWorkspace({
 											project.localization.boxColor as LocalizationBoxColor
 										}
 										chipBounds={localizationStageChipBounds}
-										chipGrid={showLocalizationGrid ? localizationChipGrid : null}
+										chipGrid={showLocalizationGrid ? localizationDisplayGrid : null}
+										gridOpacity={localizationGridOpacity}
 										image={localizationImage}
 										imageTransform={project.localization.imageTransform}
 										onScaleChange={(value) => {
@@ -2706,6 +2722,44 @@ export function PreprocessWorkspace({
 															}}
 														/>
 													</Flex>
+													<Stack spacing={2}>
+														<Flex align="center" justify="space-between" gap={3}>
+															<Text fontSize="sm">Heatmap opacity</Text>
+															<Text fontSize="sm" color="gray.600" data-testid="localization-heatmap-opacity-value">
+																{localizationGridOpacity.toFixed(2)}
+															</Text>
+														</Flex>
+														<Slider
+															min={0}
+															max={1}
+															step={0.01}
+															value={localizationGridOpacity}
+															isDisabled={localizationChipGrid == null}
+															aria-label="Heatmap matrix opacity"
+															data-testid="localization-heatmap-opacity"
+															onChange={setLocalizationGridOpacity}
+														>
+															<SliderTrack>
+																<SliderFilledTrack />
+															</SliderTrack>
+															<SliderThumb />
+														</Slider>
+													</Stack>
+													<Flex align="center" justify="space-between" gap={3}>
+														<Text fontSize="sm">Remove excluded rows/columns</Text>
+														<Switch
+															data-testid="localization-heatmap-compact-toggle"
+															isChecked={compactLocalizationGrid}
+															isDisabled={localizationChipGrid == null}
+															aria-label="Remove excluded rows and columns from the heatmap display"
+															onChange={(event) => {
+																setCompactLocalizationGrid(event.target.checked);
+															}}
+														/>
+													</Flex>
+													<Text fontSize="xs" color="gray.500">
+														Display only — excluded spots are removed and the heatmap re-fits the capture area.
+													</Text>
 													{localizationChipGrid == null ? (
 														<Text fontSize="xs" color="gray.500">
 															Import a tissue activation CSV with expression data to enable the heatmap matrix.
