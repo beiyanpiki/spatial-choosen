@@ -1557,7 +1557,8 @@ describe('PreprocessWorkspace tissue CSV import', () => {
 
     const file = {
       name: 'bad.csv',
-      text: async () => 'tissue,row,col\n1,1,1\n1,7,7\n',
+      // A grid that exceeds the largest supported chip (96x96) must be rejected.
+      text: async () => 'tissue,row,col\n1,1,1\n1,100,100\n',
     } as unknown as File;
     Object.defineProperty(csvInput, 'files', { value: [file], configurable: true });
     fireEvent.change(csvInput as HTMLInputElement);
@@ -1570,6 +1571,54 @@ describe('PreprocessWorkspace tissue CSV import', () => {
     });
     expect(latestProject.chipConfig.chipType).toBe('15um');
     expect(latestProject.chipConfig.csvFileName).toBeNull();
+  });
+
+  it('keeps the manually placed capture box when re-importing a CSV for the same chip type', async () => {
+    mockLoadChipConfigManifest.mockResolvedValue(MANIFEST_50UM);
+
+    const initialProject = createProject();
+    initialProject.currentStep = 'sourceAssets';
+    // A previous CSV import fixed the chip config; the user then placed the
+    // capture box manually.
+    initialProject.chipConfig.chipType = '50um';
+    initialProject.chipConfig.rows = 64;
+    initialProject.chipConfig.columns = 64;
+    initialProject.chipConfig.csvFileName = 'original.csv';
+    const placedBounds = { x: 0.25, y: 0.35, width: 0.5, height: 0.4 };
+    initialProject.localization.chipBounds = placedBounds;
+    initialProject.heFocus.status = 'complete';
+    initialProject.tissueSelection.status = 'complete';
+
+    let latestProject = initialProject;
+    render(
+      <WorkspaceHarness
+        initialProject={initialProject}
+        onProjectChange={(project) => {
+          latestProject = project;
+        }}
+      />,
+    );
+
+    const csvInput = document.querySelector('input[accept=".csv,text/csv"]');
+    expect(csvInput).not.toBeNull();
+
+    const file = {
+      name: 'same-chip.csv',
+      text: async () => 'barcode,tissue,row,col\nBC,1,1,1\nBC2,0,64,64\n',
+    } as unknown as File;
+    Object.defineProperty(csvInput, 'files', { value: [file], configurable: true });
+    fireEvent.change(csvInput as HTMLInputElement);
+
+    await waitFor(() => {
+      expect(latestProject.chipConfig.csvFileName).toBe('same-chip.csv');
+    });
+    // The placement, alignment chain, and tissue selection survive a
+    // same-chip re-import; only the CSV-derived payloads change.
+    expect(latestProject.localization.chipBounds).toEqual(placedBounds);
+    expect(latestProject.heFocus.status).toBe('complete');
+    expect(latestProject.tissueSelection.status).toBe('complete');
+    expect(latestProject.chipConfig.excludedRows).toEqual([]);
+    expect(latestProject.exportState.status).toBe('stale');
   });
 });
 

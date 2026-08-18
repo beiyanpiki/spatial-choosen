@@ -22,6 +22,7 @@ type TissueSelectionControlsProps = {
 	supportState: TissueSelectionSupportState;
 	unsupportedReason: string | null;
 	isDetecting: boolean;
+	hasSelectionMatrix: boolean;
 	tissueTool: TissueTool;
 	showSpots: boolean;
 	onThresholdModeChange: (mode: ThresholdMode) => void;
@@ -80,6 +81,7 @@ export function TissueSelectionControls({
 	supportState,
 	unsupportedReason,
 	isDetecting,
+	hasSelectionMatrix,
 	tissueTool,
 	showSpots,
 	onThresholdModeChange,
@@ -228,7 +230,7 @@ export function TissueSelectionControls({
               data-testid="tissue-invert-selection"
               variant="outline"
               justifyContent="flex-start"
-              isDisabled={isUnsupported || isDetecting}
+              isDisabled={isUnsupported || isDetecting || !hasSelectionMatrix}
               onClick={onInvertSelection}
             >
               Invert selection

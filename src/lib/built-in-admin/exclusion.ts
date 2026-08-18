@@ -12,8 +12,16 @@ import type {
  * Current semantics: excluded rows/columns never resize the capture box and
  * never compact the grid. They stay in place everywhere (Step 2 heatmap,
  * Step 6 spot projection, exported tissue_positions.csv full grid) but are
- * LOCKED as inactive: the tissue matrix forces their cells to 0, and every
- * mutation path (auto-detection, brush, toggle, invert) filters them out.
+ * LOCKED as inactive in every derived view (tissue panel, export): the
+ * tissue matrix forces their cells to 0 and selected ids are filtered out.
+ *
+ * The lock is applied at the view boundary — the persisted tissue selection
+ * keeps its raw matrix and ids. Un-excluding a row/column therefore restores
+ * the affected spots instead of leaving them permanently zeroed. The helpers
+ * below are used by the tissue panel and the export path (see
+ * exportBundle.ts getPreprocessZipExportReadiness); lockTissueSelectionSlice
+ * remains as the reference implementation of the combined lock for callers
+ * that need a whole locked slice at once.
  */
 
 export type ExclusionConfig = {
@@ -82,6 +90,10 @@ export const applyExclusionLockToMatrix = (
     if (excludedRows.has(arrayRow)) continue;
     const rowStart = (arrayRow - 1) * matrix.columns;
     for (const col of excludedColumns) {
+      // Guard against out-of-range values (e.g. from an imported package):
+      // assigning past the array end would silently grow the matrix and break
+      // every later tissue operation.
+      if (!Number.isInteger(col) || col < 1 || col > matrix.columns) continue;
       values[rowStart + col - 1] = 0 as TissueActivationValue;
     }
   }

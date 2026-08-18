@@ -5,6 +5,44 @@
 - **审查范围**: `src/app/built-in-admin/**`（页面与组件, 约 1 万行）、`src/lib/built-in-admin/**`（配套库, 50 个文件约 2 万行）、`src/types/built-in-admin.ts`。全部为本分支新增代码。
 - **审查角度**: 功能性、可读性、可维护性、数据安全、持久层一致性。
 
+## 修复状态（2026-08-18, 处理 PR #20 时逐项落实）
+
+Top 15 findings **全部已修复**：
+
+| # | 修复方式 | 位置 |
+|---|---------|------|
+| 1 | 导入时检测同 id 项目, 以新 id + "(imported copy)" 后缀另存, 不再静默覆盖 | `page.client.tsx` handleImportProject |
+| 2 | full 模式改为先写 payload store、后写元数据（元数据写盘成为原子提交点）, payload 失败不再产生幽灵项目 | `storage.ts` upsertPreprocessProject |
+| 3 | 裸 .json 导入要求声明的源图内联携带 dataUrl, 否则拒绝导入 | `package.ts` deserializePreprocessImport |
+| 4 | 修复版本号持久化到 localStorage 并在 VersionError 时经 `indexedDB.databases()` 发现真实版本重开 | `storage.ts` openDb |
+| 5 | 页面隐藏/切换/卸载时 tissue 模式的 pending 保存也触发真实持久化（visibilitychange 可完成, pagehide 走容错路径） | `page.client.tsx` flushPendingProjectSnapshot |
+| 6 | 迁移回填全部 chip-config 字段（excludedRows/Columns、barcodes、log2nGene、csvFileName、spotDiameter）; 包校验同步收紧 | `migrations.ts` normalizeChipConfigSlice, `package.ts` assertChipConfigSlice |
+| 7 | 移除服务死状态的 chip-manifest 拉取 effect 及其 state（芯片类型由 CSV 固定, manifests 从不渲染） | `PreprocessWorkspace.tsx` |
+| 8 | stale 时保留显式存储的 crop 几何（与 storage 层 repair 语义一致）, 自动保存不再回写 null | `projectState.ts` normalizeCropQcSlice |
+| 9 | 排除锁改为视图层派生: 面板与导出应用锁, 持久化的选择数据不被破坏, 取消剔除即恢复 | `PreprocessWorkspace.tsx`（4 处 mutation 去锁）、`exportBundle.ts` readiness 加锁、`exclusion.ts` 语义文档 |
+| 10 | 导出压缩同时剔除行与列（与 Step 2 预览一致）, 列在 positions/matrix CSV 中同被移除 | `exportBundle.ts` compressExcludedGrid |
+| 11 | tissue_matrix.csv 改为自下而上输出, 与 tissue_positions.csv 的 array_row 方向一致 | `exportBundle.ts` toMatrixCsv |
+| 12 | 同芯片类型 CSV 重导入保留手动摆位与下游产物, 仅更新 CSV 载荷并失效导出 | `PreprocessWorkspace.tsx` handleUploadCsv |
+| 13 | 删除项目前 window.confirm 确认 | `page.client.tsx` handleDeleteProject |
+| 14 | 无矩阵时 Invert 为空操作（库级守卫）且按钮禁用 | `projectUpdates.ts` buildInvertedTissueSelectionState, `TissueSelectionControls.tsx` |
+| 15 | 单击 spot 遵循所选激活/失活工具值而非纯 toggle | `projectUpdates.ts` buildManualTissueSelectionState, `PreprocessWorkspace.tsx` commitManualTissueSelection |
+
+次级清单全部已修复：
+
+| # | 修复方式 |
+|---|---------|
+| 1 | 芯片类型按"包含裁剪后网格的最小芯片"推断（63×64→50um, 92×96→15um）, 导出产物可自回环 |
+| 2 | 阈值钳制放宽到 [0,1]（与输入框和检测管道一致）, 不再静默改写用户输入 |
+| 3 | revokeObjectURL 延后 1s, 不再中断 Safari/Firefox 下载 |
+| 4 | metas 读-改-写合并进单个 readwrite 事务（readModifyWriteMetas）, 删除/更新跨 tab 原子化; store 辅助函数补 db.close() |
+| 5 | 新增解码像素上限（100MP / 20000px 长边）, TIFF 在 toRGBA8 前、浏览器原生解码后在 canvas 操作前校验 |
+| 6 | collectProjectObjectUrls 纳入 workingObjectUrl, 长会话内存泄漏消除 |
+| 7 | `applyExclusionLockToMatrix` 的列剔除写入前校验行列区间, 越界值直接忽略（导入的非法 excludedColumns 不再破坏矩阵长度） |
+| 8 | 剔除行/列/导出开关变更均失效 exportState |
+| 9 | 导入端: 空/0 基坐标显式报错、重复位置报错、RFC-4180 引号字段解析; 导出端: CSV 字段引号转义 |
+
+维护性: 移除死代码 `ChipConfigPanel.tsx`（built-in-admin 侧）; 移除未使用 `Select` 导入。两份 fork 库树的漂移与 3 份手写 base64 解码保留为后续工作项。
+
 ## 流程
 
 16 个独立查找角度（逐行扫描 ×4、fork 漂移审计、跨文件追踪、语言陷阱、持久层/包装层审计、复用/简化/效率/分层/规范、补漏扫描）→ 约 70 个候选问题 → 30 个进入一对一验证（28 个 CONFIRMED / 6 个 PLAUSIBLE / 3 个 REFUTED）→ 按严重度取前 15。

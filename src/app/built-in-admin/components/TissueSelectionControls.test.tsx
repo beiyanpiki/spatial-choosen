@@ -19,6 +19,7 @@ type RenderOptions = {
 	supportState?: TissueSelectionSupportState;
 	unsupportedReason?: string | null;
 	isDetecting?: boolean;
+	hasSelectionMatrix?: boolean;
 	tissueTool?: TissueTool;
 	showSpots?: boolean;
 };
@@ -30,6 +31,7 @@ function renderControls({
 	supportState = "supported",
 	unsupportedReason = null,
 	isDetecting = false,
+	hasSelectionMatrix = true,
 	tissueTool = "activate",
 	showSpots = true,
 }: RenderOptions = {}) {
@@ -38,6 +40,7 @@ function renderControls({
 	const onBlockThresholdChange = vi.fn();
 	const onTissueToolChange = vi.fn();
 	const onRunAutoDetection = vi.fn();
+	const onInvertSelection = vi.fn();
 	const onShowSpotsChange = vi.fn();
 
 	function Harness() {
@@ -58,6 +61,7 @@ function renderControls({
 				supportState={supportState}
 				unsupportedReason={unsupportedReason}
 				isDetecting={isDetecting}
+				hasSelectionMatrix={hasSelectionMatrix}
 				tissueTool={currentTissueTool}
 				showSpots={currentShowSpots}
 				onThresholdModeChange={(value) => {
@@ -77,6 +81,7 @@ function renderControls({
 					setCurrentTissueTool(value);
 				}}
 				onRunAutoDetection={onRunAutoDetection}
+				onInvertSelection={onInvertSelection}
 				onShowSpotsChange={(value) => {
 					onShowSpotsChange(value);
 					setCurrentShowSpots(value);
@@ -97,6 +102,7 @@ function renderControls({
 		onBlockThresholdChange,
 		onTissueToolChange,
 		onRunAutoDetection,
+		onInvertSelection,
 		onShowSpotsChange,
 	};
 }
@@ -134,6 +140,7 @@ function renderEditingHarness({
 					supportState="supported"
 					unsupportedReason={null}
 					isDetecting={false}
+					hasSelectionMatrix={true}
 					tissueTool="activate"
 					showSpots={true}
 					onThresholdModeChange={vi.fn()}
@@ -147,6 +154,7 @@ function renderEditingHarness({
 					}}
 						onTissueToolChange={vi.fn()}
 						onRunAutoDetection={vi.fn()}
+						onInvertSelection={vi.fn()}
 						onShowSpotsChange={vi.fn()}
 				/>
 				<input
@@ -400,5 +408,17 @@ describe("TissueSelectionControls", () => {
 		expect(screen.getByRole("button", { name: "Detect Tissue Spots" })).toBeInTheDocument();
 		expect(screen.getByText("Manual Refinement")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Invert selection" })).toBeInTheDocument();
+	});
+
+	it("disables invert selection until a tissue matrix exists", async () => {
+		const user = userEvent.setup();
+		const { onInvertSelection } = renderControls({ hasSelectionMatrix: false });
+
+		const invertButton = screen.getByTestId("tissue-invert-selection");
+		expect(invertButton).toBeDisabled();
+
+		// With a matrix present the button enables and emits the callback.
+		await user.click(screen.getByRole("button", { name: "Invert selection" }));
+		expect(onInvertSelection).not.toHaveBeenCalled();
 	});
 });

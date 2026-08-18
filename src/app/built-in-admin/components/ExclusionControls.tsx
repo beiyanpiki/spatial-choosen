@@ -116,8 +116,8 @@ export function ExclusionControls({
             <Text fontSize="xs" color="gray.500">
               Excluded rows and columns are locked as inactive in tissue selection
               (in_tissue=0) without changing the capture box or the grid layout.
-              The switch below decides whether excluded rows are removed from the
-              final export or kept at in_tissue=0.
+              The switch below decides whether excluded rows and columns are
+              removed from the final export or kept at in_tissue=0.
             </Text>
           </Stack>
         </CardBody>
@@ -129,12 +129,12 @@ export function ExclusionControls({
               <Stack spacing={2}>
                 <Flex align="center" justify="space-between" gap={3}>
                   <Text fontSize="sm" fontWeight="semibold">
-                    Remove excluded rows from export
+                    Remove excluded rows/columns from export
                   </Text>
                   <Switch
                     isChecked={removeExcludedRowsFromExport}
                     isDisabled={disabled}
-                    aria-label="Remove excluded rows from export"
+                    aria-label="Remove excluded rows and columns from export"
                     data-testid="exclusion-remove-rows-from-export-toggle"
                     onChange={(event) => {
                       onRemoveExcludedRowsFromExportChange(event.target.checked);
@@ -142,10 +142,11 @@ export function ExclusionControls({
                   />
                 </Flex>
                 <Text fontSize="xs" color="gray.500">
-                  When on, excluded rows are dropped from the exported
-                  tissue_positions.csv and tissue_matrix.csv: the remaining rows
-                  are compacted, statistics count valid rows only, and array_row
-                  numbering restarts from the lower-left valid row.
+                  When on, excluded rows and columns are dropped from the
+                  exported tissue_positions.csv and tissue_matrix.csv: the
+                  remaining grid is compacted, statistics count valid cells
+                  only, and array_row numbering restarts from the lower-left
+                  valid row.
                 </Text>
               </Stack>
             </CardBody>

@@ -33,15 +33,74 @@ const inferChipType = (
   rows: number,
   columns: number,
 ): ChipConfigManifest['id'] => {
-  for (const chipType of Object.keys(CHIP_GRID_BY_TYPE) as ChipConfigManifest['id'][]) {
-    const grid = CHIP_GRID_BY_TYPE[chipType];
-    if (grid.rows === rows && grid.columns === columns) {
-      return chipType;
+  // Match on extent, not exact dimensions: a trimmed CSV (e.g. 63x64, or a
+  // 92x96 grid left behind by "remove excluded rows from export") maps to the
+  // smallest supported chip whose grid contains it, so previously-exported
+  // packages can be re-imported instead of being rejected.
+  const candidates = (Object.keys(CHIP_GRID_BY_TYPE) as ChipConfigManifest['id'][])
+    .filter((chipType) => {
+      const grid = CHIP_GRID_BY_TYPE[chipType];
+      return rows <= grid.rows && columns <= grid.columns;
+    })
+    .sort((left, right) => CHIP_GRID_BY_TYPE[left].rows - CHIP_GRID_BY_TYPE[right].rows);
+  const chipType = candidates[0];
+  if (!chipType) {
+    throw new Error(
+      `Cannot infer chip type from a ${rows}x${columns} grid. It exceeds the largest supported capture chip (96x96 / 15um).`,
+    );
+  }
+  return chipType;
+};
+
+/** Parse one CSV line, honoring double-quoted fields with escaped quotes. */
+const parseCsvLine = (line: string): string[] => {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (inQuotes) {
+      if (char === '"') {
+        if (line[index + 1] === '"') {
+          current += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+    } else if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      fields.push(current);
+      current = '';
+    } else {
+      current += char;
     }
   }
-  throw new Error(
-    `Cannot infer chip type from a ${rows}x${columns} grid. Expected 64x64 (50um) or 96x96 (15um).`,
-  );
+  fields.push(current);
+  return fields;
+};
+
+const parseGridCoordinate = (
+  raw: string | undefined,
+  label: string,
+): number => {
+  const trimmed = (raw ?? '').trim();
+  // Number('') === 0, which would silently pass the integer check below and
+  // then be dropped by the bounds filter; reject empty and non-positive
+  // (0-based) coordinates explicitly so malformed CSVs surface the error.
+  if (trimmed === '') {
+    throw new Error(`Tissue activation CSV has an empty ${label} coordinate.`);
+  }
+  const value = Number(trimmed);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      `Tissue activation CSV has an invalid ${label} coordinate "${trimmed}" (expected a 1-based positive integer).`,
+    );
+  }
+  return value;
 };
 
 const findColumnIndex = (header: string[], candidateNames: string[]): number => {
@@ -87,7 +146,8 @@ const parseTissueValue = (raw: string | undefined): TissueActivationValue => {
  * The optional `Log2_nGene_Spatial` column is captured per position for the
  * expression heatmap; other columns are ignored.
  *
- * Chip type is inferred from the grid extent (max row × max col): 64×64 → 50um,
+ * Chip type is inferred from the grid extent (max row × max col): the
+ * smallest supported chip whose grid contains the extent — 64×64 → 50um,
  * 96×96 → 15um. Grid cells absent from the CSV are treated as inactive (`0`).
  */
 export const parseTissueActivationCsv = (csvText: string): ParsedTissueActivation => {
@@ -109,19 +169,24 @@ export const parseTissueActivationCsv = (csvText: string): ParsedTissueActivatio
   }
 
   const parsedRows: ParsedRow[] = [];
+  const seenPositions = new Set<string>();
   let maxRow = 0;
   let maxCol = 0;
   for (const line of lines.slice(1)) {
-    const columns = line.split(',');
-    const csvRow = Number(columns[rowIndex]?.trim() ?? '');
-    const csvCol = Number(columns[colIndex]?.trim() ?? '');
-    if (!Number.isInteger(csvRow) || !Number.isInteger(csvCol)) {
-      throw new Error('Tissue activation CSV has a non-integer row/col coordinate.');
-    }
+    const columns = parseCsvLine(line);
+    const csvRow = parseGridCoordinate(columns[rowIndex], 'row');
+    const csvCol = parseGridCoordinate(columns[colIndex], 'col');
     const tissue = parseTissueValue(columns[tissueIndex]);
     const barcode = barcodeIndex >= 0 ? (columns[barcodeIndex]?.trim() ?? '') : '';
     const rawLog2nGene = log2nGeneIndex >= 0 ? (columns[log2nGeneIndex]?.trim() ?? '') : '';
     const log2nGene = rawLog2nGene === '' ? null : Number(rawLog2nGene);
+    const position = `${csvRow}:${csvCol}`;
+    if (seenPositions.has(position)) {
+      throw new Error(
+        `Tissue activation CSV has a duplicate position at row ${csvRow}, col ${csvCol}.`,
+      );
+    }
+    seenPositions.add(position);
     parsedRows.push({
       csvRow,
       csvCol,

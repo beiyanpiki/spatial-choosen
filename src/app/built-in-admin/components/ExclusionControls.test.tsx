@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { theme } from '../../../theme';
 import { ExclusionControls } from './ExclusionControls';
 
-const REMOVE_ROWS_TOGGLE_LABEL = 'Remove excluded rows from export';
+const REMOVE_ROWS_TOGGLE_LABEL = 'Remove excluded rows and columns from export';
 
 const rowColumnCheckboxes = () =>
   screen.getAllByRole('checkbox').filter(

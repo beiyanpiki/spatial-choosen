@@ -350,7 +350,7 @@ export function TissueSelectionPanel({
         onEditCommit?.(committedPath);
       }
     },
-    [disabled, onEditCommit, onSpotToggle, projectedSpots, requestCanvasRefresh, resetInteractionState, showSpots],
+    [disabled, lockedSpotIds, onEditCommit, onSpotToggle, projectedSpots, requestCanvasRefresh, resetInteractionState, showSpots],
   );
 
   const handlePointerCancel = useCallback(

@@ -3,7 +3,7 @@
 import * as UTIF from 'utif';
 import type { PreprocessImageKind, PreprocessSourceImage } from '@/types/built-in-admin';
 import { PREPROCESS_NUMERIC_DEFAULTS, PREPROCESS_WORKING_PROXY_MAX_BYTES } from '@/lib/built-in-admin/constants';
-import { checkSourceImageFileSize } from './safety';
+import { checkSourceImageDecodedSize, checkSourceImageFileSize } from './safety';
 
 type DecodedSourceImage = {
   height: number;
@@ -200,6 +200,17 @@ const decodeBrowserNativeImage = async (file: File): Promise<DecodedSourceImage>
     throw error;
   }
 
+  // The browser already decoded the image; reject oversize before the
+  // full-res canvas operations (thumbnail/working proxy) allocate.
+  const sizeCheck = checkSourceImageDecodedSize(
+    image.naturalWidth,
+    image.naturalHeight,
+  );
+  if (!sizeCheck.ok) {
+    URL.revokeObjectURL(sourceUrl);
+    throw new Error(sizeCheck.reason ?? 'Image exceeds preprocess size limits');
+  }
+
   const [thumbnailBlob, workingProxy] = await Promise.all([
     createDownsampledBlobFromSource(
       image,
@@ -242,6 +253,14 @@ const decodeTiffImage = async (file: File): Promise<DecodedSourceImage> => {
   const height = typeof ifd.height === 'number' ? ifd.height : Array.isArray(ifd.t257) ? Number(ifd.t257[0]) : 0;
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new Error('TIFF image dimensions are invalid');
+  }
+
+  // The dimensions are known from the IFD before the RGBA buffer is
+  // allocated; reject oversized TIFFs here so a compressed 20000x20000 file
+  // cannot OOM the tab during UTIF.toRGBA8.
+  const sizeCheck = checkSourceImageDecodedSize(width, height);
+  if (!sizeCheck.ok) {
+    throw new Error(sizeCheck.reason ?? 'Image exceeds preprocess size limits');
   }
 
   const rgba = UTIF.toRGBA8(ifd);

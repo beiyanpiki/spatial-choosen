@@ -45,6 +45,34 @@ describe('HEFocus project state normalization', () => {
 		]);
 	});
 
+	it('preserves explicitly stored crop geometry when the slice is stale', () => {
+		const project = buildEmptyPreprocessProject('stale geometry contract');
+		project.cropQc.status = 'stale';
+		project.cropQc.isStale = true;
+		project.cropQc.eosinReferenceGeometry = {
+			rect: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 },
+			width: 640,
+			height: 640,
+		};
+		project.cropQc.heQcGeometry = {
+			rect: { x: 0.15, y: 0.25, width: 0.45, height: 0.45 },
+			width: 640,
+			height: 640,
+		};
+
+		const normalized = normalizeProjectForPersistence(project);
+
+		// A "Reject to alignment" marks the slice stale but keeps the canonical
+		// crop evidence; normalizing (and therefore autosaving) must not null it.
+		expect(normalized.cropQc.eosinReferenceGeometry).toEqual(
+			project.cropQc.eosinReferenceGeometry,
+		);
+		expect(normalized.cropQc.heQcGeometry).toEqual(project.cropQc.heQcGeometry);
+		expect(normalized.cropQc.cropRect).toEqual(project.cropQc.eosinReferenceGeometry.rect);
+		expect(normalized.cropQc.cropWidth).toBe(640);
+		expect(normalized.cropQc.cropHeight).toBe(640);
+	});
+
 	it('keeps fully outside HEFocus bounds representable during workspace normalization', () => {
 		const project = buildEmptyPreprocessProject('HEFocus workspace contract');
 		const heFocusBounds = {

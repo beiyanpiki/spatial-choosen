@@ -5,6 +5,7 @@ import type {
   ProjectedSpot,
   TissueActivationMatrix,
 } from '@/types/built-in-admin';
+import { applyExclusionLockToMatrix } from './exclusion';
 import { type ChipConfigManifest, loadChipConfigData } from './chipConfigs';
 import { getPreprocessPackageSourceEntries, serializePreprocessProject } from './package';
 import {
@@ -108,6 +109,12 @@ type ExportOnlySpotCenter = {
 
 const getArrayPositionKey = (arrayRow: number, arrayCol: number) => `${arrayRow}:${arrayCol}`;
 
+/** Quote-escape a CSV field when it contains a separator, quote, or newline. */
+const csvEscape = (value: string | number) => {
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
 const isSupportedChipConfigId = (chipType: string | null): chipType is ChipConfigManifest['id'] => chipType === '50um' || chipType === '15um';
 
 const resolveExportOnlyFullresLayout = async (args: {
@@ -131,8 +138,9 @@ const resolveExportOnlyFullresLayout = async (args: {
   });
 };
 
-type ExcludedRowsCompression = {
+type ExcludedGridCompression = {
   rows: number;
+  columns: number;
   projectedSpots: ProjectedSpot[];
   matrixValues: number[];
   spotCenters: ExportOnlySpotCenter[];
@@ -140,15 +148,17 @@ type ExcludedRowsCompression = {
 };
 
 /**
- * Drop excluded rows from the exported grid when the Step 2 "Remove excluded
- * rows from export" toggle is on. Excluded rows keep their in-memory arrayRow
- * (1-based, image top); the remaining rows are compacted to contiguous
- * arrayRow indices and every row-keyed artifact (spots, matrix rows, template
- * spot centers, CSV barcodes) is remapped, so the exported CSVs renumber
- * array_row from the lower-left valid row. Returns null when nothing is
- * actually dropped.
+ * Drop excluded rows AND columns from the exported grid when the Step 2
+ * "Remove excluded rows/columns from export" toggle is on, matching the
+ * compacted Step 2 preview (compactSpotGridForDisplay removes both). Excluded
+ * rows keep their in-memory arrayRow (1-based, image top) and columns keep
+ * arrayCol; the remaining grid is compacted to contiguous indices and every
+ * row/column-keyed artifact (spots, matrix cells, template spot centers, CSV
+ * barcodes) is remapped, so the exported CSVs renumber array_row from the
+ * lower-left valid row and array_col from the leftmost valid column. Returns
+ * null when nothing is actually dropped.
  */
-const compressExcludedRows = (args: {
+const compressExcludedGrid = (args: {
   projectedSpots: ProjectedSpot[];
   matrixValues: number[];
   spotCenters: ExportOnlySpotCenter[];
@@ -156,44 +166,66 @@ const compressExcludedRows = (args: {
   rows: number;
   columns: number;
   excludedRows: number[];
-}): ExcludedRowsCompression | null => {
-  const excluded = new Set(args.excludedRows);
-  if (excluded.size === 0) {
+  excludedColumns: number[];
+}): ExcludedGridCompression | null => {
+  const excludedRows = new Set(args.excludedRows);
+  const excludedColumns = new Set(args.excludedColumns);
+  if (excludedRows.size === 0 && excludedColumns.size === 0) {
     return null;
   }
 
   const rowRemap = new Map<number, number>();
   let nextRow = 0;
   for (let arrayRow = 1; arrayRow <= args.rows; arrayRow += 1) {
-    if (excluded.has(arrayRow)) continue;
+    if (excludedRows.has(arrayRow)) continue;
     nextRow += 1;
     rowRemap.set(arrayRow, nextRow);
   }
-  if (nextRow === args.rows) {
+
+  const colRemap = new Map<number, number>();
+  let nextCol = 0;
+  for (let arrayCol = 1; arrayCol <= args.columns; arrayCol += 1) {
+    if (excludedColumns.has(arrayCol)) continue;
+    nextCol += 1;
+    colRemap.set(arrayCol, nextCol);
+  }
+
+  if (nextRow === args.rows && nextCol === args.columns) {
     return null;
   }
 
   const projectedSpots: ProjectedSpot[] = [];
   for (const spot of args.projectedSpots) {
     const remappedRow = rowRemap.get(spot.arrayRow);
-    if (remappedRow === undefined) continue;
-    projectedSpots.push({ ...spot, arrayRow: remappedRow });
+    const remappedCol = colRemap.get(spot.arrayCol);
+    if (remappedRow === undefined || remappedCol === undefined) continue;
+    projectedSpots.push({
+      ...spot,
+      arrayRow: remappedRow,
+      arrayCol: remappedCol,
+    });
   }
 
   const matrixValues: number[] = [];
   for (let arrayRow = 1; arrayRow <= args.rows; arrayRow += 1) {
-    if (excluded.has(arrayRow)) continue;
+    if (excludedRows.has(arrayRow)) continue;
     const rowStart = (arrayRow - 1) * args.columns;
-    matrixValues.push(
-      ...args.matrixValues.slice(rowStart, rowStart + args.columns),
-    );
+    for (let arrayCol = 1; arrayCol <= args.columns; arrayCol += 1) {
+      if (excludedColumns.has(arrayCol)) continue;
+      matrixValues.push(args.matrixValues[rowStart + arrayCol - 1]);
+    }
   }
 
   const spotCenters: ExportOnlySpotCenter[] = [];
   for (const spotCenter of args.spotCenters) {
     const remappedRow = rowRemap.get(spotCenter.arrayRow);
-    if (remappedRow === undefined) continue;
-    spotCenters.push({ ...spotCenter, arrayRow: remappedRow });
+    const remappedCol = colRemap.get(spotCenter.arrayCol);
+    if (remappedRow === undefined || remappedCol === undefined) continue;
+    spotCenters.push({
+      ...spotCenter,
+      arrayRow: remappedRow,
+      arrayCol: remappedCol,
+    });
   }
 
   const barcodesByPosition: Record<string, string> = {};
@@ -201,13 +233,16 @@ const compressExcludedRows = (args: {
     const separatorIndex = position.indexOf(':');
     if (separatorIndex === -1) continue;
     const arrayRow = Number(position.slice(0, separatorIndex));
+    const arrayCol = Number(position.slice(separatorIndex + 1));
     const remappedRow = rowRemap.get(arrayRow);
-    if (remappedRow === undefined) continue;
-    barcodesByPosition[`${remappedRow}${position.slice(separatorIndex)}`] = barcode;
+    const remappedCol = colRemap.get(arrayCol);
+    if (remappedRow === undefined || remappedCol === undefined) continue;
+    barcodesByPosition[`${remappedRow}:${remappedCol}`] = barcode;
   }
 
   return {
     rows: nextRow,
+    columns: nextCol,
     projectedSpots,
     matrixValues,
     spotCenters,
@@ -258,7 +293,7 @@ const toCsv = (
 
   for (const row of rowsByArrayPosition) {
     lines.push([
-      row.barcode,
+      csvEscape(row.barcode),
       row.inTissue,
       String(row.arrayRow),
       String(row.arrayCol),
@@ -271,8 +306,14 @@ const toCsv = (
 };
 
 const toMatrixCsv = (matrixValues: number[], rows: number, columns: number) => {
+  // tissue_positions.csv numbers array_row bottom-up (row 1 = lower-left), so
+  // the matrix file must traverse rows in the same physical direction:
+  // in-memory order is top-first, hence the bottom-first emit below. Writing
+  // both files top-down (or both bottom-up) keeps row i of the matrix paired
+  // with array_row i of the positions file.
   const lines = Array.from({ length: rows }, (_, rowIndex) => {
-    const rowStart = rowIndex * columns;
+    const sourceRowIndex = rows - 1 - rowIndex;
+    const rowStart = sourceRowIndex * columns;
     return matrixValues.slice(rowStart, rowStart + columns).join(',');
   });
 
@@ -411,7 +452,15 @@ export function getPreprocessZipExportReadiness(
     };
   }
 
-  const resolvedSelectedSpotIds = selectedSpotIdsFromMatrix(validatedMatrix, projectedSpots);
+  // The exclusion lock is applied here, at the export boundary, not on the
+  // persisted selection: excluded cells export as in_tissue=0 (or are dropped
+  // entirely by the compression toggle below), while the stored selection
+  // stays intact so un-excluding a row/column restores it.
+  const lockedMatrix = applyExclusionLockToMatrix(validatedMatrix, {
+    excludedRows: project.chipConfig.excludedRows,
+    excludedColumns: project.chipConfig.excludedColumns,
+  });
+  const resolvedSelectedSpotIds = selectedSpotIdsFromMatrix(lockedMatrix, projectedSpots);
 
   return {
     canExport: true,
@@ -426,7 +475,7 @@ export function getPreprocessZipExportReadiness(
       projectedSpots,
       rows,
       columns,
-      matrixValues: validatedMatrix.values,
+      matrixValues: lockedMatrix.values,
       selectedSpotIds: new Set(resolvedSelectedSpotIds),
       barcodesByPosition: project.chipConfig.barcodesByPosition ?? {},
       spotDiameterFullres,
@@ -470,12 +519,13 @@ export async function exportPreprocessZip(args: {
   });
   const spotDiameterFullres = exportOnlyLayout.squareSideLength;
 
-  // Step 2 "Remove excluded rows from export" toggle: drop excluded rows from
-  // the exported grid entirely, compact the remaining rows, and renumber the
-  // lower-left origin (array_row = 1 at the bottom-most valid row).
-  const excludedRowsCompression =
+  // Step 2 "Remove excluded rows/columns from export" toggle: drop excluded
+  // rows AND columns from the exported grid entirely, compact the remaining
+  // grid, and renumber the lower-left origin (array_row = 1 at the bottom-most
+  // valid row, array_col = 1 at the leftmost valid column).
+  const excludedGridCompression =
     project.chipConfig.removeExcludedRowsFromExport
-      ? compressExcludedRows({
+      ? compressExcludedGrid({
           projectedSpots,
           matrixValues,
           spotCenters: exportOnlyLayout.spotCenters,
@@ -483,17 +533,19 @@ export async function exportPreprocessZip(args: {
           rows,
           columns,
           excludedRows: project.chipConfig.excludedRows,
+          excludedColumns: project.chipConfig.excludedColumns,
         })
       : null;
-  const exportRows = excludedRowsCompression?.rows ?? rows;
+  const exportRows = excludedGridCompression?.rows ?? rows;
+  const exportColumns = excludedGridCompression?.columns ?? columns;
   const exportProjectedSpots =
-    excludedRowsCompression?.projectedSpots ?? projectedSpots;
+    excludedGridCompression?.projectedSpots ?? projectedSpots;
   const exportMatrixValues =
-    excludedRowsCompression?.matrixValues ?? matrixValues;
+    excludedGridCompression?.matrixValues ?? matrixValues;
   const exportSpotCenters =
-    excludedRowsCompression?.spotCenters ?? exportOnlyLayout.spotCenters;
+    excludedGridCompression?.spotCenters ?? exportOnlyLayout.spotCenters;
   const exportBarcodesByPosition =
-    excludedRowsCompression?.barcodesByPosition ?? barcodesByPosition;
+    excludedGridCompression?.barcodesByPosition ?? barcodesByPosition;
 
   const scalefactors = {
     spot_diameter_fullres: spotDiameterFullres,
@@ -514,7 +566,7 @@ export async function exportPreprocessZip(args: {
     exportRows,
     exportBarcodesByPosition,
   ));
-  zip.file('tissue_matrix.csv', toMatrixCsv(exportMatrixValues, exportRows, columns));
+  zip.file('tissue_matrix.csv', toMatrixCsv(exportMatrixValues, exportRows, exportColumns));
 
   if (includeAlignedImage) {
     if (!alignedImageDataUrl) {

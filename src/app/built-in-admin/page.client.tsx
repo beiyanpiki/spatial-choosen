@@ -21,6 +21,7 @@ import { PreprocessLanding } from "./components/PreprocessLanding";
 import { PreprocessWorkspace } from "./components/PreprocessWorkspace";
 import {
 	buildEmptyPreprocessProject,
+	createPreprocessProjectId,
 	normalizeProjectForPersistence,
 	normalizeProjectForWorkspace,
 } from "./projectState";
@@ -38,6 +39,7 @@ const collectProjectObjectUrls = (project: PreprocessProject | null) => {
 	for (const image of Object.values(project.sourceAssets.images)) {
 		addUrl(image?.objectUrl);
 		addUrl(image?.thumbnailObjectUrl);
+		addUrl(image?.workingObjectUrl);
 	}
 
 	addUrl(project.heFocus.focusedImageDataUrl);
@@ -392,6 +394,13 @@ function PreprocessContent() {
 							console.error("Failed to flush preprocessing metadata", error);
 						},
 					);
+				} else if (mode === "tissue") {
+					// A pending tissue-mode save must not be dropped on tab-hide,
+					// project switch, or unmount. On visibilitychange the page stays
+					// alive so the IndexedDB write completes; on pagehide the
+					// abort-tolerant persist path keeps a failed flush silent. This
+					// also resolves the autosave status stuck on "saving…".
+					void persistProjectSnapshot(normalizedSnapshot, mode);
 				}
 				return;
 			}
@@ -511,6 +520,15 @@ function PreprocessContent() {
 
 	const handleDeleteProject = useCallback(
 		async (projectId: string) => {
+			const projectEntry = projects.find((entry) => entry.id === projectId);
+			const projectName = projectEntry?.name ?? "this project";
+			// Deleting removes the metadata row plus every IndexedDB payload store
+			// irreversibly, so require an explicit confirmation before proceeding.
+			const confirmed = window.confirm(
+				`Delete "${projectName}"? This permanently removes the project and all its local data. This cannot be undone.`,
+			);
+			if (!confirmed) return;
+
 			setIsDeletingId(projectId);
 			try {
 				await deletePreprocessProject(projectId);
@@ -529,7 +547,7 @@ function PreprocessContent() {
 				setIsDeletingId(null);
 			}
 		},
-		[toast],
+		[projects, toast],
 	);
 
 	const handleImportProject = useCallback(
@@ -538,9 +556,27 @@ function PreprocessContent() {
 
 			setIsImporting(true);
 			try {
-				const importedProject = normalizeProjectForWorkspace(
+				let importedProject = normalizeProjectForWorkspace(
 					await deserializePreprocessImport(fileList[0]),
 				);
+				// Importing a package keeps the packaged id; silently upserting
+				// over an existing project with that id would destroy its edits
+				// (metadata plus every payload store). Import as a fresh copy
+				// instead so both projects survive side by side.
+				const existingProjects = await readPreprocessProjectSummaries();
+				if (existingProjects.some((entry) => entry.id === importedProject.id)) {
+					importedProject = {
+						...importedProject,
+						id: createPreprocessProjectId(),
+						name: `${importedProject.name} (imported copy)`,
+					};
+					toast({
+						title: "Imported as a copy",
+						description:
+							"A project with the same id already exists in this browser; the package was saved as a new project.",
+						status: "info",
+					});
+				}
 				await upsertPreprocessProject(importedProject);
 				await refreshProjects();
 				toast({ title: "Preprocessing project imported", status: "success" });

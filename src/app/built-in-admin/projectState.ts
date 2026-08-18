@@ -116,20 +116,25 @@ const normalizeCropQcSlice = (slice: CropQcSlice): CropQcSlice => {
 		slice,
 		"eosinReferenceGeometry",
 	);
+	// Explicitly stored geometry survives staleness ("Reject to alignment"
+	// keeps the canonical crop evidence so the user can return to it); only
+	// the legacy cropRect/cropWidth/cropHeight fallback is withheld for stale
+	// slices that never stored explicit geometry. This mirrors
+	// repairCurrentSchemaCropGeometry in storage.ts — nulling explicit
+	// geometry here would persist the nulls on the next autosave and destroy
+	// the canonical crop evidence permanently.
 	const canUseLegacyGeometryFallback =
 		!isStale || hasExplicitEosinReferenceGeometry;
 	const eosinReferenceGeometry =
-		isStale
-			? null
-			: normalizeCropQcGeometry(slice.eosinReferenceGeometry) ??
-				(canUseLegacyGeometryFallback
-			? normalizeCropQcLegacyGeometry(
-					slice.cropRect,
-					slice.cropWidth,
-					slice.cropHeight,
-				)
-			: null);
-	const heQcGeometry = isStale ? null : normalizeCropQcGeometry(slice.heQcGeometry);
+		normalizeCropQcGeometry(slice.eosinReferenceGeometry) ??
+			(canUseLegacyGeometryFallback
+		? normalizeCropQcLegacyGeometry(
+				slice.cropRect,
+				slice.cropWidth,
+				slice.cropHeight,
+			)
+		: null);
+	const heQcGeometry = normalizeCropQcGeometry(slice.heQcGeometry);
 	const cropWidth = normalizePositiveNumber(slice.cropWidth) ?? eosinReferenceGeometry?.width ?? null;
 	const cropHeight = normalizePositiveNumber(slice.cropHeight) ?? eosinReferenceGeometry?.height ?? null;
 
@@ -197,16 +202,18 @@ export const normalizeProjectForWorkspace = (
 	return normalizeProjectForPersistence(migratePreprocessProject(project));
 };
 
+export const createPreprocessProjectId = (): string =>
+	typeof crypto !== "undefined" && crypto.randomUUID
+		? crypto.randomUUID()
+		: `preprocess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
 export const buildEmptyPreprocessProject = (
 	name: string,
 ): PreprocessProject => {
 	const now = new Date().toISOString();
 
 	return {
-		id:
-			typeof crypto !== "undefined" && crypto.randomUUID
-				? crypto.randomUUID()
-				: `preprocess-${Date.now()}`,
+		id: createPreprocessProjectId(),
 		name: name.trim(),
 		createdAt: now,
 		updatedAt: now,

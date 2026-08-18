@@ -90,18 +90,35 @@ export function buildManualTissueSelectionState<T extends ManualTissueSelectionM
       return current;
     }
 
-    const selectedSpotIds = new Set(selectedSpotIdsFromMatrix(matrix, args.projectedSpots));
-    if (selectedSpotIds.has(targetSpot.id)) {
-      selectedSpotIds.delete(targetSpot.id);
+    const nextValue = args.nextValue;
+    if (typeof nextValue !== 'undefined') {
+      // Single-spot clicks honor the selected activate/deactivate tool:
+      // the cell is set to the tool's value rather than toggled.
+      const targetIndex =
+        (targetSpot.arrayRow - 1) * matrix.columns + (targetSpot.arrayCol - 1);
+      if (matrix.values[targetIndex] === nextValue) {
+        return current;
+      }
+      nextMatrix = {
+        ...matrix,
+        values: matrix.values.map((value, index) =>
+          index === targetIndex ? nextValue : value,
+        ),
+      };
     } else {
-      selectedSpotIds.add(targetSpot.id);
+      const selectedSpotIds = new Set(selectedSpotIdsFromMatrix(matrix, args.projectedSpots));
+      if (selectedSpotIds.has(targetSpot.id)) {
+        selectedSpotIds.delete(targetSpot.id);
+      } else {
+        selectedSpotIds.add(targetSpot.id);
+      }
+      nextMatrix = matrixFromSelectedSpotIds({
+        rows: matrix.rows,
+        columns: matrix.columns,
+        projectedSpots: args.projectedSpots,
+        selectedSpotIds: [...selectedSpotIds],
+      });
     }
-    nextMatrix = matrixFromSelectedSpotIds({
-      rows: matrix.rows,
-      columns: matrix.columns,
-      projectedSpots: args.projectedSpots,
-      selectedSpotIds: [...selectedSpotIds],
-    });
   } else {
     if (!args.editArea || typeof args.nextValue === 'undefined') {
       return current;
@@ -147,21 +164,14 @@ export function buildInvertedTissueSelectionState(
   args: InvertManualTissueSelectionArgs,
 ): TissueSelectionSlice {
   const { current } = args;
-  const matrix = current.matrix ?? (
-    typeof args.rows === 'number'
-      && Number.isInteger(args.rows)
-      && args.rows > 0
-      && typeof args.columns === 'number'
-      && Number.isInteger(args.columns)
-      && args.columns > 0
-      ? createEmptyMatrix(args.rows, args.columns)
-      : null
-  );
-
-  if (matrix === null) {
+  // Inverting before any detection would fabricate an all-selected matrix
+  // from a null matrix and mark it complete — never do that. Require an
+  // existing matrix; the UI disables the button without one.
+  if (current.matrix === null) {
     return current;
   }
 
+  const matrix = current.matrix;
   const nextMatrix = invertTissueActivationMatrix(matrix);
   const finalSelectedSpotIds = selectedSpotIdsFromMatrix(nextMatrix, args.projectedSpots);
 

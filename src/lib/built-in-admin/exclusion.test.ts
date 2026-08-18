@@ -89,6 +89,20 @@ describe('exclusion lock primitives', () => {
     // Everything else stays 1.
     expect(locked.values.filter((value) => value === 1).length).toBe(4);
   });
+
+  it('ignores out-of-range excluded columns instead of corrupting the matrix length', () => {
+    const matrix = makeMatrix(3, 3, 1);
+    const locked = applyExclusionLockToMatrix(matrix, {
+      excludedRows: [],
+      // 99 is outside the 3-column grid (e.g. a malformed imported package);
+      // without the guard this would grow the values array past rows*columns.
+      excludedColumns: [99],
+    });
+    expect(locked.rows).toBe(3);
+    expect(locked.columns).toBe(3);
+    expect(locked.values).toHaveLength(9);
+    expect(locked.values.every((value) => value === 1)).toBe(true);
+  });
 });
 
 describe('lockTissueSelectionSlice', () => {

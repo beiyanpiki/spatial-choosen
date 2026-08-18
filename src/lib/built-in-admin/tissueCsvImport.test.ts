@@ -109,9 +109,37 @@ describe('parseTissueActivationCsv', () => {
 		expect(() => parseTissueActivationCsv(csv)).toThrow(/missing required columns/);
 	});
 
-	it('throws on an unknown chip grid', () => {
-		const csv = ['barcode,tissue,row,col', 'BC,1,1,1', 'BC2,0,50,50'].join('\n');
+	it('throws on a grid exceeding the largest supported chip', () => {
+		const csv = ['barcode,tissue,row,col', 'BC,1,1,1', 'BC2,0,100,100'].join('\n');
 		expect(() => parseTissueActivationCsv(csv)).toThrow(/Cannot infer chip type/);
+	});
+
+	it('infers the containing chip for trimmed grids (63x64 -> 50um)', () => {
+		const csv = [
+			'barcode,tissue,row,col',
+			'BC,1,1,1',
+			'BC2,0,63,64',
+		].join('\n');
+
+		const result = parseTissueActivationCsv(csv);
+
+		expect(result.chipType).toBe('50um');
+		expect(result.rows).toBe(63);
+		expect(result.columns).toBe(64);
+	});
+
+	it('infers the containing chip for export-compressed grids (92x96 -> 15um)', () => {
+		const csv = [
+			'barcode,tissue,row,col',
+			'BC,1,1,1',
+			'BC2,0,92,96',
+		].join('\n');
+
+		const result = parseTissueActivationCsv(csv);
+
+		expect(result.chipType).toBe('15um');
+		expect(result.rows).toBe(92);
+		expect(result.columns).toBe(96);
 	});
 
 	it('throws on a non-binary tissue value', () => {
@@ -121,7 +149,29 @@ describe('parseTissueActivationCsv', () => {
 
 	it('throws on a non-integer coordinate', () => {
 		const csv = ['barcode,tissue,row,col', 'BC,1,abc,1', 'BC2,0,96,96'].join('\n');
-		expect(() => parseTissueActivationCsv(csv)).toThrow(/non-integer row\/col/);
+		expect(() => parseTissueActivationCsv(csv)).toThrow(/invalid row coordinate/);
+	});
+
+	it('throws on an empty coordinate instead of silently dropping the row', () => {
+		const csv = ['barcode,tissue,row,col', 'BC,1,,1', 'BC2,0,96,96'].join('\n');
+		expect(() => parseTissueActivationCsv(csv)).toThrow(/empty row coordinate/);
+	});
+
+	it('throws on 0-based coordinates instead of silently dropping the row', () => {
+		const csv = ['barcode,tissue,row,col', 'BC,1,0,1', 'BC2,0,96,96'].join('\n');
+		expect(() => parseTissueActivationCsv(csv)).toThrow(/invalid row coordinate "0"/);
+	});
+
+	it('parses double-quoted fields with embedded commas', () => {
+		const csv = [
+			'barcode,tissue,row,col',
+			'"BC,WEIRD-1",1,1,1',
+			'BC2,0,96,96',
+		].join('\n');
+
+		const { barcodesByPosition } = parseTissueActivationCsv(csv);
+
+		expect(barcodesByPosition['96:1']).toBe('BC,WEIRD-1');
 	});
 
 	it('captures Log2_nGene_Spatial keyed by the flipped in-memory position', () => {
@@ -205,7 +255,7 @@ describe('parseTissueActivationCsv', () => {
 		expect(barcodesByPosition['1:96']).toBeUndefined();
 	});
 
-	it('captures barcodes for duplicate positions with the last value winning', () => {
+	it('throws on duplicate positions instead of silently overwriting', () => {
 		const csv = [
 			'barcode,tissue,row,col',
 			'BC-OTHER,0,96,96',
@@ -213,9 +263,6 @@ describe('parseTissueActivationCsv', () => {
 			'BC-SECOND,1,1,1',
 		].join('\n');
 
-		const { barcodesByPosition } = parseTissueActivationCsv(csv);
-
-		expect(barcodesByPosition['96:1']).toBe('BC-SECOND');
-		expect(barcodesByPosition['1:96']).toBe('BC-OTHER');
+		expect(() => parseTissueActivationCsv(csv)).toThrow(/duplicate position at row 1, col 1/);
 	});
 });

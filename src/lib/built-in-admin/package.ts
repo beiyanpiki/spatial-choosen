@@ -840,6 +840,30 @@ const assertProjectedSpot = (value: unknown, fieldName: string) => {
   }
 };
 
+const assertOptionalNumberArray = (value: unknown, fieldName: string) => {
+  if (value === undefined) return;
+  assertArray(value, fieldName);
+  for (const [index, entry] of (value as unknown[]).entries()) {
+    assertNumber(entry, `${fieldName}[${index}]`);
+  }
+};
+
+const assertOptionalStringRecord = (value: unknown, fieldName: string) => {
+  if (value === undefined) return;
+  assertObject(value, fieldName);
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    assertString(entry, `${fieldName}.${key}`);
+  }
+};
+
+const assertOptionalNumberRecord = (value: unknown, fieldName: string) => {
+  if (value === undefined) return;
+  assertObject(value, fieldName);
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    assertNumber(entry, `${fieldName}.${key}`);
+  }
+};
+
 const assertChipConfigSlice = (value: unknown) => {
   assertPreprocessSliceBase(value, "chipConfig");
   const slice = value as Record<string, unknown>;
@@ -851,6 +875,19 @@ const assertChipConfigSlice = (value: unknown) => {
   }
   if (slice.origin !== null) assertPreprocessPoint(slice.origin, "chipConfig.origin");
   assertNumber(slice.rotationDegrees, "chipConfig.rotationDegrees");
+  // Exclusion/CSV fields may be absent from packages written before those
+  // features shipped (migratePreprocessProject backfills them on import);
+  // when present, validate their shape so a malformed package cannot crash
+  // consumers that dereference them without guards.
+  assertOptionalNumberArray(slice.excludedRows, 'chipConfig.excludedRows');
+  assertOptionalNumberArray(slice.excludedColumns, 'chipConfig.excludedColumns');
+  if (slice.removeExcludedRowsFromExport !== undefined) {
+    assertBoolean(slice.removeExcludedRowsFromExport, 'chipConfig.removeExcludedRowsFromExport');
+  }
+  assertOptionalStringRecord(slice.barcodesByPosition, 'chipConfig.barcodesByPosition');
+  assertOptionalNumberRecord(slice.log2nGeneByPosition, 'chipConfig.log2nGeneByPosition');
+  assertNullableString(slice.csvFileName, 'chipConfig.csvFileName');
+  if (slice.spotDiameter !== null) assertNumber(slice.spotDiameter, 'chipConfig.spotDiameter');
   if (slice.projectedSpots !== null) {
     assertArray(slice.projectedSpots, "chipConfig.projectedSpots");
     for (const [index, spot] of (slice.projectedSpots as unknown[]).entries()) {
@@ -1079,16 +1116,22 @@ export async function serializePreprocessProject(project: PreprocessProject): Pr
   });
 }
 
-export async function deserializePreprocessProject(file: File | Blob): Promise<PreprocessProject> {
+export async function deserializePreprocessProject(
+  file: File | Blob,
+  options?: { requireSourceDataUrls?: boolean },
+): Promise<PreprocessProject> {
   if (!isBrowser()) {
     throw new Error("Preprocessing project import is available in-browser only");
   }
 
   const text = await file.text();
-  return deserializePreprocessProjectText(text);
+  return deserializePreprocessProjectText(text, options);
 }
 
-function deserializePreprocessProjectText(text: string): PreprocessProject {
+function deserializePreprocessProjectText(
+  text: string,
+  options?: { requireSourceDataUrls?: boolean },
+): PreprocessProject {
   let parsed: unknown;
 
   try {
@@ -1105,7 +1148,12 @@ function deserializePreprocessProjectText(text: string): PreprocessProject {
   return migratePreprocessProject(
     assertPreprocessProjectShape(
       pkg.project,
-      pkg.version === 1,
+      // v1 packages embed their source images as dataUrls inside project.json.
+      // A caller importing a bare .json (no zip entries to attach blobs from)
+      // must also require the inline payloads — otherwise a v2+ json with its
+      // dataUrls stripped imports "successfully" and then hydrates as a
+      // permanently unopenable project.
+      options?.requireSourceDataUrls === true || pkg.version === 1,
       pkg.version === PACKAGE_VERSION,
       pkg.version === PACKAGE_VERSION,
     ),
@@ -1141,5 +1189,8 @@ export async function deserializePreprocessImport(file: File | Blob): Promise<Pr
     return project;
   }
 
-  return deserializePreprocessProject(file);
+  // A bare .json has no zip entries carrying the source blobs, so the
+  // declared images must embed their payloads inline; otherwise the import
+  // succeeds but every later hydration returns undefined.
+  return deserializePreprocessProject(file, { requireSourceDataUrls: true });
 }

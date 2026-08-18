@@ -748,11 +748,13 @@ describe('exportBundle canonical matrix exports', () => {
     // 64 rows minus the excluded top row; each line still has 64 columns.
     expect(rows).toHaveLength(63);
     expect(rows.every((line) => line.length === 64)).toBe(true);
-    // Original row 1 ([1,1] active) is gone; row 10 moved up to line 8 and
-    // row 64 to line 62.
+    // The matrix file traverses rows bottom-up like tissue_positions.csv
+    // (array_row 1 = lower-left), so line 0 is the bottom-most valid row
+    // (in-memory row 64, active at [64,64]) and line 62 is in-memory row 2.
     expect(rows[0]?.[0]).toBe('0');
-    expect(rows[8]?.[9]).toBe('1');
-    expect(rows[62]?.[63]).toBe('1');
+    expect(rows[0]?.[63]).toBe('1');
+    expect(rows[54]?.[9]).toBe('1');
+    expect(rows[62]?.[0]).toBe('0');
   });
 
   it('keeps excluded bottom rows removed with array_row renumbered when the export toggle is on', async () => {
@@ -793,6 +795,52 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows.find((row) => row.barcode === 'real-barcode-c')?.array_row).toBe(63);
   });
 
+  it('locks excluded rows at export time and restores them when un-excluded', async () => {
+    const project = createBaseProject();
+    // The persisted selection is NOT pre-locked (the exclusion lock is a
+    // derived view); exporting with the exclusion applies in_tissue=0...
+    project.chipConfig.excludedRows = [1];
+
+    const excludedResult = await exportProject(project);
+    const excludedRows = await readExportedTissuePositions(excludedResult.blob);
+
+    expect(excludedRows.find((row) => row.barcode === 'barcode-spot-a')?.in_tissue).toBe(0);
+
+    // ...and un-excluding restores the original matrix truth without any
+    // re-detection or manual re-marking.
+    project.chipConfig.excludedRows = [];
+
+    const restoredResult = await exportProject(project);
+    const restoredRows = await readExportedTissuePositions(restoredResult.blob);
+
+    expect(restoredRows.find((row) => row.barcode === 'barcode-spot-a')?.in_tissue).toBe(1);
+    expect(restoredRows.find((row) => row.barcode === 'barcode-spot-d')?.in_tissue).toBe(1);
+  });
+
+  it('removes excluded columns from both exported CSVs when the export toggle is on', async () => {
+    const project = createBaseProject();
+    project.chipConfig.excludedColumns = [1];
+    project.chipConfig.removeExcludedRowsFromExport = true;
+
+    const result = await exportProject(project);
+    const positions = await readExportedTissuePositions(result.blob);
+    const matrixCsv = await readZipText(result.blob, 'tissue_matrix.csv');
+    const matrixRows = matrixCsv.trim().split('\n').map((line) => line.split(','));
+
+    // Column 1 dropped: spot-a (1,1) and spot-c (2,1) are gone; spot-b (1,2)
+    // compacts to array_col 1 and spot-d (64,64) to array_col 63.
+    expect(positions.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-b',
+    ]);
+    expect(positions.find((row) => row.barcode === 'barcode-spot-b')?.array_col).toBe(1);
+    expect(positions.find((row) => row.barcode === 'barcode-spot-d')?.array_col).toBe(63);
+    // 64 rows with 63 columns each: the excluded column is gone from the
+    // matrix file as well, matching the Step 2 compacted preview.
+    expect(matrixRows).toHaveLength(64);
+    expect(matrixRows.every((line) => line.length === 63)).toBe(true);
+  });
+
   it('writes tissue_matrix.csv from canonical matrix truth for both active and inactive cells', async () => {
     const project = createBaseProject();
 
@@ -800,11 +848,15 @@ describe('exportBundle canonical matrix exports', () => {
     const matrixCsv = await readZipText(result.blob, 'tissue_matrix.csv');
     const rows = matrixCsv.trim().split('\n').map((line) => line.split(','));
 
-    expect(rows[0]?.[0]).toBe('1');
-    expect(rows[0]?.[1]).toBe('0');
-    expect(rows[9]?.[9]).toBe('1');
-    expect(rows[9]?.[10]).toBe('0');
-    expect(rows[63]?.[63]).toBe('1');
+    // The matrix file traverses rows bottom-up like tissue_positions.csv:
+    // line 0 is the bottom row (in-memory row 64, active at [64,64]) and
+    // line 63 is the top row (in-memory row 1, active at [1,1]).
+    expect(rows[0]?.[0]).toBe('0');
+    expect(rows[0]?.[63]).toBe('1');
+    expect(rows[54]?.[9]).toBe('1');
+    expect(rows[54]?.[10]).toBe('0');
+    expect(rows[63]?.[0]).toBe('1');
+    expect(rows[63]?.[1]).toBe('0');
   });
 
   it('writes 50um tissue_positions.csv sorted by exported array position with bottom-left array rows and emitted fullres image coordinates', async () => {
@@ -1213,7 +1265,9 @@ describe('exportBundle canonical matrix exports', () => {
     expect(validatedProject.tissueSelection.matrix?.values[4095]).toBe(1);
     expect(rows).toHaveLength(64);
     expect(rows[63]).toHaveLength(64);
-    expect(rows[63]?.[63]).toBe('1');
+    // Bottom-up row order: line 0 is the bottom row (in-memory row 64, whose
+    // last cell holds values[4095] = 1).
+    expect(rows[0]?.[63]).toBe('1');
     // Template coordinates [75, 6375] mapped to emitted fullres frame [0, 640]
     expect(positionsByBarcode.get('barcode-spot-a')).toEqual(createExpectedExportedTissuePositionRow({
       barcode: 'barcode-spot-a',

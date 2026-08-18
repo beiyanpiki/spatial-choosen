@@ -308,6 +308,30 @@ const createMissingObjectStores = (db: IDBDatabase) => {
   }
 };
 
+const PREPROCESS_DB_VERSION_STORAGE_KEY = 'spatial-built-in-admin:repaired-db-version';
+
+const readRepairedDbVersion = (): number => {
+  if (!isBrowser()) return PREPROCESS_DB_VERSION;
+  try {
+    const raw = window.localStorage.getItem(PREPROCESS_DB_VERSION_STORAGE_KEY);
+    const parsed = raw === null ? NaN : Number(raw);
+    return Number.isInteger(parsed) && parsed >= PREPROCESS_DB_VERSION
+      ? parsed
+      : PREPROCESS_DB_VERSION;
+  } catch {
+    return PREPROCESS_DB_VERSION;
+  }
+};
+
+const writeRepairedDbVersion = (version: number) => {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.setItem(PREPROCESS_DB_VERSION_STORAGE_KEY, String(version));
+  } catch (error) {
+    console.error('Failed to persist repaired preprocess DB version', error);
+  }
+};
+
 const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
   if (!isBrowser()) {
     reject(new Error('IndexedDB unavailable on server'));
@@ -318,7 +342,11 @@ const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
   // was interrupted, and a committed version never re-runs onupgradeneeded.
   // If a store is missing from an already-committed database (e.g. a dev
   // hot-reload raced the version bump), repair it by reopening one version
-  // higher; the upgrade then creates every missing store.
+  // higher; the upgrade then creates every missing store. The bumped version
+  // is recorded so later opens (which request PREPROCESS_DB_VERSION) do not
+  // fail with VersionError, and a VersionError from a stale recorded/open
+  // version discovers the real version via indexedDB.databases() instead of
+  // failing every later read/write.
   const openWithVersion = (version: number, attempt: number) => {
     const request = window.indexedDB.open(PREPROCESS_DB_NAME, version);
     request.onupgradeneeded = () => {
@@ -329,17 +357,43 @@ const openDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
       const missingStore = EXPECTED_PROJECT_META_STORES.find(
         (storeName) => !db.objectStoreNames.contains(storeName),
       );
-      if (missingStore && attempt < 2) {
+      if (missingStore && attempt < 3) {
         db.close();
+        writeRepairedDbVersion(version + 1);
         openWithVersion(version + 1, attempt + 1);
         return;
       }
       resolve(db);
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      if (request.error?.name === 'VersionError') {
+        if (typeof window.indexedDB.databases !== 'function') {
+          reject(request.error);
+          return;
+        }
+        window.indexedDB
+          .databases()
+          .then((databases) => {
+            const entry = databases.find((db) => db.name === PREPROCESS_DB_NAME);
+            if (
+              !entry
+              || typeof entry.version !== 'number'
+              || entry.version < version
+            ) {
+              reject(request.error);
+              return;
+            }
+            writeRepairedDbVersion(entry.version);
+            openWithVersion(entry.version, attempt + 1);
+          })
+          .catch(() => reject(request.error));
+        return;
+      }
+      reject(request.error);
+    };
   };
 
-  openWithVersion(PREPROCESS_DB_VERSION, 0);
+  openWithVersion(readRepairedDbVersion(), 0);
 });
 
 const txDone = (tx: IDBTransaction) => new Promise<void>((resolve, reject) => {
@@ -535,6 +589,77 @@ const persistMetas = async (metas: PreprocessProjectMeta[]) => {
   );
 };
 
+/**
+ * Atomic read-modify-write of the project meta blob inside a single readwrite
+ * transaction. The previous implementation read the metas, merged, then wrote
+ * through a second connection: two tabs could interleave, so a concurrent
+ * edit or delete was silently clobbered (lost updates, resurrected deleted
+ * projects). The legacy localStorage payload is folded in on the first write
+ * when the store is still empty, mirroring readMetas' one-time migration.
+ */
+const readModifyWriteMetas = async (
+  mutator: (metas: PreprocessProjectMeta[]) => PreprocessProjectMeta[],
+): Promise<PreprocessProjectMeta[] | null> => {
+  if (!isBrowser()) return null;
+
+  const db = await openDb();
+  try {
+    const tx = db.transaction(PREPROCESS_PROJECT_META_STORE, 'readwrite');
+    const store = tx.objectStore(PREPROCESS_PROJECT_META_STORE);
+    const getRequest = store.get(PROJECT_META_BLOB_KEY);
+    const stored = await new Promise<string | undefined>((resolve, reject) => {
+      getRequest.onsuccess = () => {
+        resolve(
+          typeof getRequest.result === 'string'
+            ? (getRequest.result as string)
+            : undefined,
+        );
+      };
+      getRequest.onerror = () => reject(getRequest.error);
+    });
+
+    let metas: PreprocessProjectMeta[] = [];
+    if (stored !== undefined) {
+      try {
+        metas = JSON.parse(stored) as PreprocessProjectMeta[];
+      } catch (error) {
+        console.error('Failed to parse preprocess project metas', error);
+      }
+    }
+
+    let migratedLegacy = false;
+    if (metas.length === 0) {
+      const legacyProjects = readLegacyLocalStorageProjects() as PreprocessProjectMeta[];
+      if (legacyProjects.length > 0) {
+        metas = legacyProjects;
+        migratedLegacy = true;
+      }
+    }
+
+    const nextMetas = mutator(metas);
+    store.put(JSON.stringify(nextMetas), PROJECT_META_BLOB_KEY);
+    await txDone(tx);
+
+    if (migratedLegacy && isBrowser()) {
+      window.localStorage.removeItem(PREPROCESS_STORAGE_KEY);
+    }
+
+    return nextMetas;
+  } finally {
+    db.close();
+  }
+};
+
+const upsertMetaIntoList = (meta: PreprocessProjectMeta) => (metas: PreprocessProjectMeta[]) => {
+  const index = metas.findIndex((entry) => entry.id === meta.id);
+  if (index >= 0) {
+    const next = [...metas];
+    next[index] = meta;
+    return next;
+  }
+  return [meta, ...metas];
+};
+
 const assetStoreKey = (projectId: string, kind: PreprocessImageKind) => `${projectId}:${kind}`;
 const heFocusDerivedImageStoreKey = (projectId: string) => `${projectId}:he-focus`;
 const cropQcDerivedImageStoreKey = (
@@ -547,28 +672,40 @@ const cropQcFeatureMatchesDerivedImageStoreKey = (projectId: string) => `${proje
 
 const saveStoreValue = async (storeName: string, key: string, value: string | Blob) => {
   const db = await openDb();
-  const tx = db.transaction(storeName, 'readwrite');
-  tx.objectStore(storeName).put(value, key);
-  await txDone(tx);
+  try {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).put(value, key);
+    await txDone(tx);
+  } finally {
+    db.close();
+  }
 };
 
 const readStoreValue = async (storeName: string, key: string): Promise<string | Blob | undefined> => {
   const db = await openDb();
-  const tx = db.transaction(storeName, 'readonly');
-  const req = tx.objectStore(storeName).get(key);
-  const value = await new Promise<string | Blob | undefined>((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result as string | Blob | undefined);
-    req.onerror = () => reject(req.error);
-  });
-  await txDone(tx);
-  return value ?? undefined;
+  try {
+    const tx = db.transaction(storeName, 'readonly');
+    const req = tx.objectStore(storeName).get(key);
+    const value = await new Promise<string | Blob | undefined>((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result as string | Blob | undefined);
+      req.onerror = () => reject(req.error);
+    });
+    await txDone(tx);
+    return value ?? undefined;
+  } finally {
+    db.close();
+  }
 };
 
 const deleteStoreValue = async (storeName: string, key: string) => {
   const db = await openDb();
-  const tx = db.transaction(storeName, 'readwrite');
-  tx.objectStore(storeName).delete(key);
-  await txDone(tx);
+  try {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).delete(key);
+    await txDone(tx);
+  } finally {
+    db.close();
+  }
 };
 
 /** Decode a base64 `data:` URL without fetch (canvas.toDataURL output). */
@@ -1229,8 +1366,12 @@ const readMetas = async (): Promise<PreprocessProjectMeta[]> => {
   return [];
 };
 
-export const upsertPreprocessProjectMetadata = async (project: PreprocessProject) => {
-  const metas = await readMetas();
+const hasChipConfigPayload = (chipConfig: PreprocessProject['chipConfig']) => (
+  Object.keys(chipConfig.barcodesByPosition).length > 0
+  || Object.keys(chipConfig.log2nGeneByPosition).length > 0
+);
+
+const buildMigratedMeta = (project: PreprocessProject) => {
   const repairedProject = repairCurrentSchemaCropGeometry(project);
   const migratedProject = migratePreprocessProject(repairedProject);
   const meta = toProjectMeta(
@@ -1238,20 +1379,16 @@ export const upsertPreprocessProjectMetadata = async (project: PreprocessProject
     repairedProject.chipConfig.projectedSpots,
     repairedProject.tissueSelection,
   );
-  const index = metas.findIndex((entry) => entry.id === project.id);
-  if (index >= 0) {
-    metas[index] = meta;
-  } else {
-    metas.unshift(meta);
-  }
-  await persistMetas(metas);
+  return { migratedProject, meta };
+};
+
+export const upsertPreprocessProjectMetadata = async (project: PreprocessProject) => {
+  const { migratedProject, meta } = buildMigratedMeta(project);
+  await readModifyWriteMetas(upsertMetaIntoList(meta));
   // The metadata snapshot above strips the CSV payloads; make sure they reach
   // the IndexedDB chip-config store. This also migrates projects saved before
   // the split (their maps still sit in the old metadata).
-  if (
-    Object.keys(project.chipConfig.barcodesByPosition).length > 0
-    || Object.keys(project.chipConfig.log2nGeneByPosition).length > 0
-  ) {
+  if (hasChipConfigPayload(project.chipConfig)) {
     void syncChipConfigPayloadStore(project.id, project.chipConfig).catch(
       (error) => {
         console.error('Failed to sync chip config payload store', error);
@@ -1457,19 +1594,35 @@ export async function upsertPreprocessProject(
     return;
   }
 
-  const migratedProject = await upsertPreprocessProjectMetadata(project);
+  const { migratedProject, meta } = buildMigratedMeta(project);
 
-  if (mode === 'metadata') {
-    return;
+  if (mode === 'full') {
+    // Payload stores are written first: if a payload sync fails (quota
+    // exceeded, aborted fetch), the metadata — the only thing the landing
+    // page and the hydration gate trust — still describes the last committed
+    // state, so no "listed but unopenable" project is ever created. The
+    // metadata write below is the atomic commit point.
+    await Promise.all([
+      ...PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),
+      syncDerivedImageStore(heFocusDerivedImageStoreKey(migratedProject.id), migratedProject.heFocus.focusedImageDataUrl),
+      syncCropQcDerivedImageStores(migratedProject.id, migratedProject.cropQc),
+      syncTissueSelectionStore(migratedProject.id, project.tissueSelection),
+      syncChipConfigPayloadStore(migratedProject.id, migratedProject.chipConfig),
+    ]);
   }
 
-  await Promise.all([
-    ...PREPROCESS_SOURCE_IMAGE_KINDS.map((kind) => syncImageStores(migratedProject.id, migratedProject.sourceAssets.images[kind], kind)),
-    syncDerivedImageStore(heFocusDerivedImageStoreKey(migratedProject.id), migratedProject.heFocus.focusedImageDataUrl),
-    syncCropQcDerivedImageStores(migratedProject.id, migratedProject.cropQc),
-    syncTissueSelectionStore(migratedProject.id, project.tissueSelection),
-    syncChipConfigPayloadStore(migratedProject.id, migratedProject.chipConfig),
-  ]);
+  await readModifyWriteMetas(upsertMetaIntoList(meta));
+
+  if (mode === 'metadata') {
+    // Mirror the chip-config side effect of upsertPreprocessProjectMetadata.
+    if (hasChipConfigPayload(project.chipConfig)) {
+      void syncChipConfigPayloadStore(project.id, project.chipConfig).catch(
+        (error) => {
+          console.error('Failed to sync chip config payload store', error);
+        },
+      );
+    }
+  }
 }
 
 export async function getPreprocessProject(projectId: string): Promise<PreprocessProject | undefined> {
@@ -1480,8 +1633,10 @@ export async function getPreprocessProject(projectId: string): Promise<Preproces
 }
 
 export async function deletePreprocessProject(projectId: string) {
-  const metas = await readMetas();
-  await persistMetas(metas.filter((entry) => entry.id !== projectId));
+  // Atomic filter inside a single transaction: a concurrent tab writing the
+  // metas between our read and write can no longer resurrect the deleted
+  // project (or lose its own edit to our stale snapshot).
+  await readModifyWriteMetas((metas) => metas.filter((entry) => entry.id !== projectId));
   await Promise.all(
     [
       ...PREPROCESS_SOURCE_IMAGE_KINDS.flatMap((kind) => [

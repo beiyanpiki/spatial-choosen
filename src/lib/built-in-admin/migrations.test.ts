@@ -537,4 +537,29 @@ describe('migratePreprocessProject tissue matrix migration', () => {
 			heFocusBounds,
 		);
 	});
+
+	it('backfills exclusion and CSV chip-config fields on legacy projects missing them', () => {
+		const project = createLegacyProject();
+		// A project saved before the exclusion/CSV features shipped: the fields
+		// are absent (undefined), which used to crash consumers that dereference
+		// them without guards (ExclusionControls, Step 2/6 heatmap, export).
+		const { excludedRows: _excludedRows, excludedColumns: _excludedColumns, barcodesByPosition: _barcodesByPosition, log2nGeneByPosition: _log2nGeneByPosition, csvFileName: _csvFileName, spotDiameter: _spotDiameter, ...strippedChipConfig } = project.chipConfig;
+		void _excludedRows;
+		void _excludedColumns;
+		void _barcodesByPosition;
+		void _log2nGeneByPosition;
+		void _csvFileName;
+		void _spotDiameter;
+		project.chipConfig = strippedChipConfig as LegacyPreprocessProject['chipConfig'];
+
+		const migrated = migratePreprocessProject(project);
+
+		expect(migrated.chipConfig.excludedRows).toEqual([]);
+		expect(migrated.chipConfig.excludedColumns).toEqual([]);
+		expect(migrated.chipConfig.removeExcludedRowsFromExport).toBe(false);
+		expect(migrated.chipConfig.barcodesByPosition).toEqual({});
+		expect(migrated.chipConfig.log2nGeneByPosition).toEqual({});
+		expect(migrated.chipConfig.csvFileName).toBeNull();
+		expect(migrated.chipConfig.spotDiameter).toBeNull();
+	});
 });

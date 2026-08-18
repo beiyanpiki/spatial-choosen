@@ -742,9 +742,19 @@ const normalizeProjectedSpot = (
 };
 
 const normalizeChipConfigSlice = (slice: LegacyChipConfigSlice) => {
-	const hydratedSlice = {
+	// Projects saved before the exclusion/CSV features shipped (and packages
+	// imported from older versions) may lack the fields the runtime treats as
+	// required; backfill every one so consumers can dereference them without
+	// crashing (ExclusionControls, Step 2/6 heatmap, export compression).
+	const hydratedSlice: PreprocessProject["chipConfig"] = {
 		...slice,
+		excludedRows: slice.excludedRows ?? [],
+		excludedColumns: slice.excludedColumns ?? [],
 		removeExcludedRowsFromExport: slice.removeExcludedRowsFromExport ?? false,
+		barcodesByPosition: slice.barcodesByPosition ?? {},
+		log2nGeneByPosition: slice.log2nGeneByPosition ?? {},
+		csvFileName: slice.csvFileName ?? null,
+		spotDiameter: slice.spotDiameter ?? null,
 	};
 	if (slice.projectedSpots === null) {
 		return {
@@ -763,7 +773,7 @@ const normalizeChipConfigSlice = (slice: LegacyChipConfigSlice) => {
 		return {
 			resetProjectedSpots: slice.projectedSpots.length > 0,
 			slice: {
-				...slice,
+				...hydratedSlice,
 				projectedSpots: null,
 			} satisfies PreprocessProject["chipConfig"],
 		};

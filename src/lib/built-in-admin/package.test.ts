@@ -331,6 +331,54 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.tissueSelection.matrix?.values).toHaveLength(4096);
   });
 
+  it('rejects a bare v4 .json whose declared source images carry no payload', async () => {
+    // The app's own v4 json strips dataUrls (the zip carries the blobs); a
+    // bare .json import of it would create a ghost project that can never
+    // hydrate, so the import must be rejected.
+    const project = createProject();
+    project.sourceAssets.images.eosin = createSourceImage('eosin');
+
+    const blob = createPackageBlob({
+      version: PACKAGE_VERSION,
+      project: toCanonicalProjectPayload(project),
+    });
+
+    await expect(deserializePreprocessImport(blob)).rejects.toThrow(
+      /sourceAssets\.images\.eosin\.dataUrl/,
+    );
+  });
+
+  it('still accepts a bare v1 .json with inline source dataUrls', async () => {
+    const project = createProject();
+    project.sourceAssets.images.eosin = {
+      ...createSourceImage('eosin'),
+      dataUrl: 'data:image/png;base64,AA==',
+    };
+
+    // v1 packages carry the legacy region-first tissue selection fields.
+    const canonical = toCanonicalProjectPayload(project);
+    const legacyPayload = {
+      ...canonical,
+      tissueSelection: {
+        ...canonical.tissueSelection,
+        forcedInSpotIds: [],
+        forcedOutSpotIds: [],
+        overrideNotice: null,
+        regions: [],
+        selectedRegionId: null,
+      },
+    };
+
+    const blob = createPackageBlob({
+      version: 1,
+      project: legacyPayload,
+    });
+
+    const result = await deserializePreprocessImport(blob);
+
+    expect(result.sourceAssets.images.eosin?.id).toBe('eosin-source');
+  });
+
   it('rejects import before File checks outside browser runtime', async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal('window', undefined);

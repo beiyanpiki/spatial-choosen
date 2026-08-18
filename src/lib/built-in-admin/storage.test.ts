@@ -737,6 +737,46 @@ describe('preprocess storage tissue metadata', () => {
     expect(hydrated?.heFocus.focusedImageDataUrl).toBe('blob:image/png:24');
   });
 
+  it('does not commit metadata when a full-mode payload sync fails', async () => {
+    const project = createProject();
+    // A blob: URL forces syncDerivedImageStore through fetch(); the failure
+    // must not leave the project listed but unopenable (the metadata is
+    // written only after the payload stores succeed).
+    project.heFocus.focusedImageDataUrl = 'blob:unfetchable';
+
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(upsertPreprocessProject(project)).rejects.toThrow('Failed to fetch');
+
+    const metas = readStoredMetas();
+    expect(metas.find((entry) => entry.id === project.id)).toBeUndefined();
+  });
+
+  it('preserves the previous metadata when a full-mode payload sync fails mid-save', async () => {
+    const project = createProject();
+    await upsertPreprocessProject(project);
+
+    // A later save with a blob: URL that cannot be fetched fails in the
+    // payload phase; the previously committed metadata must stay intact.
+    project.name = 'Renamed mid-session';
+    project.heFocus.focusedImageDataUrl = 'blob:unfetchable';
+    project.updatedAt = '2026-04-14T00:01:00.000Z';
+
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(upsertPreprocessProject(project)).rejects.toThrow('Failed to fetch');
+
+    const hydrated = await getPreprocessProject(project.id);
+    expect(hydrated?.name).toBe('Storage Project');
+    expect(hydrated?.updatedAt).not.toBe('2026-04-14T00:01:00.000Z');
+  });
+
   it('hydrates selectedSpotIds from canonical matrix truth instead of persisted runtime ids', async () => {
     const project = createProject();
 

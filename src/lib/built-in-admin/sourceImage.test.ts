@@ -101,6 +101,23 @@ describe('preprocess source image working proxy', () => {
     ]);
   });
 
+  it('rejects images whose decoded dimensions exceed the pixel cap', async () => {
+    installCanvasMock(() => 256);
+
+    class HugeImage extends MockImage {
+      naturalWidth = 21000;
+      naturalHeight = 21000;
+    }
+    vi.stubGlobal('Image', HugeImage);
+    vi.stubGlobal('window', { Image: HugeImage });
+
+    const file = new File([new Uint8Array(4096)], 'huge.png', {
+      type: 'image/png',
+    });
+
+    await expect(buildSourceImage(file, 'eosin')).rejects.toThrow(/pixel limit/);
+  });
+
   it('records original source dimensions and JPEG working dimensions on image import', async () => {
     installCanvasMock((mimeType) => (mimeType === 'image/jpeg' ? 1024 : 256));
 

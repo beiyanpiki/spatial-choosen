@@ -40,4 +40,9 @@ export const PREPROCESS_NUMERIC_DEFAULTS = {
 
 export const PREPROCESS_OVERSIZED_IMAGE_LIMITS = {
   hardBytes: 512 * 1024 * 1024,
+  // Decoded-image caps: a compressed 20000x20000 TIFF decodes to ~1.6GB of
+  // RGBA in memory, so a byte cap alone cannot protect the tab. 100MP with a
+  // 20000px longest edge keeps full-size canvas decoding within safe bounds.
+  maxPixels: 100 * 1024 * 1024,
+  maxLongestEdge: 20000,
 } as const;

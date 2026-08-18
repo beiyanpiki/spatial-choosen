@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { PreprocessPoint, ProjectedSpot, TissueSelectionSlice } from '@/types/built-in-admin';
 
 import {
+  buildInvertedTissueSelectionState,
   buildManualTissueSelectionState,
   buildUpdatedProjectSnapshot,
 } from './projectUpdates';
@@ -295,6 +296,112 @@ describe('projectUpdates helpers', () => {
     });
     expect(deactivated.warning).toBeNull();
     expect(deactivated.error).toBeNull();
+  });
+
+  it('sets a single spot to the activate-tool value instead of toggling', () => {
+    const next = buildManualTissueSelectionState({
+      current: createTissueSelection({
+        matrix: createEmptyMatrix(2, 2),
+        selectedSpotIds: [],
+      }),
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-a',
+      nextValue: 1,
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:02:15.000Z',
+    });
+
+    expect(next.matrix?.values).toEqual([1, 0, 0, 0]);
+    expect(next.selectedSpotIds).toEqual(['spot-a']);
+  });
+
+  it('sets a single spot to the deactivate-tool value even when the spot is already inactive', () => {
+    const current = createTissueSelection({
+      matrix: {
+        rows: 2,
+        columns: 2,
+        values: [0, 0, 0, 0],
+      },
+      selectedSpotIds: [],
+    });
+
+    const next = buildManualTissueSelectionState({
+      current,
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-a',
+      nextValue: 0,
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:02:20.000Z',
+    });
+
+    // Toggle semantics would have ACTIVATED the spot; the tool value keeps it
+    // inactive and the slice is returned unchanged.
+    expect(next).toBe(current);
+    expect(next.matrix?.values).toEqual([0, 0, 0, 0]);
+  });
+
+  it('deactivates a previously active spot via the deactivate tool', () => {
+    const next = buildManualTissueSelectionState({
+      current: createTissueSelection({
+        matrix: {
+          rows: 2,
+          columns: 2,
+          values: [1, 0, 0, 0],
+        },
+        selectedSpotIds: ['spot-a'],
+      }),
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-a',
+      nextValue: 0,
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:02:25.000Z',
+    });
+
+    expect(next.matrix?.values).toEqual([0, 0, 0, 0]);
+    expect(next.selectedSpotIds).toEqual([]);
+  });
+
+  it('does not invert a selection before any detection has run', () => {
+    const current = createTissueSelection({
+      matrix: null,
+      selectedSpotIds: null,
+      autoSelectedSpotIds: [],
+    });
+
+    const next = buildInvertedTissueSelectionState({
+      current,
+      projectedSpots: PROJECTED_SPOTS,
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:06:00.000Z',
+    });
+
+    expect(next).toBe(current);
+    expect(next.matrix).toBeNull();
+  });
+
+  it('inverts an existing matrix and re-derives the selection', () => {
+    const next = buildInvertedTissueSelectionState({
+      current: createTissueSelection({
+        matrix: {
+          rows: 2,
+          columns: 2,
+          values: [1, 0, 0, 1],
+        },
+        selectedSpotIds: ['spot-a', 'spot-d'],
+      }),
+      projectedSpots: PROJECTED_SPOTS,
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:06:00.000Z',
+    });
+
+    expect(next.matrix?.values).toEqual([0, 1, 1, 0]);
+    expect(next.selectedSpotIds).toEqual(['spot-b', 'spot-c']);
+    expect(next.status).toBe('complete');
   });
 
   it('keeps auto-selected ids as debug-only state and does not let them override manual matrix truth', () => {
