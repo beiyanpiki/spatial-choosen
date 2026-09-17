@@ -1,5 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -207,16 +207,81 @@ describe('AlignmentPanel', () => {
     expect(screen.getByText(/For genuinely small tissue/)).toHaveTextContent(
       'If the overlay is correct, choose Force continue to proceed.',
     );
-    expect(screen.getByLabelText('Zoom out HE image')).toBeInTheDocument();
-    expect(screen.getByLabelText('Zoom in HE image')).toBeInTheDocument();
-    expect(screen.getByLabelText('Rotate HE left 90 degrees')).toBeInTheDocument();
-    expect(screen.getByLabelText('Rotate HE right 90 degrees')).toBeInTheDocument();
-    expect(screen.getByLabelText('Rotate HE left 1 degree')).toBeInTheDocument();
-    expect(screen.getByLabelText('Rotate HE right 1 degree')).toBeInTheDocument();
-    expect(screen.getByLabelText('Flip HE horizontally')).toBeInTheDocument();
-    expect(screen.getByLabelText('Flip HE vertically')).toBeInTheDocument();
+    expect(screen.queryByTestId('alignment-moving-view-controls')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Zoom out HE image')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Zoom in HE image')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Rotate HE left 90 degrees')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Rotate HE right 90 degrees')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Rotate HE left 1 degree')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Rotate HE right 1 degree')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Flip HE horizontally')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Flip HE vertically')).not.toBeInTheDocument();
+
+    const targetLayer = await screen.findByTestId('alignment-target-image-transform-layer');
+    const targetViewport = targetLayer.parentElement;
+    expect(targetViewport).not.toBeNull();
+    const widthBeforeWheel = targetViewport ? getComputedStyle(targetViewport).width : null;
+
+    fireEvent.wheel(screen.getByTestId('alignment-add-point-he'), {
+      clientX: 320,
+      clientY: 240,
+      deltaY: -100,
+    });
+
+    await waitFor(() => {
+      expect(targetViewport ? getComputedStyle(targetViewport).width : null).not.toBe(widthBeforeWheel);
+    });
     expect(screen.getByAltText('HE landmarks (moving)')).toBeInTheDocument();
     expect(screen.getByTestId('alignment-workflow-instruction')).not.toHaveTextContent('H&E');
+  });
+
+  it('lays out registration controls in normal flow with stable action groups', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={createSourceImage('he')}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    const layout = screen.getByTestId('alignment-layout');
+    const workflowCard = screen.getByTestId('alignment-workflow-overlay');
+    const messages = screen.getByTestId('alignment-messages');
+    const canvasGrid = screen.getByTestId('alignment-canvas-grid');
+
+    expect(Array.from(layout.children).slice(0, 3)).toEqual([
+      workflowCard,
+      messages,
+      canvasGrid,
+    ]);
+    expect(getComputedStyle(workflowCard).position).not.toBe('absolute');
+    expect(
+      within(screen.getByTestId('alignment-pair-actions'))
+        .getAllByRole('button')
+        .map((button) => button.textContent?.trim()),
+    ).toEqual([
+      'Move NATA Align Image Point',
+      'Move HE point',
+      'Delete pair',
+      'Cancel',
+    ]);
+    expect(
+      within(screen.getByTestId('alignment-workspace-actions'))
+        .getAllByRole('button')
+        .map((button) => button.textContent?.trim()),
+    ).toEqual(['Registration Preview', 'Undo last point', 'Clear All Pairs']);
+    expect(
+      within(screen.getByTestId('alignment-decision-actions'))
+        .getAllByRole('button')
+        .map((button) => button.textContent?.trim()),
+    ).toEqual(['Review Registration']);
   });
 
   it('removes only the retired workflow hints', () => {
@@ -457,7 +522,11 @@ describe('AlignmentPanel', () => {
 
 		const forceButton = await screen.findByTestId('alignment-force-accept');
 		expect(forceButton).toBeEnabled();
-		expect(forceButton).toHaveTextContent('Force continue');
+		expect(
+			within(screen.getByTestId('alignment-decision-actions'))
+				.getAllByRole('button')
+				.map((button) => button.textContent?.trim()),
+		).toEqual(['Review Registration', 'Force continue']);
 
 		const user = userEvent.setup();
 		await user.click(forceButton);

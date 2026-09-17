@@ -120,8 +120,8 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
   return (
     <Stack
       spacing={4}
-      w={{ base: '100%', xl: '272px' }}
-      minW={{ base: '100%', xl: '272px' }}
+      w={{ base: '100%', md: '240px', lg: '240px', xl: '272px' }}
+      minW={{ base: '100%', md: '240px', lg: '240px', xl: '272px' }}
       alignSelf='stretch'
       data-testid='preprocess-workflow-rail'
     >
