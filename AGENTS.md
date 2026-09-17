@@ -1,63 +1,45 @@
-# PROJECT KNOWLEDGE BASE
+# Repository Guidelines
 
-**Generated:** 2026-03-26 11:30:40 +08
-**Commit:** fd055c8
-**Branch:** main
+## Project Structure & Module Organization
 
-## OVERVIEW
-Next.js 16 / React 19 / TypeScript strict app for loading spatial transcriptomics bundles, storing projects locally in the browser, and annotating tissue regions on a canvas.
-The repo is small but concentrated: most behavior lives in two large client routes under `src/app/` and a browser-only utility layer under `src/lib/`.
+This is a strict TypeScript Next.js 16/React 19 application using the App Router and Chakra UI. Most work belongs under `src/`:
 
-## STRUCTURE
-```text
-spatial-choosen/
-├── src/app/             # App Router UI; Chakra-based client pages
-├── src/lib/             # Bundle decoding, storage, chip math, export helpers
-├── src/types/           # Shared project data model
-├── .spec-workflow/      # Spec/steering templates; mostly scaffolding today
-├── public/              # Stock static assets from starter template
-├── task.md              # Historical product brief in Chinese
-└── README.md            # Mostly create-next-app boilerplate
-```
+- `src/app/` — routes, providers, and route-specific UI; the preprocessing workspace lives in `src/app/preprocess/`.
+- `src/lib/` — bundle decoding, storage, geometry, export, and browser-only domain helpers; preprocessing logic is in `src/lib/preprocess/`.
+- `src/types/` — shared project and preprocessing data models.
+- `public/` — static assets, chip manifests/templates, and vendored OpenCV files.
+- `docs/` — supporting documentation and images.
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-|------|----------|-------|
-| App shell, metadata, global provider | `src/app/layout.tsx`, `src/app/providers.tsx`, `src/theme.ts` | Chakra provider + Space Grotesk theme wrapper |
-| Home / project creation / import flows | `src/app/page.tsx` | Large client page; bundle upload, project list, quota handling |
-| Annotation workspace | `src/app/spatial/page.tsx` | Largest hotspot; canvas, geometry, region editing, export |
-| Browser persistence | `src/lib/projects.ts` | localStorage metadata + IndexedDB blobs/matrix split |
-| Bundle decoding / numpy parsing | `src/lib/bundleDecoder.ts` | Base64 decode, coord extraction, Fortran-to-C reorder |
-| Chip layout math | `src/lib/chip.ts` | Normalized chip rect + spot grid generation |
-| Portable project import/export | `src/lib/projectPackage.ts` | `.spatialproj` packaging |
-| Shared domain types | `src/types/project.ts` | `Project`, `Region`, `Spot`, chip/matrix types |
-| Spec workflow templates | `.spec-workflow/templates/` | Template content, not runtime behavior |
+Co-located `AGENTS.md` files contain additional route- and layer-specific conventions; read the nearest one before editing those areas.
 
-## CONVENTIONS
-- App Router is present, but both main routes are client-heavy (`'use client'`). Do not assume server actions or backend APIs exist here.
-- Use the `@/*` path alias from `tsconfig.json`; repo code already imports through `@/lib`, `@/types`, `@/theme`.
-- Chakra UI is the active UI system. Layout/stateful UI work should match Chakra patterns before introducing custom styling.
-- Browser storage is intentionally split: lightweight project metadata in `localStorage`, image/matrix payloads in IndexedDB.
-- Geometry/storage helpers normalize image-relative coordinates to `0..1`; UI code converts to pixels only for rendering.
+## Build, Test, and Development Commands
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Do not move image or matrix payloads back into `localStorage`; `src/lib/projects.ts` explicitly separates them for quota reasons.
-- Do not assume `README.md` captures product behavior; it is mostly starter boilerplate.
-- Do not infer current repo rules from `.spec-workflow/templates/*`; those files are generic scaffolds, not implemented architecture.
-
-## UNIQUE STYLES
-- User-visible copy emphasizes “local only” behavior and browser persistence.
-- The home page and annotation workspace both end with the `@M20 Genomics` footer text.
-- The app supports `.spatialproj` exports plus CSV result exports; storage/export concerns are first-class, not add-ons.
-
-## COMMANDS
 ```bash
-npm run dev
-npm run build
-npm run lint
+npm ci                 # Install dependencies from package-lock.json
+npm run dev            # Start Next.js at http://localhost:3000
+npm run build          # Type-check and create the production build
+npm run lint           # Run ESLint with Next.js and TypeScript rules
+npm run test:unit      # Run all Vitest unit and component tests
 ```
 
-## NOTES
-- No project tests or CI workflows are committed right now; `package-lock.json` mentions Playwright, but there is no checked-in Playwright config or test suite.
-- `task.md` is worth reading for original product intent around chip rectangles, spot grids, and bundle structure.
-- `public/` still contains stock starter SVG assets and is not central to app behavior.
+`npm run test:unit -- src/lib/preprocess/alignment.test.ts` runs a focused test file.
+
+## Coding Style & Naming Conventions
+
+- Use two-space indentation, strict TypeScript, and the existing `@/*` import alias.
+- Name React components and types in `PascalCase`; use `camelCase` for functions, variables, and hooks.
+- Prefer Chakra components and props over ad-hoc CSS for interface work.
+- Keep browser-dependent code guarded or confined to client components.
+- ESLint uses the flat configuration in `eslint.config.mjs`; do not add generated, vendored, or build output to lint scopes.
+
+## Testing Guidelines
+
+Vitest runs Node tests for `src/**/*.test.ts` and jsdom component tests for `src/**/*.test.tsx`; `src/test/setup.ts` configures the DOM environment. Co-locate tests with their modules and use descriptive suffixes such as `.interaction.test.tsx` or `.rotation-contract.test.tsx`. Add regression coverage for bug fixes and meaningful domain behavior. No coverage threshold is currently configured.
+
+## Commit & Pull Request Guidelines
+
+Recent history favors concise Conventional Commits, especially `feat(preprocess): ...` and `fix(preprocess): ...`; otherwise use a short imperative subject. Pull requests should explain the change and user-visible behavior, link relevant issues, show test/build results, and include screenshots or recordings for UI changes. Call out storage-format, migration, or preprocessing-package compatibility impacts.
+
+## Security & Data Handling
+
+Do not commit sensitive sample images, patient data, or generated archives. Keep large binaries out of `localStorage`; follow the existing IndexedDB/localStorage split.
