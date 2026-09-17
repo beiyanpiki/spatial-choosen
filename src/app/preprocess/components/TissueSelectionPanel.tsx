@@ -25,6 +25,8 @@ import type { PreprocessPoint, ProjectedSpot } from '@/types/preprocess';
 
 export type ToolMode = 'activate' | 'deactivate';
 
+const CLICK_MOVEMENT_THRESHOLD_PX = 4;
+
 type TissueSelectionPanelProps = {
   eosinCropDataUrl: string | null;
   projectedSpots: ProjectedSpot[];
@@ -35,6 +37,7 @@ type TissueSelectionPanelProps = {
   tool?: ToolMode;
   onToolChange?: (tool: ToolMode) => void;
   onEditCommit?: (editArea: PreprocessPoint[]) => void;
+  onSpotToggle?: (spotId: string) => void;
 };
 
 export function TissueSelectionPanel({
@@ -47,6 +50,7 @@ export function TissueSelectionPanel({
   tool: controlledTool,
   onToolChange,
   onEditCommit,
+  onSpotToggle,
 }: TissueSelectionPanelProps) {
   const [internalTool, setInternalTool] = useState<ToolMode>('activate');
   const [zoom, setZoom] = useState(1);
@@ -62,6 +66,8 @@ export function TissueSelectionPanel({
   const pathRef = useRef<PreprocessPoint[]>([]);
   const canvasRefreshFrameRef = useRef<number | null>(null);
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerMovedRef = useRef(false);
   const drawingActiveRef = useRef(false);
   const panningActiveRef = useRef(false);
   const [hostRect, setHostRect] = useState<DOMRect | null>(null);
@@ -85,11 +91,21 @@ export function TissueSelectionPanel({
     }
 
     const image = new Image();
-    image.src = eosinCropDataUrl;
     image.onload = () => {
       loadedImageRef.current = image;
       setImageDimensions({ width: image.width, height: image.height });
       requestCanvasRefresh();
+    };
+    image.onerror = () => {
+      loadedImageRef.current = null;
+      setImageDimensions(null);
+      requestCanvasRefresh();
+    };
+    image.src = eosinCropDataUrl;
+
+    return () => {
+      image.onload = null;
+      image.onerror = null;
     };
   }, [eosinCropDataUrl, requestCanvasRefresh]);
 
@@ -133,10 +149,8 @@ export function TissueSelectionPanel({
   }, [eosinCropDataUrl, imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
-  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}59`, []);
-  const assignedSpotStrokeColor = '#1a202c8c';
-  const neutralSpotFillColor = '#e5e5e533';
-  const neutralSpotStrokeColor = '#a0a0a059';
+  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}40`, []);
+  const neutralSpotFillColor = '#e5e5e520';
 
   const computeBaseViewCb = useCallback(
     () => computeBaseView(hostRect, ratio),
@@ -192,6 +206,8 @@ export function TissueSelectionPanel({
     setIsDrawing(false);
     setIsPanning(false);
     panStartRef.current = null;
+    pointerStartRef.current = null;
+    pointerMovedRef.current = false;
     requestCanvasRefresh();
   }, [requestCanvasRefresh]);
 
@@ -203,8 +219,11 @@ export function TissueSelectionPanel({
         return;
       }
 
+      if (event.button !== 0 && event.button !== 1) {
+        return;
+      }
+
       const isMiddleButton = event.button === 1;
-      const point = screenToImage(event);
       event.currentTarget.setPointerCapture(event.pointerId);
 
       if (isMiddleButton) {
@@ -215,11 +234,14 @@ export function TissueSelectionPanel({
         return;
       }
 
+      const point = screenToImage(event);
       if (!point) {
         return;
       }
 
       pathRef.current = [point];
+      pointerStartRef.current = { x: event.clientX, y: event.clientY };
+      pointerMovedRef.current = false;
       drawingActiveRef.current = true;
       setIsDrawing(true);
       requestCanvasRefresh();
@@ -246,11 +268,22 @@ export function TissueSelectionPanel({
         return;
       }
 
-      const point = screenToImage(event);
-      if (!drawingActiveRef.current || !point) {
+      if (!drawingActiveRef.current) {
         return;
       }
 
+      const pointerStart = pointerStartRef.current;
+      if (pointerStart && Math.hypot(
+        event.clientX - pointerStart.x,
+        event.clientY - pointerStart.y,
+      ) > CLICK_MOVEMENT_THRESHOLD_PX) {
+        pointerMovedRef.current = true;
+      }
+
+      const point = screenToImage(event);
+      if (!point) {
+        return;
+      }
       pathRef.current.push(point);
       requestCanvasRefresh();
     },
@@ -284,16 +317,45 @@ export function TissueSelectionPanel({
       drawingActiveRef.current = false;
       setIsDrawing(false);
       const committedPath = [...pathRef.current];
+      const pointerStart = pointerStartRef.current;
+      const pointerUpMoved = pointerStart !== null && Math.hypot(
+        event.clientX - pointerStart.x,
+        event.clientY - pointerStart.y,
+      ) > CLICK_MOVEMENT_THRESHOLD_PX;
+      const pointerMoved = pointerMovedRef.current || pointerUpMoved;
       pathRef.current = [];
+      pointerStartRef.current = null;
+      pointerMovedRef.current = false;
       requestCanvasRefresh();
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-      if (committedPath.length >= 3) {
+      const clickPoint = pointerMoved ? undefined : committedPath[0];
+      if (clickPoint && showSpots) {
+        const clickedSpot = projectedSpots.find((spot) => {
+          const width = spot.width ?? spot.diameterX ?? 0;
+          const height = spot.height ?? spot.diameterY ?? width;
+          return Math.abs(clickPoint.x - spot.x) <= width / 2
+            && Math.abs(clickPoint.y - spot.y) <= height / 2;
+        });
+        if (clickedSpot) {
+          onSpotToggle?.(clickedSpot.id);
+        }
+      } else if (pointerMoved && committedPath.length >= 3) {
         onEditCommit?.(committedPath);
       }
     },
-    [disabled, onEditCommit, requestCanvasRefresh, resetInteractionState],
+    [disabled, onEditCommit, onSpotToggle, projectedSpots, requestCanvasRefresh, resetInteractionState, showSpots],
+  );
+
+  const handlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      resetInteractionState();
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [resetInteractionState],
   );
 
   const applyZoom = useCallback(
@@ -330,6 +392,7 @@ export function TissueSelectionPanel({
         return;
       }
 
+      event.preventDefault();
       const delta = event.deltaY > 0 ? 0.9 : 1.1;
       applyZoom(zoom * delta, anchorNorm, anchorScreen);
     },
@@ -379,8 +442,6 @@ export function TissueSelectionPanel({
         const selected = selectedSpotIdSet.has(spot.id);
         ctx.fillStyle = selected ? assignedSpotFillColor : neutralSpotFillColor;
         ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
-        ctx.strokeStyle = selected ? assignedSpotStrokeColor : neutralSpotStrokeColor;
-        ctx.strokeRect(spotX, spotY, spotWidth, spotHeight);
       }
     }
 
@@ -426,14 +487,14 @@ export function TissueSelectionPanel({
             direction={{ base: 'column', md: 'row' }}
           >
             <Stack spacing={1}>
-              <Text fontSize='lg' fontWeight='semibold'>Tissue workspace</Text>
+              <Text fontSize='lg' fontWeight='semibold'>Tissue Spot Selection</Text>
               <Text fontSize='sm' color='gray.500'>
-                Review the tissue canvas, run auto detection, then refine the matrix with activate and deactivate freehand edits.
+                Automatically identify tissue-covered spots and refine the selection manually if needed.
               </Text>
             </Stack>
             <HStack spacing={3} wrap='wrap' justify={{ base: 'flex-start', md: 'flex-end' }}>
               <Text data-testid='tissue-panel-selected-count' fontSize='sm' color='gray.600'>
-                Selected spots: {selectedSpotIds.length}
+                Number of Tissue Spots: {selectedSpotIds.length}
               </Text>
             </HStack>
           </Flex>
@@ -457,8 +518,7 @@ export function TissueSelectionPanel({
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerUp}
-              onPointerCancel={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
               onWheel={handleWheel}
             />
           </Box>
@@ -471,7 +531,7 @@ export function TissueSelectionPanel({
                 isDisabled={disabled}
                 onClick={() => handleToolChange('activate')}
               >
-                Activate
+                Mark as tissue
               </Button>
               <Button
                 data-testid='tissue-tool-deactivate'
@@ -479,7 +539,7 @@ export function TissueSelectionPanel({
                 isDisabled={disabled}
                 onClick={() => handleToolChange('deactivate')}
               >
-                Deactivate
+                Mark as background
               </Button>
             </ButtonGroup>
           ) : null}

@@ -11,44 +11,44 @@ type StepItem = {
 export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
   {
     id: 'sourceAssets',
-    label: 'Source',
-    description: 'Upload Eosin + H&E inputs',
+    label: 'Upload Images',
+    description: 'Upload the NATA Align image and the corresponding H&E image.',
     testId: 'preprocess-step-source-assets',
   },
   {
     id: 'localization',
-    label: 'Localize',
-    description: 'Place the chip footprint',
+    label: 'Define Capture Area',
+    description: 'Position the capture area on the NATA Align image.',
     testId: 'preprocess-step-localize',
   },
   {
     id: 'heFocus',
-    label: 'HE Focus',
-    description: 'Focus the working H&E area',
+    label: 'H&E ROI Alignment',
+    description: 'Select the corresponding ROI in the H&E image.',
     testId: 'preprocess-step-he-focus',
   },
   {
     id: 'alignment',
-    label: 'Align',
-    description: 'Register both source images',
+    label: 'Image Registration',
+    description: 'Create landmark pairs and register the images.',
     testId: 'preprocess-step-align',
   },
   {
     id: 'cropQc',
-    label: 'Crop',
-    description: 'Inspect crop + QC bounds',
+    label: 'Registration Review',
+    description: 'Review the registration results using Checkerboard, Landmark Pair, and Overlay views.',
     testId: 'preprocess-step-crop',
   },
   {
     id: 'tissueSelection',
-    label: 'Tissue',
-    description: 'Select capture regions',
+    label: 'Tissue Spot Selection',
+    description: 'Automatically detect and manually refine tissue spots.',
     testId: 'preprocess-step-tissue',
   },
   {
     id: 'exportState',
-    label: 'Export',
-    description: 'Package outputs for handoff',
+    label: 'Export Preprocessing Package',
+    description: 'Download the preprocessing package for downstream analysis in NATA Insight Bioinformatics Software.',
     testId: 'preprocess-step-export',
   },
 ] as const;
@@ -102,7 +102,7 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
     case 'alignment':
       return project.heFocus.status === 'complete';
     case 'cropQc':
-      return project.alignment.status === 'complete' && project.alignment.qualityFlags.accepted;
+      return project.alignment.status === 'complete' && (project.alignment.qualityFlags.accepted || project.alignment.forceAccepted);
     case 'chipConfig':
       return project.cropQc.status === 'complete';
     case 'tissueSelection':
@@ -135,11 +135,11 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
         py={4}
       >
         <Stack spacing={1}>
-          <Heading size='sm'>Workflow</Heading>
-          <Text fontSize='sm' color='gray.500'>Move step-by-step and keep downstream stages valid.</Text>
+          <Heading size='sm'>Preprocessing Workflow</Heading>
+          <Text fontSize='sm' color='gray.500'>Complete each step in sequence to generate the preprocessing results required for downstream analysis.</Text>
         </Stack>
       </Box>
-      {PREPROCESS_STEP_ITEMS.map((step) => {
+      {PREPROCESS_STEP_ITEMS.map((step, index) => {
         const stepState = stepStateFor(project, step.id);
         const isActive = step.id === visibleCurrentStep;
         const enabled = isStepEnabled(project, step.id);
@@ -171,9 +171,9 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
             isDisabled={!enabled}
             onClick={() => onStepSelect(step.id)}
           >
-            <Stack spacing={1} textAlign='left' flex='1'>
+            <Stack spacing={1} textAlign='left' flex='1' minW={0}>
               <Text fontSize='xs' fontWeight='semibold' letterSpacing='0.12em' textTransform='uppercase' color={isActive ? 'whiteAlpha.800' : 'gray.400'}>
-                {step.id}
+                Step {index + 1}
               </Text>
               <Text fontWeight='semibold'>{step.label}</Text>
               <Text fontSize='xs' whiteSpace='normal' color={isActive ? 'whiteAlpha.900' : 'gray.500'}>
@@ -182,6 +182,7 @@ export function StepSidebar({ currentStep, onStepSelect, project }: StepSidebarP
             </Stack>
             <Badge
               ml={3}
+              flexShrink={0}
               colorScheme={statusToneByStep[stepState.status] ?? 'gray'}
               textTransform='capitalize'
               borderRadius='full'

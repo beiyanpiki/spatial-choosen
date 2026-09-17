@@ -35,16 +35,12 @@ type TissueSelectionControlsProps = {
 
 const THRESHOLD_MODE_OPTIONS: ThresholdMode[] = ['raw', 'gray-max', 'gray-min'];
 const TOOL_OPTIONS: Array<{ label: string; value: TissueTool }> = [
-  { label: 'Activate', value: 'activate' },
-  { label: 'Deactivate', value: 'deactivate' },
+  { label: 'Mark as tissue', value: 'activate' },
+  { label: 'Mark as background', value: 'deactivate' },
 ];
 
 function parseActivationThresholdInput(value: string) {
   if (!/^\d*\.?\d+$/.test(value)) {
-    return null;
-  }
-
-  if (value.startsWith('.') && value.length < 3) {
     return null;
   }
 
@@ -111,18 +107,18 @@ export function TissueSelectionControls({
     setBlockThresholdInput(String(blockThreshold));
   }, [blockThreshold]);
 
-  const blockThresholdLabel = thresholdMode === 'raw' ? 'Saturation threshold' : 'Block threshold';
+  const blockThresholdLabel = thresholdMode === 'raw' ? 'Saturation Threshold' : 'Background cutoff';
 
   return (
     <Stack spacing={4}>
       <Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
         <CardBody p={4}>
           <Stack spacing={4}>
-            <Text fontSize="sm" fontWeight="semibold">Auto detection</Text>
+            <Text fontSize="sm" fontWeight="semibold">Automatic Tissue Detection</Text>
             {isUnsupported ? (
               <Stack spacing={1}>
                 <Text fontSize="sm" color="orange.700">
-                  Tissue selection currently supports only 15um and 50um chips.
+                  Tissue auto-selection currently supports only 15um and 50um capture chips.
                 </Text>
                 {unsupportedReason ? (
                   <Text fontSize="sm" color="gray.600">
@@ -132,7 +128,7 @@ export function TissueSelectionControls({
               </Stack>
             ) : null}
             <FormControl isDisabled={isUnsupported || isDetecting}>
-              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Threshold mode</FormLabel>
+              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Signal mode</FormLabel>
               <Select
                 value={thresholdMode}
                 onChange={(event) => onThresholdModeChange(event.target.value as ThresholdMode)}
@@ -146,7 +142,7 @@ export function TissueSelectionControls({
               </Select>
             </FormControl>
             <FormControl isDisabled={isUnsupported || isDetecting}>
-              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Activation threshold</FormLabel>
+              <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Tissue Signal Threshold</FormLabel>
               <Input
                 type="number"
                 step="0.01"
@@ -205,11 +201,11 @@ export function TissueSelectionControls({
               data-testid="tissue-run-auto"
               colorScheme="brand"
               isLoading={isDetecting}
-              loadingText="Detecting tissue"
+              loadingText="Selecting tissue spots"
               isDisabled={isUnsupported || hasInvalidLocalThresholdState}
               onClick={onRunAutoDetection}
             >
-              Run auto detection
+              Detect Tissue Spots
             </Button>
           </Stack>
         </CardBody>
@@ -218,7 +214,7 @@ export function TissueSelectionControls({
       <Card border="1px solid" borderColor="gray.200" borderRadius="2xl" boxShadow="sm" bg="white">
         <CardBody p={4}>
           <Stack spacing={3}>
-            <Text fontSize="sm" fontWeight="semibold">Selection controls</Text>
+            <Text fontSize="sm" fontWeight="semibold">Manual Refinement</Text>
             <Button
               data-testid="tissue-show-spots-toggle"
               variant="outline"
@@ -226,7 +222,7 @@ export function TissueSelectionControls({
               isDisabled={isUnsupported || isDetecting}
               onClick={() => onShowSpotsChange(!showSpots)}
             >
-              {showSpots ? 'Hide spots' : 'Show spots'}
+              {showSpots ? 'Hide spot grid' : 'Show spot grid'}
             </Button>
             <Button
               data-testid="tissue-invert-selection"

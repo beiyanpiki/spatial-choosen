@@ -1,12 +1,6 @@
 "use client";
 
 import {
-	ChevronDownIcon,
-	ChevronUpIcon,
-	CloseIcon,
-	InfoOutlineIcon,
-} from "@chakra-ui/icons";
-import {
 	Badge,
 	Box,
 	Button,
@@ -14,7 +8,6 @@ import {
 	Flex,
 	Heading,
 	HStack,
-	IconButton,
 	Stack,
 	Text,
 } from "@chakra-ui/react";
@@ -53,8 +46,6 @@ import type {
 
 type AlignmentPanelProps = {
 	alignment: AlignmentSlice;
-	autoProposalStatus?: "idle" | "accepted" | "fallback" | "failed";
-	autoProposalMethod?: string | null;
 	chipBounds: PreprocessRect | null;
 	movingImage: PreprocessSourceImage | null;
 	onSolveAccepted: () => void;
@@ -62,7 +53,6 @@ type AlignmentPanelProps = {
 		updater: (current: AlignmentSlice) => AlignmentSlice,
 		options?: { invalidateDownstream?: boolean },
 	) => void;
-	onRecomputeAutoLocalization?: () => void;
 	referenceImage: PreprocessSourceImage | null;
 	referenceImageTransform: LocalizationImageTransform;
 	showMovingImagePaddingBoundary: boolean;
@@ -114,17 +104,6 @@ type PanSession = {
 	pointerId: number;
 };
 
-type HelpOverlayState = "expanded" | "collapsed" | "hidden";
-
-const HELP_COPY = {
-	expanded: "Drag to pan. Wheel to zoom. Add or adjust landmarks in order.",
-	collapsed: "Pan, zoom, and place landmarks.",
-	reopen: "Show canvas help",
-	minimize: "Minimize canvas help",
-	expand: "Expand canvas help",
-	dismiss: "Dismiss canvas help",
-} as const;
-
 const clamp = (value: number, min: number, max: number) =>
 	Math.min(max, Math.max(min, value));
 
@@ -164,9 +143,6 @@ function LandmarkCanvas({
 		width: number;
 		height: number;
 	} | null>(null);
-	const [helpOverlayState, setHelpOverlayState] =
-		useState<HelpOverlayState>("expanded");
-
 	useEffect(() => {
 		const node = hostElement;
 		if (!node) return;
@@ -187,9 +163,11 @@ function LandmarkCanvas({
 		() =>
 			computeBaseView(
 				viewport,
-				Math.max(1, (image.width ?? 1) / Math.max(1, image.height ?? 1)),
+				Math.max(1, image.workingWidth && image.workingHeight
+					? image.workingWidth / image.workingHeight
+					: (image.width ?? 1) / Math.max(1, image.height ?? 1)),
 			),
-		[image.height, image.width, viewport],
+		[image.workingWidth, image.workingHeight, image.height, image.width, viewport],
 	);
 
 	const [zoom, setZoom] = useState(1);
@@ -407,88 +385,6 @@ function LandmarkCanvas({
 				boxShadow="sm"
 				data-testid={`${testIdPrefix}-canvas-container`}
 			>
-				<Box
-					position="absolute"
-					left={4}
-					bottom={4}
-					zIndex={2}
-					pointerEvents="none"
-				>
-					{helpOverlayState === "hidden" ? (
-						<IconButton
-							aria-label={HELP_COPY.reopen}
-							icon={<InfoOutlineIcon boxSize={4} />}
-							size="sm"
-							variant="outline"
-							onClick={() => setHelpOverlayState("expanded")}
-							pointerEvents="auto"
-							bg="blackAlpha.700"
-							color="whiteAlpha.900"
-							borderColor="whiteAlpha.300"
-							_hover={{ bg: "blackAlpha.800" }}
-							_active={{ bg: "blackAlpha.800" }}
-							data-testid={`${testIdPrefix}-help-reopen`}
-						/>
-					) : (
-						<Stack
-							spacing={helpOverlayState === "expanded" ? 2 : 1}
-							bg="blackAlpha.700"
-							color="whiteAlpha.900"
-							px={3}
-							py={2}
-							borderRadius="lg"
-							maxW={helpOverlayState === "expanded" ? "320px" : "220px"}
-							pointerEvents="auto"
-						>
-							<Flex align="center" gap={2} minW={0}>
-								<Text fontSize="xs" fontWeight="semibold" flex="1" minW={0}>
-									{title}
-								</Text>
-								<HStack spacing={1} flexShrink={0}>
-									<IconButton
-										aria-label={
-											helpOverlayState === "expanded"
-												? HELP_COPY.minimize
-												: HELP_COPY.expand
-										}
-										icon={
-											helpOverlayState === "expanded" ? (
-												<ChevronDownIcon boxSize={4} />
-											) : (
-												<ChevronUpIcon boxSize={4} />
-											)
-										}
-										size="xs"
-										variant="ghost"
-										color="whiteAlpha.900"
-										onClick={() =>
-											setHelpOverlayState((current) =>
-												current === "expanded" ? "collapsed" : "expanded",
-											)
-										}
-										_hover={{ bg: "whiteAlpha.200" }}
-										_active={{ bg: "whiteAlpha.200" }}
-									/>
-									<IconButton
-										aria-label={HELP_COPY.dismiss}
-										icon={<CloseIcon boxSize={2.5} />}
-										size="xs"
-										variant="ghost"
-										color="whiteAlpha.900"
-										onClick={() => setHelpOverlayState("hidden")}
-										_hover={{ bg: "whiteAlpha.200" }}
-										_active={{ bg: "whiteAlpha.200" }}
-									/>
-								</HStack>
-							</Flex>
-							<Text fontSize="xs" color="whiteAlpha.900">
-								{helpOverlayState === "expanded"
-									? HELP_COPY.expanded
-									: HELP_COPY.collapsed}
-							</Text>
-						</Stack>
-					)}
-				</Box>
 				{panelContent ? (
 					<Box position="absolute" top={4} right={4} zIndex={2}>
 						{panelContent}
@@ -526,7 +422,7 @@ function LandmarkCanvas({
 									data-testid={`${testIdPrefix}-image-transform-layer`}
 									style={{
 										transformOrigin: "center center",
-										transform: `rotate(${imageTransform.rotationDegrees}deg) scale(${imageTransform.flipHorizontal ? -1 : 1}, ${imageTransform.flipVertical ? -1 : 1})`,
+										transform: `scale(${imageTransform.flipHorizontal ? -1 : 1}, ${imageTransform.flipVertical ? -1 : 1}) rotate(${imageTransform.rotationDegrees}deg)`,
 									}}
 								>
 									<img
@@ -643,13 +539,10 @@ function LandmarkCanvas({
 
 export function AlignmentPanel({
 	alignment,
-	autoProposalStatus = "idle",
-	autoProposalMethod = null,
 	chipBounds,
 	movingImage,
 	onSolveAccepted,
 	onAlignmentChange,
-	onRecomputeAutoLocalization,
 	referenceImage,
 	referenceImageTransform,
 	showMovingImagePaddingBoundary,
@@ -665,6 +558,7 @@ export function AlignmentPanel({
 		"idle" | "loading" | "ready" | "error"
 	>("idle");
 	const [runtimeError, setRuntimeError] = useState<string | null>(null);
+	const [runtimeRetryCount, setRuntimeRetryCount] = useState(0);
 
 	const hasBothImages = Boolean(
 		referenceImage?.dataUrl && movingImage?.dataUrl,
@@ -701,7 +595,7 @@ export function AlignmentPanel({
 		return () => {
 			cancelled = true;
 		};
-	}, [hasBothImages]);
+	}, [hasBothImages, runtimeRetryCount]);
 
   const resetSolveState = useCallback(
     (current: AlignmentSlice): AlignmentSlice => ({
@@ -721,6 +615,7 @@ export function AlignmentPanel({
 				accepted: false,
 			},
 			solveAccepted: false,
+			forceAccepted: false,
 			failureReason: null,
 			transform: null,
 			status: computeAlignmentStatus({
@@ -889,18 +784,15 @@ export function AlignmentPanel({
 				return;
 			}
 
-			mutateControlPoints(
-				(controlPoints) =>
-					controlPoints.map((pair) =>
-						pair.id === repositionPairId
-							? imageKey === "source"
-								? { ...pair, source: point }
-								: { ...pair, target: point }
-							: pair,
-					),
-				{
-					afterApply: clearLocalInteractionState,
-				},
+			mutateControlPoints((controlPoints) =>
+				controlPoints.map((pair) =>
+					pair.id === repositionPairId
+						? imageKey === "source"
+							? { ...pair, source: point }
+							: { ...pair, target: point }
+						: pair,
+				),
+				{ preserveSelection: true },
 			);
 		},
 		[
@@ -929,32 +821,24 @@ export function AlignmentPanel({
 
 	const workflowInstruction = useMemo(() => {
 		if (alignment.solveAccepted) {
-			return alignment.source === "auto"
-				? "Review the automatic solution, then keep it or clear it before placing manual landmarks."
-				: "Alignment accepted. Continue to crop QC or keep adjusting landmarks if something looks off.";
+			return "Registration accepted. Continue to crop QC or adjust landmarks if the overlay looks off.";
 		}
 		if (interactionMode === "awaiting-source") {
-			return "Use wheel zoom and drag pan on the eosin canvas, then click it to place the reference landmark for a new pair.";
+			return "Use wheel zoom and drag pan on the eosin reference, then click to place the next reference landmark.";
 		}
 		if (interactionMode === "awaiting-target") {
-			return "Pan or zoom as needed, then click the H&E canvas to complete the landmark pair.";
+			return "Pan or zoom the HE image as needed, then click the matching landmark to complete the pair.";
 		}
 		if (interactionMode === "reposition-source") {
-			return "Use the eosin canvas to choose the new reference landmark position for the selected pair.";
+			return "Click the eosin reference to move the selected pair's reference landmark.";
 		}
 		if (interactionMode === "reposition-target") {
-			return "Use the H&E canvas to choose the new moving-image landmark position for the selected pair.";
+			return "Click the HE image to move the selected pair's matching landmark.";
 		}
 		return selectedPair
-			? "Selected pair ready. Reposition either point, delete the pair, or continue solving while using pan and zoom directly on the canvases."
-			: "Start on the eosin canvas, using wheel zoom and drag pan as needed before placing the next reference point.";
-	}, [alignment.solveAccepted, alignment.source, interactionMode, selectedPair]);
-
-	const autoAlignmentAccepted =
-		alignment.source === "auto" && alignment.solveAccepted;
-	const autoAlignmentFallback =
-		autoProposalStatus === "fallback" || autoProposalStatus === "failed";
-	const autoAlignmentMethodLabel = autoProposalMethod ?? "mask-ecc-v1";
+			? "Selected pair ready. Move either landmark, delete the pair, or solve registration."
+			: "Start on the eosin reference, then place the matching landmark on the HE image.";
+	}, [alignment.solveAccepted, interactionMode, selectedPair]);
 
 	const sourcePoints = useMemo<EditorPoint[]>(
 		() =>
@@ -1041,6 +925,7 @@ export function AlignmentPanel({
                   ransacReprojThreshold: result.ransacReprojThreshold,
                   qualityFlags: result.qualityFlags,
 					solveAccepted: result.solveAccepted,
+					forceAccepted: false,
 					failureReason: result.failureReason,
 					transform: result.transform,
 					status: computeAlignmentStatus({
@@ -1060,6 +945,22 @@ export function AlignmentPanel({
 				onAlignmentChange((current) => ({
 					...current,
 					solveAccepted: false,
+					forceAccepted: false,
+					source: null,
+					affineMatrix: null,
+					transform: null,
+					inlierMask: null,
+					reprojectionRmse: null,
+					inlierRatio: null,
+					ransacReprojThreshold: null,
+					qualityFlags: {
+						minPairs: current.controlPoints.length >= ALIGNMENT_MIN_PAIRS,
+						inlierRatio: false,
+						rmse: false,
+						finiteMatrix: false,
+						scaleRange: false,
+						accepted: false,
+					},
 					failureReason: "solve-failed",
 					status: "error",
 					error:
@@ -1078,10 +979,30 @@ export function AlignmentPanel({
 			onAlignmentChange,
 			onSolveAccepted,
 			referenceImage?.dataUrl,
-			referenceImage?.height,
-			referenceImage?.width,
-		],
-	);
+		referenceImage?.height,
+		referenceImage?.width,
+	],
+);
+
+	const handleForceAccept = useCallback(() => {
+		if (!alignment.affineMatrix) return;
+		onAlignmentChange((current) => ({
+			...current,
+			forceAccepted: true,
+			solveAccepted: true,
+			failureReason: null,
+			status: "complete",
+			isStale: false,
+			updatedAt: new Date().toISOString(),
+			error: null,
+		}));
+		onSolveAccepted();
+	}, [alignment.affineMatrix, onAlignmentChange, onSolveAccepted]);
+
+	const canForceAccept =
+		Boolean(alignment.affineMatrix) &&
+		!alignment.solveAccepted &&
+		!alignment.forceAccepted;
 
 	if (!referenceImage?.dataUrl || !movingImage?.dataUrl) {
 		return (
@@ -1093,14 +1014,14 @@ export function AlignmentPanel({
 				bg="orange.50"
 			>
 				<Stack spacing={2}>
-					<Heading size="sm">Alignment needs both source images</Heading>
+					<Heading size="sm">Registration needs both source images</Heading>
 					<Text color="orange.800" fontSize="sm">
-						Eosin and H&E images must be present before landmark pairing and
-						alignment solving can run.
+						Eosin and HE images must be present before landmark pairing and
+						registration solving can run.
 					</Text>
 					<Text color="orange.700" fontSize="sm">
-						Return to Source Assets to upload or replace the missing image, then
-						re-check localization before continuing.
+						Return to Source images to upload or replace the missing image, then
+						recheck chip localization before continuing.
 					</Text>
 				</Stack>
 			</Box>
@@ -1140,7 +1061,7 @@ export function AlignmentPanel({
 								letterSpacing="0.12em"
 								color="gray.500"
 							>
-								Guided alignment workflow
+								Image Registration
 							</Text>
 							<Badge
 								colorScheme={
@@ -1154,7 +1075,7 @@ export function AlignmentPanel({
 								data-testid="alignment-pair-count-badge"
 								data-pair-count={alignment.controlPoints.length}
 							>
-								Pairs {alignment.controlPoints.length} /{" "}
+								Landmark Pairs: {alignment.controlPoints.length} /{" "}
 								{ALIGNMENT_TARGET_PAIRS}
 							</Badge>
 						</Flex>
@@ -1192,7 +1113,10 @@ export function AlignmentPanel({
 						<Badge
 							colorScheme={
 								alignment.solveAccepted
-									? "green"
+									? alignment.forceAccepted &&
+										  !alignment.qualityFlags.accepted
+										? "orange"
+										: "green"
 									: alignment.failureReason
 										? "red"
 										: "gray"
@@ -1202,10 +1126,14 @@ export function AlignmentPanel({
 							py={1}
 							data-testid="alignment-status"
 							data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
+							data-force-accepted={alignment.forceAccepted ? "true" : "false"}
 							data-failure-reason={alignment.failureReason ?? ""}
 						>
 							{alignment.solveAccepted
-								? "Accepted"
+								? alignment.forceAccepted &&
+									  !alignment.qualityFlags.accepted
+									? "Force accepted"
+									: "Accepted"
 								: alignment.failureReason
 									? "Rejected"
 									: "Not solved"}
@@ -1226,83 +1154,6 @@ export function AlignmentPanel({
 						) : null}
 					</Flex>
 				</Flex>
-				{autoAlignmentAccepted ? (
-					<Box
-						border="1px solid"
-						borderColor="green.200"
-						bg="green.50"
-						borderRadius="lg"
-						px={3}
-						py={2}
-						data-testid="alignment-auto-status"
-					>
-						<Flex
-							direction={{ base: "column", md: "row" }}
-							align={{ base: "flex-start", md: "center" }}
-							justify="space-between"
-							gap={3}
-						>
-							<Stack spacing={0.5}>
-								<Text fontSize="sm" fontWeight="semibold" color="green.800">
-									Automatic alignment accepted ({autoAlignmentMethodLabel})
-								</Text>
-								<Text fontSize="xs" color="green.700">
-									Keep this result or clear it to return to manual landmarks.
-								</Text>
-							</Stack>
-							<Button
-								size="xs"
-								variant="outline"
-								colorScheme="green"
-								onClick={() => {
-									onAlignmentChange((current) => resetSolveState(current));
-									clearLocalInteractionState();
-								}}
-								data-testid="alignment-auto-clear"
-							>
-								Clear automatic result
-							</Button>
-						</Flex>
-					</Box>
-				) : null}
-				{autoAlignmentFallback ? (
-					<Box
-						border="1px solid"
-						borderColor="orange.200"
-						bg="orange.50"
-						borderRadius="lg"
-						px={3}
-						py={2}
-						data-testid="alignment-auto-recovery"
-					>
-						<Flex
-							direction={{ base: "column", md: "row" }}
-							align={{ base: "flex-start", md: "center" }}
-							justify="space-between"
-							gap={3}
-						>
-							<Stack spacing={0.5}>
-								<Text fontSize="sm" fontWeight="semibold" color="orange.800">
-									Automatic refinement unavailable; add manual points or adjust HE focus
-								</Text>
-								<Text fontSize="xs" color="orange.700">
-									After editing HE focus, rerun auto-localization from the existing focus step.
-								</Text>
-							</Stack>
-							<Button
-								size="xs"
-								variant="outline"
-								colorScheme="orange"
-								onClick={() => {
-									onRecomputeAutoLocalization?.();
-								}}
-								data-testid="alignment-auto-recompute"
-							>
-								Adjust HE focus
-							</Button>
-						</Flex>
-					</Box>
-				) : null}
 				<Flex gap={2} wrap="wrap" align="center">
 					<Button
 						size="sm"
@@ -1320,7 +1171,7 @@ export function AlignmentPanel({
 						isDisabled={!selectedPairId}
 						data-testid="alignment-select-reposition-source"
 					>
-						Move eosin point
+						Move NATA Align Image Point
 					</Button>
 					<Button
 						size="sm"
@@ -1338,7 +1189,7 @@ export function AlignmentPanel({
 						isDisabled={!selectedPairId}
 						data-testid="alignment-select-reposition-target"
 					>
-						Move H&E point
+						Move HE point
 					</Button>
 					<Button
 						size="sm"
@@ -1380,7 +1231,7 @@ export function AlignmentPanel({
 						onClick={() => setShowDiagnostics((current) => !current)}
 						data-testid="alignment-diagnostics-toggle"
 					>
-						{showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
+						Registration Preview
 					</Button>
 					<Button
 						size="sm"
@@ -1418,10 +1269,10 @@ export function AlignmentPanel({
 							onAlignmentChange((current) => resetSolveState(current));
 							clearLocalInteractionState();
 						}}
-						isDisabled={alignment.controlPoints.length === 0 && alignment.source !== "auto"}
+						isDisabled={alignment.controlPoints.length === 0}
 						data-testid="alignment-reset"
 					>
-						Reset pairs
+						Clear All Pairs
 					</Button>
 					<Button
 						size="sm"
@@ -1431,8 +1282,20 @@ export function AlignmentPanel({
 						isDisabled={!canSolve}
 						data-testid="alignment-run-solve"
 					>
-						Solve alignment
+						Review Registration
 					</Button>
+					{canForceAccept ? (
+						<Button
+							size="sm"
+							colorScheme="orange"
+							variant="solid"
+							boxShadow="sm"
+							onClick={handleForceAccept}
+							data-testid="alignment-force-accept"
+						>
+							Force continue
+						</Button>
+					) : null}
 				</Flex>
 			</Stack>
 		</Box>
@@ -1467,7 +1330,7 @@ export function AlignmentPanel({
 					</Flex>
 					<ButtonGroup size="sm" isAttached variant="outline">
 						<Button
-							aria-label="Zoom out H&E image"
+							aria-label="Zoom out HE image"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1491,7 +1354,7 @@ export function AlignmentPanel({
 							−
 						</Button>
 						<Button
-							aria-label="Zoom in H&E image"
+							aria-label="Zoom in HE image"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1532,7 +1395,7 @@ export function AlignmentPanel({
 					</Flex>
 					<ButtonGroup size="sm" variant="outline" isAttached flexWrap="wrap">
 						<Button
-							aria-label="Rotate H&E left 90 degrees"
+							aria-label="Rotate HE left 90 degrees"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1554,7 +1417,7 @@ export function AlignmentPanel({
 							↺90
 						</Button>
 						<Button
-							aria-label="Rotate H&E right 90 degrees"
+							aria-label="Rotate HE right 90 degrees"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1576,7 +1439,7 @@ export function AlignmentPanel({
 							↻90
 						</Button>
 						<Button
-							aria-label="Rotate H&E left 1 degree"
+							aria-label="Rotate HE left 1 degree"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1598,7 +1461,7 @@ export function AlignmentPanel({
 							↺1
 						</Button>
 						<Button
-							aria-label="Rotate H&E right 1 degree"
+							aria-label="Rotate HE right 1 degree"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1632,7 +1495,7 @@ export function AlignmentPanel({
 					</Text>
 					<ButtonGroup size="sm" variant="outline" isAttached>
 						<Button
-							aria-label="Flip H&E horizontally"
+							aria-label="Flip HE horizontally"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1655,7 +1518,7 @@ export function AlignmentPanel({
 							⇋
 						</Button>
 						<Button
-							aria-label="Flip H&E vertically"
+							aria-label="Flip HE vertically"
 							color="white"
 							borderColor="whiteAlpha.400"
 							_hover={{ bg: "whiteAlpha.200" }}
@@ -1713,25 +1576,41 @@ export function AlignmentPanel({
 
 	return (
 		<Stack spacing={5}>
-			<Box position="relative" pt={{ base: 52, xl: 44 }}>
+			<Box position="relative" pt={{ base: "416px", xl: 96 }}>
 				{workflowOverlay}
 				{coverage.warning ? (
-					<Text
-						fontSize="sm"
-						color="orange.600"
-						mb={3}
-						data-testid="alignment-distribution-warning"
-					>
-						Landmark spread is narrow. Coverage ratios are
-						{formatPercent(coverage.coverageRatioX)} width and
-						{formatPercent(coverage.coverageRatioY)} height, below the
-						{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
-					</Text>
+					<Stack spacing={1} mb={3}>
+						<Text
+							fontSize="sm"
+							color="orange.600"
+							data-testid="alignment-distribution-warning"
+						>
+							Landmark spread is narrow. Coverage ratios are{" "}
+							{formatPercent(coverage.coverageRatioX)} width and{" "}
+							{formatPercent(coverage.coverageRatioY)} height, below the{" "}
+							{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
+						</Text>
+						<Text fontSize="sm" color="orange.700">
+							For genuinely small tissue, review the registration first. If the
+							overlay is correct, choose Force continue to proceed.
+						</Text>
+					</Stack>
 				) : null}
 				{runtimeError ? (
-					<Text fontSize="sm" color="red.600" mb={3}>
-						{runtimeError}
-					</Text>
+					<Flex gap={3} align={{ base: "flex-start", sm: "center" }} wrap="wrap" mb={3}>
+						<Text fontSize="sm" color="red.600">
+							{runtimeError}
+						</Text>
+						<Button
+							size="xs"
+							colorScheme="red"
+							variant="outline"
+							onClick={() => setRuntimeRetryCount((count) => count + 1)}
+							data-testid="alignment-retry-opencv"
+						>
+							Retry OpenCV
+						</Button>
+					</Flex>
 				) : null}
 				<Flex direction={{ base: "column", xl: "row" }} gap={4} align="stretch">
 					<LandmarkCanvas
@@ -1755,7 +1634,7 @@ export function AlignmentPanel({
 						imageTransform={alignment.movingImageTransform}
 						points={targetPoints}
 						pendingPoint={null}
-						title="H&E landmarks (moving)"
+						title="HE landmarks (moving)"
 						interactionMode={interactionMode}
 						selectedPairId={selectedPairId}
 						showImageBoundary={showMovingImagePaddingBoundary}

@@ -614,30 +614,30 @@ describe("spot projection canonical crop contract", () => {
 	});
 
 	it("remains source-agnostic once downstream work is reduced to canonical crop dimensions", () => {
-		const automaticAcceptedProjection = projectSpotsForCrop({
+		const firstProjection = projectSpotsForCrop({
 			chip,
 			templateEntries,
 			cropWidth: 400,
 			cropHeight: 300,
 		});
 
-		const manualAcceptedProjection = projectSpotsForCrop({
+		const secondProjection = projectSpotsForCrop({
 			chip,
 			templateEntries,
 			cropWidth: 400,
 			cropHeight: 300,
 		});
 
-		expect(automaticAcceptedProjection).toEqual(manualAcceptedProjection);
+		expect(firstProjection).toEqual(secondProjection);
 		expect(
 			resolveAuthoritativeSpotDiameterFullres({
-				projectedSpots: automaticAcceptedProjection,
+				projectedSpots: firstProjection,
 				cropWidth: 400,
 				cropHeight: 300,
 			}),
 		).toBe(
 			resolveAuthoritativeSpotDiameterFullres({
-				projectedSpots: manualAcceptedProjection,
+				projectedSpots: secondProjection,
 				cropWidth: 400,
 				cropHeight: 300,
 			}),

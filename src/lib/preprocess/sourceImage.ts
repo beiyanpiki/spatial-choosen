@@ -2,7 +2,7 @@
 
 import * as UTIF from 'utif';
 import type { PreprocessImageKind, PreprocessSourceImage } from '@/types/preprocess';
-import { PREPROCESS_NUMERIC_DEFAULTS } from './constants';
+import { PREPROCESS_NUMERIC_DEFAULTS, PREPROCESS_WORKING_PROXY_MAX_BYTES } from '@/lib/preprocess/constants';
 import { checkSourceImageFileSize } from './safety';
 
 type DecodedSourceImage = {
@@ -12,6 +12,14 @@ type DecodedSourceImage = {
   sourceUrl: string;
   thumbnailBlob?: Blob;
   workingBlob?: Blob;
+  workingHeight?: number;
+  workingWidth?: number;
+  width: number;
+};
+
+type WorkingProxyBlob = {
+  blob: Blob;
+  height: number;
   width: number;
 };
 
@@ -25,14 +33,14 @@ const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve
   image.src = src;
 });
 
-const canvasToBlob = (canvas: HTMLCanvasElement, mimeType = 'image/png') => new Promise<Blob>((resolve, reject) => {
+const canvasToBlob = (canvas: HTMLCanvasElement, mimeType = 'image/png', quality?: number) => new Promise<Blob>((resolve, reject) => {
   canvas.toBlob((blob) => {
     if (blob) {
       resolve(blob);
       return;
     }
     reject(new Error('Canvas export failed'));
-  }, mimeType);
+  }, mimeType, quality);
 });
 
 const disposeCanvas = (canvas: HTMLCanvasElement) => {
@@ -74,6 +82,90 @@ const createDownsampledBlobFromSource = async (
   }
 };
 
+const JPEG_PROXY_QUALITY_STEPS = [0.92, 0.82, 0.72, 0.62, 0.52, 0.42, 0.32] as const;
+
+const createProxyCanvas = (
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  width: number,
+  height: number,
+) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    disposeCanvas(canvas);
+    throw new Error('Canvas 2D context unavailable for image proxy creation');
+  }
+
+  context.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  return canvas;
+};
+
+const getFallbackProxyDimensions = (
+  currentWidth: number,
+  currentHeight: number,
+  previousSize: number,
+) => {
+  const ratio = previousSize > 0
+    ? Math.sqrt(PREPROCESS_WORKING_PROXY_MAX_BYTES / previousSize) * 0.9
+    : 0.75;
+  const scale = Math.min(0.75, Math.max(0.1, ratio));
+
+  return {
+    width: Math.max(1, Math.floor(currentWidth * scale)),
+    height: Math.max(1, Math.floor(currentHeight * scale)),
+  };
+};
+
+const createWorkingProxyBlobFromSource = async (
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+): Promise<WorkingProxyBlob> => {
+  let dimensions = getDownsampledDimensions(
+    sourceWidth,
+    sourceHeight,
+    PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
+  );
+
+  while (true) {
+    const canvas = createProxyCanvas(source, sourceWidth, sourceHeight, dimensions.width, dimensions.height);
+    try {
+      let smallestBlob: Blob | null = null;
+
+      for (const quality of JPEG_PROXY_QUALITY_STEPS) {
+        const blob = await canvasToBlob(canvas, 'image/jpeg', quality);
+        if (!smallestBlob || blob.size < smallestBlob.size) {
+          smallestBlob = blob;
+        }
+        if (blob.size <= PREPROCESS_WORKING_PROXY_MAX_BYTES) {
+          return {
+            blob,
+            width: dimensions.width,
+            height: dimensions.height,
+          };
+        }
+      }
+
+      if (!smallestBlob) {
+        throw new Error('JPEG proxy export failed');
+      }
+
+      if (dimensions.width === 1 && dimensions.height === 1) {
+        throw new Error('JPEG working proxy exceeds preprocess size limits');
+      }
+
+      dimensions = getFallbackProxyDimensions(dimensions.width, dimensions.height, smallestBlob.size);
+    } finally {
+      disposeCanvas(canvas);
+    }
+  }
+};
+
 const createThumbnailBlob = async (src: string, maxEdge: number = PREPROCESS_NUMERIC_DEFAULTS.thumbnailMaxDimension) => {
   const image = await loadImageElement(src);
   const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
@@ -83,12 +175,16 @@ const createThumbnailBlob = async (src: string, maxEdge: number = PREPROCESS_NUM
   canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
 
   const context = canvas.getContext('2d');
-  if (!context) {
-    return fetch(src).then((response) => response.blob());
-  }
+  try {
+    if (!context) {
+      throw new Error('Canvas 2D context unavailable for image thumbnail creation');
+    }
 
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return canvasToBlob(canvas, 'image/png');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return await canvasToBlob(canvas, 'image/png');
+  } finally {
+    disposeCanvas(canvas);
+  }
 };
 
 const isTiffFile = (file: File) => TIFF_MIME_TYPES.has(file.type.toLowerCase()) || TIFF_FILE_NAME.test(file.name);
@@ -104,18 +200,17 @@ const decodeBrowserNativeImage = async (file: File): Promise<DecodedSourceImage>
     throw error;
   }
 
-  const [thumbnailBlob, workingBlob] = await Promise.all([
+  const [thumbnailBlob, workingProxy] = await Promise.all([
     createDownsampledBlobFromSource(
       image,
       image.naturalWidth,
       image.naturalHeight,
       PREPROCESS_NUMERIC_DEFAULTS.thumbnailMaxDimension,
     ),
-    createDownsampledBlobFromSource(
+    createWorkingProxyBlobFromSource(
       image,
       image.naturalWidth,
       image.naturalHeight,
-      PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
     ),
   ]);
 
@@ -125,7 +220,9 @@ const decodeBrowserNativeImage = async (file: File): Promise<DecodedSourceImage>
     sourceBlob,
     sourceUrl,
     thumbnailBlob,
-    workingBlob,
+    workingBlob: workingProxy.blob,
+    workingWidth: workingProxy.width,
+    workingHeight: workingProxy.height,
     width: image.naturalWidth,
   };
 };
@@ -159,10 +256,10 @@ const decodeTiffImage = async (file: File): Promise<DecodedSourceImage> => {
 
   context.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
   try {
-    const [sourceBlob, thumbnailBlob, workingBlob] = await Promise.all([
+    const [sourceBlob, thumbnailBlob, workingProxy] = await Promise.all([
       canvasToBlob(canvas, 'image/png'),
       createDownsampledBlobFromSource(canvas, width, height, PREPROCESS_NUMERIC_DEFAULTS.thumbnailMaxDimension),
-      createDownsampledBlobFromSource(canvas, width, height, PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension),
+      createWorkingProxyBlobFromSource(canvas, width, height),
     ]);
 
     return {
@@ -171,7 +268,9 @@ const decodeTiffImage = async (file: File): Promise<DecodedSourceImage> => {
       sourceBlob,
       sourceUrl: URL.createObjectURL(sourceBlob),
       thumbnailBlob,
-      workingBlob,
+      workingBlob: workingProxy.blob,
+      workingWidth: workingProxy.width,
+      workingHeight: workingProxy.height,
       width,
     };
   } finally {
@@ -188,20 +287,32 @@ export async function buildSourceImage(file: File, kind: PreprocessImageKind): P
   const decoded = isTiffFile(file)
     ? await decodeTiffImage(file)
     : await decodeBrowserNativeImage(file);
-  const [thumbnailBlob, workingBlob] = await Promise.all([
+  const [thumbnailBlob, workingProxy] = await Promise.all([
     decoded.thumbnailBlob ?? createThumbnailBlob(decoded.sourceUrl),
-    decoded.workingBlob ?? createThumbnailBlob(decoded.sourceUrl, PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension),
+    decoded.workingBlob
+      ? Promise.resolve({
+          blob: decoded.workingBlob,
+          width: decoded.workingWidth,
+          height: decoded.workingHeight,
+        })
+      : loadImageElement(decoded.sourceUrl).then((sourceImage) => createWorkingProxyBlobFromSource(
+          sourceImage,
+          sourceImage.naturalWidth,
+          sourceImage.naturalHeight,
+        )),
   ]);
   const thumbnailObjectUrl = URL.createObjectURL(thumbnailBlob);
-  const workingObjectUrl = URL.createObjectURL(workingBlob);
-  const workingDimensions = getDownsampledDimensions(
+  const workingObjectUrl = URL.createObjectURL(workingProxy.blob);
+  const fallbackWorkingDimensions = getDownsampledDimensions(
     decoded.width,
     decoded.height,
     PREPROCESS_NUMERIC_DEFAULTS.workingMaxDimension,
   );
 
   return {
-    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${kind}-${Date.now()}`,
+    id: typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     kind,
     fileName: file.name,
     mimeType: decoded.mimeType,
@@ -211,16 +322,16 @@ export async function buildSourceImage(file: File, kind: PreprocessImageKind): P
     lastModified: file.lastModified || null,
     sourceBlob: decoded.sourceBlob,
     thumbnailBlob,
-    workingBlob,
+    workingBlob: workingProxy.blob,
     objectUrl: decoded.sourceUrl,
     thumbnailObjectUrl,
     workingObjectUrl,
     dataUrl: decoded.sourceUrl,
     thumbnailDataUrl: thumbnailObjectUrl,
     workingDataUrl: workingObjectUrl,
-    workingWidth: workingDimensions.width,
-    workingHeight: workingDimensions.height,
+    workingWidth: workingProxy.width ?? fallbackWorkingDimensions.width,
+    workingHeight: workingProxy.height ?? fallbackWorkingDimensions.height,
   };
 }
 
-export { createDownsampledBlobFromSource, createThumbnailBlob, isTiffFile, loadImageElement };
+export { createDownsampledBlobFromSource, createThumbnailBlob, createWorkingProxyBlobFromSource, isTiffFile, loadImageElement };

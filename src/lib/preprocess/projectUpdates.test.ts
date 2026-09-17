@@ -143,6 +143,74 @@ describe('projectUpdates helpers', () => {
     expect(next.error).toBeNull();
   });
 
+  it('toggles one inactive spot on without changing adjacent cells', () => {
+    const next = buildManualTissueSelectionState({
+      current: createTissueSelection({
+        matrix: createEmptyMatrix(2, 2),
+        selectedSpotIds: [],
+      }),
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-a',
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:02:15.000Z',
+    });
+
+    expect(next.matrix?.values).toEqual([1, 0, 0, 0]);
+    expect(next.selectedSpotIds).toEqual(['spot-a']);
+  });
+
+  it('toggles one active spot off without changing adjacent cells', () => {
+    const next = buildManualTissueSelectionState({
+      current: createTissueSelection({
+        matrix: {
+          rows: 2,
+          columns: 2,
+          values: [1, 0, 0, 0],
+        },
+        selectedSpotIds: ['spot-a'],
+      }),
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-a',
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:02:20.000Z',
+    });
+
+    expect(next.matrix?.values).toEqual([0, 0, 0, 0]);
+    expect(next.selectedSpotIds).toEqual([]);
+  });
+
+  it('returns the current tissue selection when the target spot has invalid matrix coordinates', () => {
+    const current = createTissueSelection({
+      matrix: createEmptyMatrix(2, 2),
+      selectedSpotIds: [],
+    });
+    const invalidSpot: ProjectedSpot = {
+      id: 'invalid-spot',
+      barcode: 'invalid-spot',
+      arrayRow: 3,
+      arrayCol: 1,
+      x: 0.5,
+      y: 0.5,
+      width: 0.2,
+      height: 0.2,
+      diameterX: 0.2,
+      diameterY: 0.2,
+    };
+
+    const next = buildManualTissueSelectionState({
+      current,
+      projectedSpots: [...PROJECTED_SPOTS, invalidSpot],
+      spotId: invalidSpot.id,
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:02:25.000Z',
+    });
+
+    expect(next).toBe(current);
+  });
+
   it('returns the current tissue selection object for empty-space edits that do not change the matrix', () => {
     const current = createTissueSelection({
       matrix: {

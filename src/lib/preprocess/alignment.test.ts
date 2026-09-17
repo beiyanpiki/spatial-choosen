@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { AlignmentControlPoint } from '@/types/preprocess';
 import {
-	AUTO_ECC_MIN,
-	applyAcceptedAutoAlignment,
-	classifyAutoRefinementOutcome,
+	ALIGNMENT_COVERAGE_THRESHOLD,
 	computeAlignmentStatus,
+	computeCoverageWarning,
 	solveAffineAlignment,
 } from './alignment';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
@@ -220,6 +219,83 @@ const weakManualControlPoints: AlignmentControlPoint[] = [
 	},
 ];
 
+const createLooseScaleControlPoints = (): AlignmentControlPoint[] => {
+	const scale = 0.006;
+	const translationX = 75;
+	const translationY = 431;
+	const referenceWidth = 1000;
+	const referenceHeight = 1000;
+	const movingWidth = 160000;
+	const movingHeight = 160000;
+	const movingPoints = [
+		{ x: 10000, y: 10000 },
+		{ x: 140000, y: 10000 },
+		{ x: 10000, y: 140000 },
+		{ x: 140000, y: 140000 },
+		{ x: 80000, y: 16000 },
+		{ x: 16000, y: 80000 },
+		{ x: 80000, y: 150000 },
+		{ x: 150000, y: 80000 },
+	];
+
+	return movingPoints.map((target, index) => ({
+		id: `loose-scale-${index + 1}`,
+		target: {
+			x: target.x / movingWidth,
+			y: target.y / movingHeight,
+		},
+		source: {
+			x: (scale * target.x + translationX) / referenceWidth,
+			y: (scale * target.y + translationY) / referenceHeight,
+		},
+	}));
+};
+
+describe('computeCoverageWarning', () => {
+	it('accepts landmark coverage matching a small 28.3% by 30.7% tissue area', () => {
+		const coverage = computeCoverageWarning(
+			[
+				{
+					id: 'small-tissue-a',
+					source: { x: 0.1, y: 0.1 },
+					target: { x: 0.12, y: 0.11 },
+				},
+				{
+					id: 'small-tissue-b',
+					source: { x: 0.383, y: 0.407 },
+					target: { x: 0.4, y: 0.42 },
+				},
+			],
+			{ x: 0, y: 0, width: 1, height: 1 },
+		);
+
+		expect(ALIGNMENT_COVERAGE_THRESHOLD).toBe(0.2);
+		expect(coverage.coverageRatioX).toBeCloseTo(0.283, 6);
+		expect(coverage.coverageRatioY).toBeCloseTo(0.307, 6);
+		expect(coverage.warning).toBe(false);
+	});
+
+	it('continues warning when either landmark axis covers less than 20%', () => {
+		const coverage = computeCoverageWarning(
+			[
+				{
+					id: 'narrow-a',
+					source: { x: 0.1, y: 0.1 },
+					target: { x: 0.1, y: 0.1 },
+				},
+				{
+					id: 'narrow-b',
+					source: { x: 0.299, y: 0.6 },
+					target: { x: 0.3, y: 0.6 },
+				},
+			],
+			{ x: 0, y: 0, width: 1, height: 1 },
+		);
+
+		expect(coverage.warning).toBe(true);
+	});
+});
+
 describe('solveAffineAlignment', () => {
 	it('keeps every marked point in all-points mode while strict acceptance rejects the solve', () => {
 		const result = solveAffineAlignment({
@@ -303,128 +379,22 @@ describe('solveAffineAlignment', () => {
 		expect(result.failureReason).toBe('insufficient-inliers');
 	});
 
-	it('downgrades weak ecc refinement to manual-required fallback', () => {
-		const result = classifyAutoRefinementOutcome({
-			coarseBounds: { x: 0.12, y: 0.18, width: 0.4, height: 0.42 },
-			eccCorrelation: AUTO_ECC_MIN - 0.01,
-			acceptedTransform: null,
-			failureReason: 'ecc-below-threshold',
+	it('accepts a clean solve when valid image scales are far below the former strict minimum', () => {
+		const result = solveAffineAlignment({
+			cv: fakeCv,
+			controlPoints: createLooseScaleControlPoints(),
+			chipBounds: { x: 0, y: 0, width: 1, height: 1 },
+			referenceImageSize: { width: 1000, height: 1000 },
+			movingImageSize: { width: 160000, height: 160000 },
+			solveMode: 'allPoints',
 		});
 
-		expect(result.accepted).toBe(false);
-		expect(result.fallbackReason).toBe('ecc-rejected');
+		expect(result.qualityFlags.scaleRange).toBe(true);
+		expect(result.qualityFlags.accepted).toBe(true);
+		expect(result.solveAccepted).toBe(true);
+		expect(result.transform?.scaleX).toBeCloseTo(0.006, 5);
+		expect(result.transform?.scaleY).toBeCloseTo(0.006, 5);
 	});
 
-	it('converts an accepted auto refinement into canonical complete alignment state', () => {
-		const acceptedTransform: NonNullable<
-			Parameters<typeof applyAcceptedAutoAlignment>[0]['acceptedTransform']
-		> = {
-			affineMatrix: [1.25, 0.1, 12, -0.05, 1.2, -8],
-			transform: {
-				translationX: 12,
-				translationY: -8,
-				rotationDegrees: -2.2906100426385296,
-				scaleX: 1.2509996003196804,
-				scaleY: 1.2041594578792296,
-				isUniformScale: false,
-			},
-		};
-		const result = applyAcceptedAutoAlignment({
-			current: {
-				status: 'ready',
-				isStale: false,
-				updatedAt: null,
-				error: null,
-				referenceImage: 'eosin',
-				movingImage: 'he',
-				movingImageTransform: {
-					rotationDegrees: 0,
-					flipHorizontal: false,
-					flipVertical: false,
-					scale: 1,
-				},
-				overlayOpacity: 0.5,
-				source: null,
-				controlPoints: [],
-				inlierMask: null,
-				affineMatrix: null,
-				reprojectionRmse: null,
-				inlierRatio: null,
-				ransacReprojThreshold: null,
-				qualityFlags: {
-					minPairs: false,
-					inlierRatio: false,
-					rmse: false,
-					finiteMatrix: false,
-					scaleRange: false,
-					accepted: false,
-				},
-				solveAccepted: false,
-				failureReason: null,
-				transform: null,
-				previewDataUrl: null,
-			},
-			autoProposal: {
-				status: 'accepted',
-				method: 'mask-ecc-v1',
-				coarseBounds: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
-				refinedBounds: { x: 0.2, y: 0.25, width: 0.4, height: 0.3 },
-				refinedQuad: null,
-				rotationDegrees: 0,
-				eccCorrelation: AUTO_ECC_MIN,
-				failureReason: null,
-			},
-			acceptedTransform,
-			hasReferenceImage: true,
-			hasMovingImage: true,
-		});
 
-		expect(result).not.toBeNull();
-		expect(result?.source).toBe('auto');
-		expect(result?.solveAccepted).toBe(true);
-		expect(result?.status).toBe('complete');
-		expect(result?.qualityFlags.accepted).toBe(true);
-		expect(result?.inlierRatio).toBe(1);
-		expect(result?.affineMatrix).toEqual(acceptedTransform.affineMatrix);
-		expect(result?.transform).toEqual(acceptedTransform.transform);
-		expect(result?.reprojectionRmse).toBe(0);
-	});
-
-	it('classifies explicit automatic refinement fallback reasons for later tasks', () => {
-		expect(
-			classifyAutoRefinementOutcome({
-				coarseBounds: null,
-				eccCorrelation: null,
-				acceptedTransform: null,
-				failureReason: 'no-coarse-match',
-			}),
-		).toEqual({
-			accepted: false,
-			fallbackReason: 'no-proposal',
-		});
-
-		expect(
-			classifyAutoRefinementOutcome({
-				coarseBounds: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-				eccCorrelation: null,
-				acceptedTransform: null,
-				failureReason: 'ecc-failed',
-			}),
-		).toEqual({
-			accepted: false,
-			fallbackReason: 'ecc-failed',
-		});
-
-		expect(
-			classifyAutoRefinementOutcome({
-				coarseBounds: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-				eccCorrelation: null,
-				acceptedTransform: null,
-				failureReason: null,
-			}),
-		).toEqual({
-			accepted: false,
-			fallbackReason: 'manual-required',
-		});
-	});
 });

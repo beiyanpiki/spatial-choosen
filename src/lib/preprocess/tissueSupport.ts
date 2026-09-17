@@ -22,7 +22,7 @@ export function resolveTissueSelectionSupport(args: TissueSupportArgs): TissueSe
   if (!args.chipType) {
     return {
       supportState: 'unsupported',
-      unsupportedReason: 'Tissue selection requires a supported chip type.',
+      unsupportedReason: 'Tissue auto-selection requires a supported capture chip.',
     };
   }
 
@@ -30,14 +30,21 @@ export function resolveTissueSelectionSupport(args: TissueSupportArgs): TissueSe
   if (!supportedGrid) {
     return {
       supportState: 'unsupported',
-      unsupportedReason: `Tissue selection does not support ${args.chipType} chips.`,
+      unsupportedReason: `Tissue auto-selection does not support ${args.chipType} capture chips.`,
+    };
+  }
+
+  if (args.rows === null || args.columns === null) {
+    return {
+      supportState: 'unsupported',
+      unsupportedReason: 'Tissue auto-selection requires configured spot-grid dimensions.',
     };
   }
 
   if (args.rows !== supportedGrid.rows || args.columns !== supportedGrid.columns) {
     return {
       supportState: 'unsupported',
-      unsupportedReason: `${args.chipType} tissue selection requires a ${formatRequiredGrid(supportedGrid.rows, supportedGrid.columns)} grid.`,
+      unsupportedReason: `${args.chipType} tissue auto-selection requires a ${formatRequiredGrid(supportedGrid.rows, supportedGrid.columns)} spot grid.`,
     };
   }
 

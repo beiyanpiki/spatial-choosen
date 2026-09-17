@@ -3,12 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { buildEmptyPreprocessProject } from '@/app/preprocess/projectState';
 
 import {
-  invalidateOnAcceptedAlignmentProvenanceChange,
-  invalidateOnHeFocusAutoProposalChange,
   invalidateOnHeFocusChange,
   invalidateOnHeFocusChipBoundsChange,
   invalidateOnHeFocusCommit,
-  invalidateOnLocalizationChange,
 } from './invalidation';
 
 const createCanonicalCropAssets = () => ({
@@ -37,28 +34,13 @@ const createDownstreamProject = () => {
     ...project.heFocus,
     status: 'complete',
     chipBounds: { x: 0.25, y: 0.2, width: 0.35, height: 0.35 },
-    autoProposal: {
-      status: 'accepted',
-      method: 'mask-ecc-v1',
-      coarseBounds: { x: 0.2, y: 0.15, width: 0.45, height: 0.45 },
-      refinedBounds: { x: 0.25, y: 0.2, width: 0.35, height: 0.35 },
-      refinedQuad: [
-        { x: 0.25, y: 0.2 },
-        { x: 0.6, y: 0.2 },
-        { x: 0.6, y: 0.55 },
-        { x: 0.25, y: 0.55 },
-      ],
-      rotationDegrees: 1.5,
-      eccCorrelation: 0.91,
-      failureReason: null,
-    },
     focusedImageDataUrl: 'blob:focused-preview',
   };
 
   project.alignment = {
     ...project.alignment,
     status: 'complete',
-    source: 'auto',
+    source: 'manual',
     affineMatrix: [1, 0, 0, 0, 1, 0],
     reprojectionRmse: 0.25,
     inlierRatio: 0.9,
@@ -171,31 +153,7 @@ const createDownstreamProject = () => {
   return project;
 };
 
-describe('preprocess invalidation auto-localization contract', () => {
-  it('ignores runtime preview blobs in canonical preprocess state', () => {
-    const project = buildEmptyPreprocessProject('Invalidation project');
-    project.heFocus = {
-      ...project.heFocus,
-      status: 'complete',
-      autoProposal: {
-        status: 'fallback',
-        method: 'mask-ecc-v1',
-        coarseBounds: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-        refinedBounds: null,
-        refinedQuad: null,
-        rotationDegrees: null,
-        eccCorrelation: null,
-        failureReason: 'ecc-failed',
-      },
-      focusedImageDataUrl: 'blob:focused-preview',
-    };
-
-    const invalidated = invalidateOnLocalizationChange(project);
-
-    expect(invalidated.heFocus.focusedImageDataUrl).toBeNull();
-    expect(invalidated.heFocus.autoProposal).toEqual(project.heFocus.autoProposal);
-  });
-
+describe('preprocess invalidation contract', () => {
   it('changing he focus chip bounds clears the full downstream dependency chain', () => {
     const project = createDownstreamProject();
 
@@ -232,37 +190,4 @@ describe('preprocess invalidation auto-localization contract', () => {
     expect(invalidatedOnChange).toEqual(invalidatedOnCommit);
   });
 
-  it('changing he focus auto proposal clears alignment and crop qc only', () => {
-    const project = createDownstreamProject();
-
-    const invalidated = invalidateOnHeFocusAutoProposalChange(project);
-
-    expect(invalidated.alignment.status).toBe('stale');
-    expect(invalidated.alignment.source).toBeNull();
-    expect(invalidated.cropQc.status).toBe('stale');
-    expect(invalidated.cropQc.qcAccepted).toBe(false);
-    expect(invalidated.localization).toEqual(project.localization);
-    expect(invalidated.chipConfig).toEqual(project.chipConfig);
-    expect(invalidated.tissueSelection).toEqual(project.tissueSelection);
-    expect(invalidated.exportState).toEqual(project.exportState);
-  });
-
-  it('changing accepted alignment provenance clears crop qc only', () => {
-    const project = createDownstreamProject();
-    project.alignment = {
-      ...project.alignment,
-      source: 'manual',
-    };
-
-    const invalidated = invalidateOnAcceptedAlignmentProvenanceChange(project);
-
-    expect(invalidated.alignment).toEqual(project.alignment);
-    expect(invalidated.cropQc.status).toBe('stale');
-    expect(invalidated.cropQc.qcAccepted).toBe(false);
-    expect(invalidated.localization).toEqual(project.localization);
-    expect(invalidated.heFocus).toEqual(project.heFocus);
-    expect(invalidated.chipConfig).toEqual(project.chipConfig);
-    expect(invalidated.tissueSelection).toEqual(project.tissueSelection);
-    expect(invalidated.exportState).toEqual(project.exportState);
-  });
 });

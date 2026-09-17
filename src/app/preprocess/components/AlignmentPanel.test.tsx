@@ -145,41 +145,166 @@ const createAlignmentSlice = (): AlignmentSlice => ({
     accepted: false,
   },
   solveAccepted: false,
+  forceAccepted: false,
   failureReason: null,
   transform: null,
   previewDataUrl: null,
 });
 
-const createAcceptedAutoAlignmentSlice = (): AlignmentSlice => ({
-	...createAlignmentSlice(),
-	status: 'complete',
-  source: 'auto',
-  controlPoints: [],
-  inlierMask: [],
-  affineMatrix: [1, 0, 10, 0, 1, 12],
-  reprojectionRmse: 0,
-	inlierRatio: 1,
-	qualityFlags: {
-		minPairs: true,
-		inlierRatio: true,
-		rmse: true,
-		finiteMatrix: true,
-		scaleRange: true,
-		accepted: true,
-	},
-	solveAccepted: true,
-	failureReason: null,
-	transform: {
-		translationX: 10,
-		translationY: 12,
-		rotationDegrees: 0,
-		scaleX: 1,
-		scaleY: 1,
-		isUniformScale: true,
-	},
+const createRejectedAlignmentSlice = (): AlignmentSlice => ({
+  ...createAlignmentSlice(),
+  status: 'error',
+  affineMatrix: [1, 0, 5, 0, 1, 5],
+  reprojectionRmse: 42.5,
+  ransacReprojThreshold: 8,
+  solveAccepted: false,
+  forceAccepted: false,
+  failureReason: 'rmse-too-high',
+  qualityFlags: {
+    minPairs: true,
+    inlierRatio: true,
+    rmse: false,
+    finiteMatrix: true,
+    scaleRange: true,
+    accepted: false,
+  },
 });
 
 describe('AlignmentPanel', () => {
+  it('preserves dynamic values in the revised workflow labels', async () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={createSourceImage('he')}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
+    });
+
+    expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
+      'Use wheel zoom and drag pan on the eosin reference, then click to place the next reference landmark.',
+    );
+    expect(screen.getByText('Image Registration')).toBeInTheDocument();
+    expect(screen.getByTestId('alignment-pair-count-badge')).toHaveTextContent('Landmark Pairs: 7 / 15');
+    expect(screen.getByRole('button', { name: 'Move NATA Align Image Point' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move HE point' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Registration Preview' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear All Pairs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review Registration' })).toBeInTheDocument();
+    expect(screen.getByTestId('alignment-distribution-warning')).toHaveTextContent(
+      'Landmark spread is narrow. Coverage ratios are 0.9% width and 0.9% height, below the 20% minimum.',
+    );
+    expect(screen.getByText(/For genuinely small tissue/)).toHaveTextContent(
+      'If the overlay is correct, choose Force continue to proceed.',
+    );
+    expect(screen.getByLabelText('Zoom out HE image')).toBeInTheDocument();
+    expect(screen.getByLabelText('Zoom in HE image')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE left 90 degrees')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE right 90 degrees')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE left 1 degree')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rotate HE right 1 degree')).toBeInTheDocument();
+    expect(screen.getByLabelText('Flip HE horizontally')).toBeInTheDocument();
+    expect(screen.getByLabelText('Flip HE vertically')).toBeInTheDocument();
+    expect(screen.getByAltText('HE landmarks (moving)')).toBeInTheDocument();
+    expect(screen.getByTestId('alignment-workflow-instruction')).not.toHaveTextContent('H&E');
+  });
+
+  it('removes only the retired workflow hints', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={createSourceImage('he')}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    expect(screen.queryByText('Drag to pan. Wheel to zoom. Add or adjust landmark pairs in order.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pan, zoom, and place landmarks.')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Show canvas help')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Minimize canvas help')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Dismiss canvas help')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Eosin landmarks (reference)')).toBeInTheDocument();
+    expect(screen.getByAltText('HE landmarks (moving)')).toBeInTheDocument();
+  });
+
+  it('uses HE terminology in missing-image guidance', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={null}
+          onSolveAccepted={vi.fn()}
+          referenceImage={createSourceImage('eosin')}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    expect(screen.getByText('Registration needs both source images')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Eosin and HE images must be present before landmark pairing and registration solving can run.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/H&E/)).not.toBeInTheDocument();
+  });
+
+  it('renders working preview URLs in alignment image panes while canonical data URLs remain available', async () => {
+    const referenceImage = {
+      ...createSourceImage('eosin'),
+      dataUrl: 'blob:eosin-canonical',
+      workingDataUrl: 'blob:eosin-working',
+    };
+    const movingImage = {
+      ...createSourceImage('he'),
+      dataUrl: 'blob:he-canonical',
+      workingDataUrl: 'blob:he-working',
+    };
+
+    render(
+      <ChakraProvider theme={theme}>
+        <AlignmentPanel
+          alignment={createAlignmentSlice()}
+          chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+          movingImage={movingImage}
+          onSolveAccepted={vi.fn()}
+          referenceImage={referenceImage}
+          referenceImageTransform={createReferenceImageTransform()}
+          showMovingImagePaddingBoundary={false}
+          onAlignmentChange={vi.fn()}
+        />
+      </ChakraProvider>,
+    );
+
+    const sourceLayer = await screen.findByTestId('alignment-source-image-transform-layer');
+    const targetLayer = await screen.findByTestId('alignment-target-image-transform-layer');
+
+    expect(within(sourceLayer).getByRole('img')).toHaveAttribute('src', 'blob:eosin-working');
+    expect(within(targetLayer).getByRole('img')).toHaveAttribute('src', 'blob:he-working');
+    expect(referenceImage.dataUrl).toBe('blob:eosin-canonical');
+    expect(movingImage.dataUrl).toBe('blob:he-canonical');
+  });
+
   it('renders the moving-image padding boundary only for the target pane and keeps it coupled to the shared transform layer', async () => {
     const alignment = createAlignmentSlice();
     alignment.movingImageTransform = {
@@ -209,7 +334,7 @@ describe('AlignmentPanel', () => {
 
     const transformLayer = screen.getByTestId('alignment-target-image-transform-layer');
     expect(transformLayer).toHaveStyle({
-      transform: 'rotate(90deg) scale(-1, 1)',
+      transform: 'scale(-1, 1) rotate(90deg)',
       transformOrigin: 'center center',
     });
     expect(within(transformLayer).getByTestId('alignment-target-image-boundary')).toBeInTheDocument();
@@ -271,67 +396,14 @@ describe('AlignmentPanel', () => {
     });
   });
 
-	it('clears an accepted auto solution so manual override can start cleanly', async () => {
-		const onAlignmentChange = vi.fn();
-
-		render(
-			<ChakraProvider theme={theme}>
-				<AlignmentPanel
-					alignment={createAcceptedAutoAlignmentSlice()}
-					autoProposalMethod="mask-ecc-v1"
-					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
-					movingImage={createSourceImage('he')}
-					onSolveAccepted={vi.fn()}
-					referenceImage={createSourceImage('eosin')}
-					referenceImageTransform={createReferenceImageTransform()}
-					showMovingImagePaddingBoundary={false}
-					onAlignmentChange={onAlignmentChange}
-				/>
-			</ChakraProvider>,
-		);
-
-		const user = userEvent.setup();
-		const statusBlock = await screen.findByTestId('alignment-auto-status');
-		expect(statusBlock).toHaveTextContent('Automatic alignment accepted (mask-ecc-v1)');
-		expect(statusBlock).toHaveTextContent(
-			'Keep this result or clear it to return to manual landmarks.',
-		);
-		await waitFor(() => {
-			expect(screen.getByTestId('alignment-reset')).toBeEnabled();
-		});
-
-		await user.click(within(statusBlock).getByTestId('alignment-auto-clear'));
-
-		expect(onAlignmentChange).toHaveBeenCalledTimes(1);
-		const updater = onAlignmentChange.mock.calls[0]?.[0] as
-			| ((current: AlignmentSlice) => AlignmentSlice)
-			| undefined;
-		expect(updater).toBeTypeOf('function');
-
-		const cleared = updater?.(createAcceptedAutoAlignmentSlice());
-		expect(cleared?.source).toBeNull();
-		expect(cleared?.solveAccepted).toBe(false);
-		expect(cleared?.qualityFlags.accepted).toBe(false);
-		expect(cleared?.affineMatrix).toBeNull();
-		expect(cleared?.status).toBe('ready');
-		await waitFor(() => {
-			expect(screen.getByTestId('alignment-run-solve')).toBeDisabled();
-		});
-	});
-
-	it('shows fallback recovery guidance while keeping manual controls available', async () => {
-		const onRecomputeAutoLocalization = vi.fn();
-
+	it('keeps manual alignment controls available', async () => {
 		render(
 			<ChakraProvider theme={theme}>
 				<AlignmentPanel
 					alignment={createAlignmentSlice()}
-					autoProposalMethod="mask-ecc-v1"
-					autoProposalStatus="fallback"
 					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
 					movingImage={createSourceImage('he')}
 					onSolveAccepted={vi.fn()}
-					onRecomputeAutoLocalization={onRecomputeAutoLocalization}
 					referenceImage={createSourceImage('eosin')}
 					referenceImageTransform={createReferenceImageTransform()}
 					showMovingImagePaddingBoundary={false}
@@ -340,18 +412,104 @@ describe('AlignmentPanel', () => {
 			</ChakraProvider>,
 		);
 
-		const user = userEvent.setup();
-		const recoveryBlock = await screen.findByTestId('alignment-auto-recovery');
-		expect(recoveryBlock).toHaveTextContent(
-			'Automatic refinement unavailable; add manual points or adjust HE focus',
-		);
-		expect(recoveryBlock).toHaveTextContent(
-			'After editing HE focus, rerun auto-localization from the existing focus step.',
-		);
-		expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
-		expect(screen.getByTestId('alignment-reset')).toBeEnabled();
-
-		await user.click(within(recoveryBlock).getByTestId('alignment-auto-recompute'));
-		expect(onRecomputeAutoLocalization).toHaveBeenCalledTimes(1);
+		await waitFor(() => {
+			expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
+		});
 	});
+
+	it('hides Force accept when no finite matrix is available', () => {
+		render(
+			<ChakraProvider theme={theme}>
+				<AlignmentPanel
+					alignment={createAlignmentSlice()}
+					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+					movingImage={createSourceImage('he')}
+					onSolveAccepted={vi.fn()}
+					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
+					onAlignmentChange={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		expect(screen.queryByTestId('alignment-force-accept')).not.toBeInTheDocument();
+	});
+
+	it('force-accepts a rejected solve with a finite matrix and advances', async () => {
+		const onSolveAccepted = vi.fn();
+		const onAlignmentChange = vi.fn();
+
+		render(
+			<ChakraProvider theme={theme}>
+				<AlignmentPanel
+					alignment={createRejectedAlignmentSlice()}
+					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+					movingImage={createSourceImage('he')}
+					onSolveAccepted={onSolveAccepted}
+					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
+					onAlignmentChange={onAlignmentChange}
+				/>
+			</ChakraProvider>,
+		);
+
+		const forceButton = await screen.findByTestId('alignment-force-accept');
+		expect(forceButton).toBeEnabled();
+		expect(forceButton).toHaveTextContent('Force continue');
+
+		const user = userEvent.setup();
+		await user.click(forceButton);
+
+		expect(onSolveAccepted).toHaveBeenCalledTimes(1);
+		expect(onAlignmentChange).toHaveBeenCalledTimes(1);
+
+		const updater = onAlignmentChange.mock.calls[0][0] as (
+			current: AlignmentSlice,
+		) => AlignmentSlice;
+		const next = updater(createRejectedAlignmentSlice());
+
+		expect(next.forceAccepted).toBe(true);
+		expect(next.solveAccepted).toBe(true);
+		expect(next.status).toBe('complete');
+		expect(next.failureReason).toBeNull();
+		expect(next.affineMatrix).toEqual([1, 0, 5, 0, 1, 5]);
+	});
+
+	it('lets the user retry OpenCV initialization after a transient failure', async () => {
+		loadOpenCvMock
+			.mockRejectedValueOnce(new Error('OpenCV runtime initialization timed out'))
+			.mockResolvedValueOnce({ cv: createOpenCvRuntimeStub() });
+
+		render(
+			<ChakraProvider theme={theme}>
+				<AlignmentPanel
+					alignment={createAlignmentSlice()}
+					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+					movingImage={createSourceImage('he')}
+					onSolveAccepted={vi.fn()}
+					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
+					onAlignmentChange={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		const retryButton = await screen.findByTestId('alignment-retry-opencv');
+		expect(retryButton).toHaveTextContent('Retry OpenCV');
+
+		const user = userEvent.setup();
+		await user.click(retryButton);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('alignment-runtime-status-badge')).toHaveAttribute(
+				'data-runtime-status',
+				'ready',
+			);
+		});
+		expect(loadOpenCvMock).toHaveBeenCalledTimes(2);
+	});
+
 });

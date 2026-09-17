@@ -15,6 +15,7 @@ import {
 } from '@chakra-ui/react';
 import { useRef } from 'react';
 import type { PreprocessProjectSummary } from '@/lib/preprocess/storage';
+import type { PreprocessStepId } from '@/types/preprocess';
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
   year: 'numeric',
@@ -38,9 +39,20 @@ type PreprocessLandingProps = {
 const describeSources = (project: PreprocessProjectSummary) => {
   const labels = [project.sourceAssets.images.eosin, project.sourceAssets.images.he]
     .filter((image): image is NonNullable<typeof image> => Boolean(image))
-    .map((image) => image.kind.toUpperCase());
+    .map((image) => (image.kind === 'he' ? 'HE' : 'Eosin reference'));
 
   return labels.length > 0 ? labels.join(' + ') : 'No source images yet';
+};
+
+const STEP_LABELS: Record<PreprocessStepId, string> = {
+  sourceAssets: 'Source images',
+  localization: 'Chip localization',
+  heFocus: 'HE focus',
+  alignment: 'Image registration',
+  cropQc: 'Crop QC',
+  chipConfig: 'Chip projection',
+  tissueSelection: 'Tissue spot selection',
+  exportState: 'Export package',
 };
 
 export function PreprocessLanding({
@@ -62,11 +74,10 @@ export function PreprocessLanding({
       <Flex flex='1' align='center' justify='center' px={{ base: 4, md: 10 }} py={{ base: 8, md: 12 }}>
         <Box width='100%' maxW='1200px'>
           <Stack spacing={4} mb={6} align='flex-start' textAlign='left'>
-            <Badge colorScheme='brand' variant='subtle'>Local only</Badge>
-            <Heading size='lg'>Preprocess Workspace</Heading>
+            <Badge colorScheme='brand' variant='subtle'>LOCAL PROCESSING</Badge>
+            <Heading size='lg'>Spatial Image Preparation</Heading>
             <Text color='gray.600' maxW='760px'>
-              Create a preprocess project to organize source images, move through the step-by-step shell,
-              and keep every saved snapshot in this browser only.
+              Create, manage, and continue preprocessing projects for image registration, tissue spot selection, and downstream analysis in NATA Insight Bioinformatics Software. All project data is processed and stored locally in your browser.
             </Text>
           </Stack>
 
@@ -75,16 +86,16 @@ export function PreprocessLanding({
               <Box bg='white' boxShadow='md' borderRadius='lg' p={6} border='1px solid' borderColor='gray.100'>
                 <Stack spacing={4} align='stretch'>
                   <Stack spacing={1}>
-                    <Heading size='md'>New preprocess project</Heading>
+                    <Heading size='md'>New preprocessing project</Heading>
                     <Text fontSize='sm' color='gray.500'>
-                      Start with an empty shell. Source image upload arrives inside the workflow.
+                      Create a new preprocessing project for a tissue section.
                     </Text>
                   </Stack>
 
                   <Stack spacing={2}>
                     <Text fontWeight='semibold' fontSize='sm'>Project name</Text>
                     <Input
-                      placeholder='Tumor preprocess set A'
+                      placeholder='Tumor section A preprocessing'
                       value={projectName}
                       onChange={(event) => setProjectName(event.target.value)}
                     />
@@ -98,7 +109,7 @@ export function PreprocessLanding({
                     isLoading={isCreating}
                     data-testid='preprocess-create-project'
                   >
-                    Create preprocess project
+                    Create preprocessing project
                   </Button>
                 </Stack>
               </Box>
@@ -106,9 +117,9 @@ export function PreprocessLanding({
               <Box bg='white' boxShadow='md' borderRadius='lg' p={6} border='1px solid' borderColor='gray.100'>
                 <Stack spacing={4} align='stretch'>
                   <Stack spacing={1}>
-                    <Heading size='md'>Import preprocess project</Heading>
+                    <Heading size='md'>Import Preprocessing Package</Heading>
                     <Text color='gray.600'>
-                      Restore a saved preprocess package without mixing it into annotation projects.
+                      Import a previously exported preprocessing package to continue editing or resume preprocessing.
                     </Text>
                   </Stack>
                   <Button
@@ -119,7 +130,7 @@ export function PreprocessLanding({
                     isLoading={isImporting}
                     data-testid='preprocess-import-project'
                   >
-                    Select file to import
+                    Select Package
                   </Button>
                     <Input
                       ref={importInputRef}
@@ -132,7 +143,7 @@ export function PreprocessLanding({
                     }}
                   />
                   <Text fontSize='sm' color='gray.500'>
-                    Malformed imports are rejected before anything in local storage is replaced.
+                    Only valid preprocessing packages generated by NATAScope can be imported.
                   </Text>
                 </Stack>
               </Box>
@@ -149,16 +160,15 @@ export function PreprocessLanding({
               data-testid='preprocess-project-list'
             >
               <Flex justify='space-between' align='center' mb={3} gap={4} wrap='wrap'>
-                <Heading size='md'>Saved preprocess projects</Heading>
-                <Badge colorScheme='gray'>Stored locally</Badge>
+                <Heading size='md'>Saved preprocessing projects</Heading>
               </Flex>
               <Text fontSize='sm' color='gray.600' mb={4}>
-                Open an existing shell, delete old drafts, or continue from an imported package.
+                Open an existing preprocessing project or continue working on an imported project.
               </Text>
 
               {projects.length === 0 ? (
                 <Box bg='white' border='1px dashed' borderColor='gray.200' p={8} borderRadius='lg' textAlign='center'>
-                  <Text color='gray.600'>No preprocess projects yet. Create one to get started.</Text>
+                  <Text color='gray.600'>No preprocessing projects yet. Create one to get started.</Text>
                 </Box>
               ) : (
                 <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4}>
@@ -193,7 +203,7 @@ export function PreprocessLanding({
                         </Stack>
 
                         <Stack spacing={1} fontSize='sm' color='gray.600'>
-                          <Text>Current step: {project.currentStep}</Text>
+                          <Text>Current step: {STEP_LABELS[project.currentStep]}</Text>
                           <Text>{describeSources(project)}</Text>
                           <Text>ID: {project.id}</Text>
                         </Stack>

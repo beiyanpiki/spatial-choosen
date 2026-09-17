@@ -15,7 +15,7 @@ import { selectedSpotIdsFromMatrix, validateTissueActivationMatrix } from './tis
 import { resolveTissueSelectionSupport } from './tissueSupport';
 
 const FIDUCIAL_DIAMETER_FULLRES = 0.027;
-const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution HE crop image dimensions are unavailable. Re-run Crop/QC before export.';
+const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution H&E crop image dimensions are unavailable. Regenerate crop QC before export.';
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 
 type PreprocessExportReadiness =
@@ -41,6 +41,7 @@ type PreprocessExportReadiness =
         spotDiameterFullres: number;
         tissueHiresScale: number;
         tissueLowresScale: number;
+        alignedImageDataUrl: string | null;
       };
     };
 
@@ -144,7 +145,7 @@ const toCsv = (
     ] as const),
   );
 
-  for (const spot of projectedSpots) {
+  const rowsByArrayPosition = projectedSpots.map((spot) => {
     const coordinates = exportOnlySpotCentersByArrayPosition.get(getArrayPositionKey(spot.arrayRow, spot.arrayCol));
     if (!coordinates) {
       throw new Error(`Chip template anchor geometry is missing for array position ${spot.arrayRow}:${spot.arrayCol}. Reapply chip configuration before export.`);
@@ -153,13 +154,24 @@ const toCsv = (
     // CSV keeps bottom-left array_row while pxl_* stays in top-left image space.
     const serializedArrayRow = rows + 1 - spot.arrayRow;
 
+    return {
+      barcode: spot.barcode,
+      inTissue: selectedSpotIds.has(spot.id) ? '1' : '0',
+      arrayRow: serializedArrayRow,
+      arrayCol: spot.arrayCol,
+      pxlRowInFullres: coordinates.pxl_row_in_fullres,
+      pxlColInFullres: coordinates.pxl_col_in_fullres,
+    };
+  }).sort((left, right) => left.arrayRow - right.arrayRow || left.arrayCol - right.arrayCol);
+
+  for (const row of rowsByArrayPosition) {
     lines.push([
-      spot.barcode,
-      selectedSpotIds.has(spot.id) ? '1' : '0',
-      String(serializedArrayRow),
-      String(spot.arrayCol),
-      String(coordinates.pxl_row_in_fullres),
-      String(coordinates.pxl_col_in_fullres),
+      row.barcode,
+      row.inTissue,
+      String(row.arrayRow),
+      String(row.arrayCol),
+      String(row.pxlRowInFullres),
+      String(row.pxlColInFullres),
     ].join(','));
   }
 
@@ -177,12 +189,12 @@ const toMatrixCsv = (matrixValues: number[], rows: number, columns: number) => {
 
 export function getPreprocessZipExportReadiness(
   project: PreprocessProject,
-  _options?: { includeAlignedImage?: boolean },
+  options?: { includeAlignedImage?: boolean },
 ): PreprocessExportReadiness {
   if (project.cropQc.status !== 'complete' || project.cropQc.isStale) {
     return {
       canExport: false,
-      reason: 'Crop/QC output is stale or incomplete. Re-run Crop/QC and accept it before export.',
+      reason: 'Crop QC output is stale or incomplete. Regenerate and accept crop QC before export.',
     };
   }
 
@@ -191,7 +203,7 @@ export function getPreprocessZipExportReadiness(
   if (typeof cropWidth !== 'number' || cropWidth <= 0 || typeof cropHeight !== 'number' || cropHeight <= 0) {
     return {
       canExport: false,
-      reason: 'Crop dimensions are missing. Re-run Crop/QC before export.',
+      reason: 'Crop dimensions are missing. Regenerate crop QC before export.',
     };
   }
 
@@ -202,7 +214,15 @@ export function getPreprocessZipExportReadiness(
   if (!heFullres || !heHires || !heLowres) {
     return {
       canExport: false,
-      reason: 'Canonical HE crop assets are missing. Re-run Crop/QC before export.',
+      reason: 'Registered H&E crop assets are missing. Regenerate crop QC before export.',
+    };
+  }
+
+  const alignedImageDataUrl = project.cropQc.checkerboardPreview?.dataUrl ?? project.cropQc.checkerboardPreviewDataUrl;
+  if (options?.includeAlignedImage && !alignedImageDataUrl) {
+    return {
+      canExport: false,
+      reason: 'Registered H&E image export requires checkerboard crop QC data.',
     };
   }
 
@@ -218,14 +238,14 @@ export function getPreprocessZipExportReadiness(
   ) {
     return {
       canExport: false,
-      reason: 'Scale metadata is missing. Re-run Crop/QC before export.',
+      reason: 'Scale metadata is missing. Regenerate crop QC before export.',
     };
   }
 
   if (project.chipConfig.status !== 'complete' || project.chipConfig.isStale) {
     return {
       canExport: false,
-      reason: 'Chip projection is stale or incomplete. Reapply chip configuration before export.',
+      reason: 'Spot projection is stale or incomplete. Reapply the capture pitch before export.',
     };
   }
 
@@ -319,6 +339,7 @@ export function getPreprocessZipExportReadiness(
       spotDiameterFullres,
       tissueHiresScale,
       tissueLowresScale,
+      alignedImageDataUrl,
     },
   };
 }
@@ -329,7 +350,7 @@ export async function exportPreprocessZip(args: {
   includeAlignedImage: boolean;
 }) {
   const { project, includeProjectJson, includeAlignedImage } = args;
-  const readiness = getPreprocessZipExportReadiness(project);
+  const readiness = getPreprocessZipExportReadiness(project, { includeAlignedImage });
   if (!readiness.canExport) {
     throw new Error(readiness.reason);
   }
@@ -343,6 +364,7 @@ export async function exportPreprocessZip(args: {
     selectedSpotIds,
     tissueHiresScale,
     tissueLowresScale,
+    alignedImageDataUrl,
   } = readiness.data;
   const heFullresBytes = await imageSourceToBytes(heCropAssets.fullres.dataUrl);
   const { width: exportFullresWidth, height: exportFullresHeight } = getPngDimensionsFromBytes(heFullresBytes);
@@ -370,7 +392,10 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
 
   if (includeAlignedImage) {
-    zip.file('aligned_tissue_image.png', heFullresBytes);
+    if (!alignedImageDataUrl) {
+      throw new Error('Registered H&E image export requires checkerboard crop QC data.');
+    }
+    zip.file('aligned_tissue_image.png', await imageSourceToBytes(alignedImageDataUrl));
   }
 
   if (includeProjectJson) {

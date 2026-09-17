@@ -1,14 +1,23 @@
 'use client';
 
-import { Badge, Box, Button, ButtonGroup, Flex, Heading, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, Button, ButtonGroup, Flex, Heading, HStack, Stack, Text } from '@chakra-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { computeBaseView, getTransform, relativeToImage } from '@/lib/canvasViewport';
+import { computeBaseView, getTransform } from '@/lib/canvasViewport';
 import {
   clampNormalizedSquareRect,
   LOCALIZATION_BOX_COLOR_SWATCHS,
   resizeChipBounds,
   translateChipBounds,
 } from '@/lib/preprocess/localization';
+import {
+  FlipHorizontalIcon,
+  FlipVerticalIcon,
+  ResetIcon,
+  RotateLeftIcon,
+  RotateRightIcon,
+  ZoomInIcon,
+  ZoomOutIcon,
+} from './stageControlsIcons';
 import type {
   LocalizationBoxColor,
   LocalizationImageTransform,
@@ -40,7 +49,7 @@ type CanvasStageProps = {
 };
 
 type CanvasStageLabels = {
-  badgeReady: string;
+  badgeReady: string | null;
   badgeWaiting: string;
   description: string;
   emptyDescription: string;
@@ -89,6 +98,7 @@ const ALL_HANDLE_ORDER: readonly LocalizationResizeHandle[] = [
   ...EDGE_HANDLE_ORDER,
 ];
 
+const SCREEN_POINT_EPSILON = 1e-6;
 const clampScale = (scale: number) => Math.min(4, Math.max(0.5, scale));
 const normalizeDegrees = (value: number) => {
   const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
@@ -96,15 +106,15 @@ const normalizeDegrees = (value: number) => {
 };
 
 const DEFAULT_CANVAS_STAGE_LABELS: CanvasStageLabels = {
-  badgeReady: 'Preview ready',
-  badgeWaiting: 'Awaiting eosin image',
-  description: 'Directly manipulate the view and chip footprint with minimal framing around the stage.',
-  emptyDescription: 'Upload the eosin source to preview and localize the chip footprint here.',
-  emptyTitle: 'No eosin image loaded',
-  heading: 'Localization canvas',
-  overlayAriaLabel: 'Chip localization overlay',
+  badgeReady: null,
+  badgeWaiting: 'Awaiting eosin reference',
+  description: 'Use the controls on the right to adjust the position and orientation of the NATA Align image until the ROI is completely enclosed within the green capture area.',
+  emptyDescription: 'Upload the eosin reference image in Source images before placing the capture area.',
+  emptyTitle: 'No eosin reference loaded',
+  heading: 'Define Capture Area',
+  overlayAriaLabel: 'Chip capture area overlay',
   resetAriaLabel: 'Reset localization transform',
-  savedHint: 'Saved chip coordinates stay axis-aligned in image space.',
+  savedHint: 'Saved chip coordinates remain normalized in the eosin source image.',
 };
 
 const buildTestId = (prefix: string, suffix: string) => `${prefix}-${suffix}`;
@@ -116,7 +126,7 @@ const loadImageElement = (src: string) => new Promise<HTMLImageElement>((resolve
   image.src = src;
 });
 
-const projectNormalizedImagePointToScreen = (
+const projectCanvasPointToScreen = (
   point: PreprocessPoint,
   displayTransform: ReturnType<typeof getTransform>,
 ): ScreenPoint | null => {
@@ -128,12 +138,48 @@ const projectNormalizedImagePointToScreen = (
   };
 };
 
-const projectScreenPointToNormalizedImage = (
-  point: ScreenPoint | null,
+const projectScreenPointToCanvas = (
+  screenPoint: ScreenPoint | null,
   displayTransform: ReturnType<typeof getTransform>,
 ): PreprocessPoint | null => {
-  if (!point || !displayTransform) return null;
-  return relativeToImage(point, displayTransform);
+  if (!screenPoint || !displayTransform) return null;
+
+  return {
+    x: (screenPoint.x - displayTransform.originX) / displayTransform.width,
+    y: (screenPoint.y - displayTransform.originY) / displayTransform.height,
+  };
+};
+
+const getRectSourceCorners = (
+  rect: PreprocessRect,
+): readonly [PreprocessPoint, PreprocessPoint, PreprocessPoint, PreprocessPoint] => [
+  { x: rect.x, y: rect.y },
+  { x: rect.x + rect.width, y: rect.y },
+  { x: rect.x + rect.width, y: rect.y + rect.height },
+  { x: rect.x, y: rect.y + rect.height },
+] as const;
+
+const getDistance = (start: ScreenPoint, end: ScreenPoint) => Math.hypot(end.x - start.x, end.y - start.y);
+
+const getVisualLowerLeftPoint = (points: readonly ScreenPoint[]) => points.reduce((selected, point) => {
+  const sameScreenRow = Math.abs(point.y - selected.y) <= SCREEN_POINT_EPSILON;
+  const lowerOnScreen = point.y > selected.y + SCREEN_POINT_EPSILON;
+  const sameRowAndFurtherLeft = sameScreenRow && point.x < selected.x;
+  return lowerOnScreen || sameRowAndFurtherLeft ? point : selected;
+});
+
+const getVisualLowerLeftMarkerPoints = (
+  polygonPoints: readonly ScreenPoint[],
+): readonly [ScreenPoint, ScreenPoint, ScreenPoint] => {
+  const edgeLengths = polygonPoints.map((point, index) => getDistance(point, polygonPoints[(index + 1) % polygonPoints.length]));
+  const markerSize = Math.max(16, Math.min(32, Math.min(...edgeLengths) * 0.18));
+  const lowerLeft = getVisualLowerLeftPoint(polygonPoints);
+
+  return [
+    { x: lowerLeft.x, y: lowerLeft.y - markerSize },
+    lowerLeft,
+    { x: lowerLeft.x + markerSize, y: lowerLeft.y },
+  ] as const;
 };
 
 export function CanvasStage({
@@ -215,14 +261,14 @@ export function CanvasStage({
   }, [hostElement]);
 
   const baseView = useMemo(() => {
-    const ratio = image?.width && image.height
-      ? image.width / image.height
-      : 4 / 3;
+    const ratio = image?.workingWidth && image?.workingHeight
+      ? image.workingWidth / image.workingHeight
+      : (image?.width && image?.height ? image.width / image.height : 4 / 3);
 
     return computeBaseView(viewportSize, ratio);
-  }, [image?.height, image?.width, viewportSize]);
+  }, [image?.workingWidth, image?.workingHeight, image?.height, image?.width, viewportSize]);
 
-  const imageAspectRatio = image?.width && image.height
+  const imageAspectRatio = image?.width && image?.height
     ? image.width / image.height
     : 1;
 
@@ -288,8 +334,8 @@ export function CanvasStage({
       displayTransform.originX + displayTransform.width / 2,
       displayTransform.originY + displayTransform.height / 2,
     );
-    context.rotate((imageTransform.rotationDegrees * Math.PI) / 180);
     context.scale(imageTransform.flipHorizontal ? -1 : 1, imageTransform.flipVertical ? -1 : 1);
+    context.rotate((imageTransform.rotationDegrees * Math.PI) / 180);
     context.drawImage(
       activeImageElement,
       -displayTransform.width / 2,
@@ -313,7 +359,7 @@ export function CanvasStage({
 
   const getOverlayImagePoint = useCallback((clientX: number, clientY: number) => {
     const relativePoint = getRelativePoint(clientX, clientY);
-    return projectScreenPointToNormalizedImage(relativePoint, displayTransform);
+    return projectScreenPointToCanvas(relativePoint, displayTransform);
   }, [displayTransform, getRelativePoint]);
 
   const getInteractionImagePoint = useCallback((clientX: number, clientY: number) => (
@@ -406,34 +452,19 @@ export function CanvasStage({
   }, [hostElement, image, imageTransform.scale, onScaleChange]);
 
   const projectOverlayPointToScreen = useCallback((point: PreprocessPoint) => (
-    projectNormalizedImagePointToScreen(point, displayTransform)
+    projectCanvasPointToScreen(point, displayTransform)
   ), [displayTransform]);
 
   const overlay = useMemo(() => {
     if (!displayTransform || !normalizedChipBounds) return null;
 
-    const overlayBounds = normalizedChipBounds;
-    const polygonPoints = [
-      { x: overlayBounds.x, y: overlayBounds.y },
-      { x: overlayBounds.x + overlayBounds.width, y: overlayBounds.y },
-      { x: overlayBounds.x + overlayBounds.width, y: overlayBounds.y + overlayBounds.height },
-      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height },
-    ]
+    const polygonPoints = getRectSourceCorners(normalizedChipBounds)
       .map((point) => projectOverlayPointToScreen(point))
       .filter((point): point is NonNullable<typeof point> => Boolean(point));
 
     if (polygonPoints.length !== 4) return null;
 
-    const markerSize = Math.max(0.04, Math.min(overlayBounds.width, overlayBounds.height) * 0.18);
-    const markerPoints = [
-      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height - markerSize },
-      { x: overlayBounds.x, y: overlayBounds.y + overlayBounds.height },
-      { x: overlayBounds.x + markerSize, y: overlayBounds.y + overlayBounds.height },
-    ]
-      .map((point) => projectOverlayPointToScreen(point))
-      .filter((point): point is NonNullable<typeof point> => Boolean(point));
-
-    if (markerPoints.length !== 3) return null;
+    const markerPoints = getVisualLowerLeftMarkerPoints(polygonPoints);
 
     const cornerPoints = {
       nw: polygonPoints[0],
@@ -465,6 +496,7 @@ export function CanvasStage({
     return {
       polygonPoints,
       markerPoints,
+      labelPoint: markerPoints[1],
       handlePoints,
     };
   }, [displayTransform, normalizedChipBounds, projectOverlayPointToScreen]);
@@ -478,9 +510,13 @@ export function CanvasStage({
           <Heading size='sm'>{copy.heading}</Heading>
           <Text fontSize='sm' color='gray.500'>{copy.description}</Text>
         </Stack>
-        <Badge colorScheme={image ? 'green' : 'orange'} borderRadius='full'>
-          {image ? copy.badgeReady : copy.badgeWaiting}
-        </Badge>
+        {image ? (
+          copy.badgeReady ? (
+            <Badge colorScheme='green' borderRadius='full'>{copy.badgeReady}</Badge>
+          ) : null
+        ) : (
+          <Badge colorScheme='orange' borderRadius='full'>{copy.badgeWaiting}</Badge>
+        )}
       </Flex>
 
       <Box
@@ -545,14 +581,16 @@ export function CanvasStage({
                     strokeWidth={3}
                     strokeLinecap='round'
                     strokeLinejoin='round'
+                    data-testid={buildTestId(controlTestIdPrefix, 'box-lower-left-marker')}
                   />
                   <text
-                    x={overlay.markerPoints[1].x + 8}
-                    y={overlay.markerPoints[1].y - 8}
+                    x={overlay.labelPoint.x + 8}
+                    y={overlay.labelPoint.y - 8}
                     fill={swatch.stroke}
                     fontSize='12'
                     fontWeight='700'
                     pointerEvents='none'
+                    data-testid={buildTestId(controlTestIdPrefix, 'box-lower-left-label')}
                   >
                     LL
                   </text>
@@ -642,12 +680,28 @@ export function CanvasStage({
                       {(imageTransform.scale * 100).toFixed(0)}%
                     </Text>
                   </Flex>
-                  <ButtonGroup size='sm' isAttached variant='outline'>
-                    <Button aria-label='Zoom out' data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-out')} onClick={() => onScaleDelta(-0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      −
+                  <ButtonGroup size='sm' isAttached variant='outline' w='100%'>
+                    <Button
+                      aria-label='Zoom out'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-out')}
+                      onClick={() => onScaleDelta(-0.01)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <ZoomOutIcon />
                     </Button>
-                    <Button aria-label='Zoom in' data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-in')} onClick={() => onScaleDelta(0.01)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      +
+                    <Button
+                      aria-label='Zoom in'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-in')}
+                      onClick={() => onScaleDelta(0.01)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <ZoomInIcon />
                     </Button>
                   </ButtonGroup>
                 </Stack>
@@ -658,36 +712,115 @@ export function CanvasStage({
                       {imageTransform.rotationDegrees.toFixed(1)}°
                     </Text>
                   </Flex>
-                  <ButtonGroup size='sm' variant='outline' isAttached>
-                    <Button aria-label='Rotate left 90 degrees' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-90')} onClick={() => onRotationDelta(-90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↺90
+                  <ButtonGroup size='sm' variant='outline' isAttached w='100%'>
+                    <Button
+                      aria-label='Rotate left 90 degrees'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-90')}
+                      onClick={() => onRotationDelta(-90)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateLeftIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>90°</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Rotate right 90 degrees' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-90')} onClick={() => onRotationDelta(90)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↻90
+                    <Button
+                      aria-label='Rotate right 90 degrees'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-90')}
+                      onClick={() => onRotationDelta(90)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateRightIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>90°</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Rotate left 1 degree' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-1')} onClick={() => onRotationDelta(-1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↺1
+                    <Button
+                      aria-label='Rotate left 1 degree'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-left-1')}
+                      onClick={() => onRotationDelta(-1)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateLeftIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>1°</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Rotate right 1 degree' data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-1')} onClick={() => onRotationDelta(1)} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ↻1
+                    <Button
+                      aria-label='Rotate right 1 degree'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-rotate-right-1')}
+                      onClick={() => onRotationDelta(1)}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <RotateRightIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>1°</Text>
+                      </HStack>
                     </Button>
                   </ButtonGroup>
                 </Stack>
                 <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-flip')}>
                   <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Flip</Text>
-                  <ButtonGroup size='sm' variant='outline' isAttached>
-                    <Button aria-label='Flip horizontally' data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-horizontal')} onClick={onFlipHorizontal} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ⇋
+                  <ButtonGroup size='sm' variant='outline' isAttached w='100%'>
+                    <Button
+                      aria-label='Flip horizontally'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-horizontal')}
+                      onClick={onFlipHorizontal}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <FlipHorizontalIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>H</Text>
+                      </HStack>
                     </Button>
-                    <Button aria-label='Flip vertically' data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-vertical')} onClick={onFlipVertical} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                      ⇅
+                    <Button
+                      aria-label='Flip vertically'
+                      data-testid={buildTestId(controlTestIdPrefix, 'stage-flip-vertical')}
+                      onClick={onFlipVertical}
+                      flex={1}
+                      color='white'
+                      borderColor='whiteAlpha.400'
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      <HStack spacing={1.5}>
+                        <FlipVerticalIcon />
+                        <Text as='span' fontSize='xs' fontWeight='semibold'>V</Text>
+                      </HStack>
                     </Button>
                   </ButtonGroup>
                 </Stack>
                 <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-reset')}>
                   <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Reset</Text>
-                  <Button aria-label={copy.resetAriaLabel} size='sm' variant='outline' data-testid={buildTestId(controlTestIdPrefix, 'stage-reset')} onClick={onResetTransform} color='white' borderColor='whiteAlpha.400' _hover={{ bg: 'whiteAlpha.200' }}>
-                    ⟲
+                  <Button
+                    aria-label={copy.resetAriaLabel}
+                    size='sm'
+                    variant='outline'
+                    w='100%'
+                    data-testid={buildTestId(controlTestIdPrefix, 'stage-reset')}
+                    onClick={onResetTransform}
+                    color='white'
+                    borderColor='whiteAlpha.400'
+                    _hover={{ bg: 'whiteAlpha.200' }}
+                  >
+                    <HStack spacing={1.5}>
+                      <ResetIcon />
+                      <Text as='span' fontSize='xs' fontWeight='semibold'>Reset</Text>
+                    </HStack>
                   </Button>
                 </Stack>
               </Stack>

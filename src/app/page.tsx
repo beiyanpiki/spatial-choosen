@@ -367,7 +367,7 @@ function HomePage() {
           <Heading size="lg">Spatial Tissue Region Annotator</Heading>
           <Text color="gray.600">Create a project to load your H&E slide and interactively annotate spatial tissue regions for downstream spatial transcriptomics analysis.</Text>
           <Button variant="outline" colorScheme="brand" onClick={() => router.push('/preprocess')}>
-            Open preprocess workflow
+            Open preprocessing workspace
           </Button>
         </Stack>
 

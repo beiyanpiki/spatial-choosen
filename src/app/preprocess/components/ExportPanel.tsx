@@ -4,9 +4,7 @@ import { Button, Checkbox, Stack, Text } from '@chakra-ui/react';
 
 type ExportPanelProps = {
   includeProject: boolean;
-  includeAlignedImage: boolean;
   onToggleIncludeProject: (value: boolean) => void;
-  onToggleIncludeAlignedImage: (value: boolean) => void;
   onDownload: () => void;
   isExporting: boolean;
   canExport: boolean;
@@ -14,29 +12,20 @@ type ExportPanelProps = {
 
 export function ExportPanel({
   includeProject,
-  includeAlignedImage,
   onToggleIncludeProject,
-  onToggleIncludeAlignedImage,
   onDownload,
   isExporting,
   canExport,
 }: ExportPanelProps) {
   return (
     <Stack spacing={4}>
-      <Text color='gray.600'>Package processed outputs for downstream workflows.</Text>
+      <Text color='gray.600'>Download the preprocessing results required for downstream analysis in NATA Insight Bioinformatics Software.</Text>
       <Checkbox
         isChecked={includeProject}
         onChange={(event) => onToggleIncludeProject(event.target.checked)}
         data-testid='export-include-project'
       >
-        Include recovery project
-      </Checkbox>
-      <Checkbox
-        isChecked={includeAlignedImage}
-        onChange={(event) => onToggleIncludeAlignedImage(event.target.checked)}
-        data-testid='export-include-aligned-image'
-      >
-        Include aligned HE image
+        Include NATAScope project file
       </Checkbox>
       <Button
         colorScheme='brand'
@@ -45,7 +34,7 @@ export function ExportPanel({
         isDisabled={!canExport}
         data-testid='export-download-zip'
       >
-        Download preprocess ZIP
+        Download
       </Button>
     </Stack>
   );

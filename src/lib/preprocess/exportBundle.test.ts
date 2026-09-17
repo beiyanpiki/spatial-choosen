@@ -30,7 +30,7 @@ vi.mock('./tissueRegions', () => ({
 
 import { exportPreprocessZip, getPreprocessZipExportReadiness } from './exportBundle';
 
-const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution HE crop image dimensions are unavailable. Re-run Crop/QC before export.';
+const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution H&E crop image dimensions are unavailable. Regenerate crop QC before export.';
 
 const createPngBytes = (width: number, height: number) => {
   const bytes = new Uint8Array(24);
@@ -286,16 +286,6 @@ const createBaseProject = (): PreprocessProject => {
         flipVertical: false,
         scale: 1,
       },
-      autoProposal: {
-        status: 'idle',
-        method: null,
-        coarseBounds: null,
-        refinedBounds: null,
-        refinedQuad: null,
-        rotationDegrees: null,
-        eccCorrelation: null,
-        failureReason: null,
-      },
       focusedImageDataUrl: null,
     },
     alignment: {
@@ -328,6 +318,7 @@ const createBaseProject = (): PreprocessProject => {
         accepted: true,
       },
       solveAccepted: true,
+      forceAccepted: false,
       failureReason: null,
       transform: null,
       previewDataUrl: null,
@@ -562,6 +553,16 @@ const readExportedPngDimensions = async (blob: Blob, fileName: string) => {
   return readPngDimensions(await file.async('uint8array'));
 };
 
+const readZipBytes = async (blob: Blob, fileName: string) => {
+  const archive = await JSZip.loadAsync(await blob.arrayBuffer());
+  const file = archive.file(fileName);
+  if (!file) {
+    throw new Error(`Missing file in archive: ${fileName}`);
+  }
+
+  return file.async('uint8array');
+};
+
 const toExportArrayRow = (rows: number, runtimeArrayRow: number) => rows + 1 - runtimeArrayRow;
 
 const createExpectedExportedTissuePositionRow = (args: {
@@ -580,6 +581,10 @@ const createExpectedExportedTissuePositionRow = (args: {
   pxl_row_in_fullres: args.pxl_row_in_fullres,
   pxl_col_in_fullres: args.pxl_col_in_fullres,
 } satisfies ExportedTissuePositionRow);
+
+const sortExportedTissuePositionRowsByArrayPosition = (rows: ExportedTissuePositionRow[]) => [...rows].sort((left, right) => (
+  left.array_row - right.array_row || left.array_col - right.array_col
+));
 
 const stripMembershipFromExportedTissuePositionRow = (row: ExportedTissuePositionRow) => ({
   barcode: row.barcode,
@@ -603,6 +608,12 @@ const indexRowsByBarcode = (rows: ExportedTissuePositionRow[]) => new Map(
 const exportProject = async (project: PreprocessProject) => exportPreprocessZip({
   project,
   includeAlignedImage: false,
+  includeProjectJson: false,
+});
+
+const exportProjectWithAlignedImage = async (project: PreprocessProject) => exportPreprocessZip({
+  project,
+  includeAlignedImage: true,
   includeProjectJson: false,
 });
 
@@ -655,21 +666,22 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows[63]?.[63]).toBe('1');
   });
 
-  it('writes 50um tissue_positions.csv in stable barcode order with bottom-left array rows and emitted fullres image coordinates', async () => {
+  it('writes 50um tissue_positions.csv sorted by exported array position with bottom-left array rows and emitted fullres image coordinates', async () => {
     const project = createBaseProject();
 
     const result = await exportProject(project);
     const rows = await readExportedTissuePositions(result.blob);
 
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
       'barcode-spot-a',
       'barcode-spot-b',
-      'barcode-spot-c',
-      'barcode-spot-d',
     ]);
     // Template coordinates [75, 6375] are mapped to emitted fullres frame [0, 640]
     // Formula: output = (template - 75) / 6300 * 640
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-spot-a',
         inTissue: 1,
@@ -712,7 +724,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 640,
         pxl_col_in_fullres: 640,
       }),
-    ]);
+    ]));
   });
 
   it('writes tissue_positions.csv in the emitted fullres image coordinate frame when crop metadata is stale', async () => {
@@ -739,13 +751,14 @@ describe('exportBundle canonical matrix exports', () => {
     const dimensions = await readExportedPngDimensions(result.blob, 'tissue_fullres_image.png');
 
     expect(dimensions).toEqual({ width: emittedFullresWidth, height: emittedFullresHeight });
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
       'barcode-spot-a',
       'barcode-spot-b',
-      'barcode-spot-c',
-      'barcode-spot-d',
     ]);
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-spot-a',
         inTissue: 1,
@@ -782,7 +795,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 5705,
         pxl_col_in_fullres: 5705,
       }),
-    ]);
+    ]));
     expect(archive.file('tissue_fullres_image.png')).toBeTruthy();
   });
 
@@ -808,13 +821,14 @@ describe('exportBundle canonical matrix exports', () => {
     const dimensions = await readExportedPngDimensions(result.blob, 'tissue_fullres_image.png');
 
     expect(dimensions).toEqual({ width: emittedFullresWidth, height: emittedFullresHeight });
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-spot-d',
+      'barcode-spot-c',
       'barcode-spot-a',
       'barcode-spot-b',
-      'barcode-spot-c',
-      'barcode-spot-d',
     ]);
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-spot-a',
         inTissue: 1,
@@ -851,7 +865,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 5705,
         pxl_col_in_fullres: 4200,
       }),
-    ]);
+    ]));
   });
 
   it('changes only matrix-derived in_tissue flags while keeping exported barcode order, array coordinates, and top-left pxl coordinates identical', async () => {
@@ -892,15 +906,16 @@ describe('exportBundle canonical matrix exports', () => {
     const result = await exportProject(project);
     const rows = await readExportedTissuePositions(result.blob);
 
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition(rows));
     expect(rows.map((row) => row.barcode)).toEqual([
+      'barcode-15um-spot-d',
+      'barcode-15um-spot-c',
       'barcode-15um-spot-a',
       'barcode-15um-spot-b',
-      'barcode-15um-spot-c',
-      'barcode-15um-spot-d',
     ]);
     // 15um template range [33, 3833] mapped to emitted fullres frame [0, 640]
     // Formula: output = (template - 33) / 3800 * 640
-    expect(rows).toEqual([
+    expect(rows).toEqual(sortExportedTissuePositionRowsByArrayPosition([
       createExpectedExportedTissuePositionRow({
         barcode: 'barcode-15um-spot-a',
         inTissue: 1,
@@ -943,7 +958,7 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_row_in_fullres: 640,
         pxl_col_in_fullres: 640,
       }),
-    ]);
+    ]));
   });
 
   it('derives spot_diameter_fullres from export geometry instead of persisted crop/QC metadata', async () => {
@@ -964,6 +979,35 @@ describe('exportBundle canonical matrix exports', () => {
 
     expect(rows).toHaveLength(64);
     expect(rows.every((line) => line.split(',').length === 64)).toBe(true);
+  });
+
+  it('writes aligned_tissue_image.png from the accepted checkerboard Crop/QC image', async () => {
+    const checkerboardBytes = createPngBytes(32, 48);
+    const checkerboardDataUrl = createDataUrlFromBytes(checkerboardBytes);
+    const project = createBaseProject();
+    const checkerboardPreview = project.cropQc.checkerboardPreview;
+    if (!checkerboardPreview) {
+      throw new Error('Test fixture is missing checkerboard preview state.');
+    }
+    checkerboardPreview.dataUrl = checkerboardDataUrl;
+    project.cropQc.checkerboardPreviewDataUrl = checkerboardDataUrl;
+
+    const result = await exportProjectWithAlignedImage(project);
+
+    await expect(readZipBytes(result.blob, 'aligned_tissue_image.png')).resolves.toEqual(checkerboardBytes);
+    await expect(readZipBytes(result.blob, 'tissue_fullres_image.png')).resolves.not.toEqual(checkerboardBytes);
+  });
+
+  it('blocks aligned image export when accepted checkerboard Crop/QC data is missing', async () => {
+    const project = createBaseProject();
+
+    const readiness = getPreprocessZipExportReadiness(project, { includeAlignedImage: true });
+
+    expect(readiness).toEqual({
+      canExport: false,
+      reason: 'Registered H&E image export requires checkerboard crop QC data.',
+    });
+    await expect(exportProjectWithAlignedImage(project)).rejects.toThrow('Registered H&E image export requires checkerboard crop QC data.');
   });
 
   it('blocks export when tissue support state is unsupported', async () => {

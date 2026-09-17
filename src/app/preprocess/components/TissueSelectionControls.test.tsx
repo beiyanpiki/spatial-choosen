@@ -185,15 +185,15 @@ describe("TissueSelectionControls", () => {
 		const user = userEvent.setup();
 		const { onShowSpotsChange } = renderControls({ showSpots: true });
 
-		const toggleButton = screen.getByRole("button", { name: "Hide spots" });
+		const toggleButton = screen.getByRole("button", { name: "Hide spot grid" });
 		expect(toggleButton).toBeEnabled();
 
 		await user.click(toggleButton);
 		expect(onShowSpotsChange).toHaveBeenCalledWith(false);
-		expect(screen.getByRole("button", { name: "Show spots" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show spot grid" })).toBeInTheDocument();
 	});
 
-	it("renders only activate and deactivate tools for supported chips", async () => {
+	it("renders only tissue and background marking tools for supported chips", async () => {
 		const user = userEvent.setup();
 		const {
 			onThresholdModeChange,
@@ -224,8 +224,8 @@ describe("TissueSelectionControls", () => {
 		expect(activationThresholdInput).toHaveValue(0.1);
 		expect(blockThresholdInput).toHaveValue(135);
 
-		const activateButton = screen.getByRole("button", { name: "Activate" });
-		const deactivateButton = screen.getByRole("button", { name: "Deactivate" });
+		const activateButton = screen.getByRole("button", { name: "Mark as tissue" });
+		const deactivateButton = screen.getByRole("button", { name: "Mark as background" });
 		expect(activateButton).toBeEnabled();
 		expect(deactivateButton).toBeEnabled();
 		expect(
@@ -344,7 +344,7 @@ describe("TissueSelectionControls", () => {
 		expect(blockThresholdInput.value).toBe("30");
 	});
 
-	it("disables Run auto detection while a threshold input is in an invalid partial local state", async () => {
+	it("disables tissue auto-selection while a threshold input is in an invalid partial local state", async () => {
 		const user = userEvent.setup();
 		const { onRunAutoDetection } = renderControls();
 
@@ -375,7 +375,7 @@ describe("TissueSelectionControls", () => {
 
 		expect(
 			screen.getByText(
-				"Tissue selection currently supports only 15um and 50um chips.",
+				"Tissue auto-selection currently supports only 15um and 50um capture chips.",
 			),
 		).toBeInTheDocument();
 		expect(
@@ -389,5 +389,16 @@ describe("TissueSelectionControls", () => {
 		expect(screen.getByTestId("tissue-run-auto")).toBeDisabled();
 		expect(screen.getByTestId("tissue-tool-activate")).toBeDisabled();
 		expect(screen.getByTestId("tissue-tool-deactivate")).toBeDisabled();
+	});
+
+	it("renders the revised tissue detection and refinement copy", () => {
+		renderControls();
+
+		expect(screen.getByText("Automatic Tissue Detection")).toBeInTheDocument();
+		expect(screen.getByText("Tissue Signal Threshold")).toBeInTheDocument();
+		expect(screen.getByText("Saturation Threshold")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Detect Tissue Spots" })).toBeInTheDocument();
+		expect(screen.getByText("Manual Refinement")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Invert selection" })).toBeInTheDocument();
 	});
 });

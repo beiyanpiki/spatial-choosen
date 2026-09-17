@@ -11,11 +11,8 @@ import type {
 	AlignmentSlice,
 	CanonicalCropQcGeometry,
 	CropQcSlice,
-	HeFocusAutoProposal,
 	HeFocusSlice,
-	LegacyHeFocusSlice,
 	LegacyPreprocessProject,
-	PreprocessPoint,
 	PreprocessProject,
 	PreprocessRect,
 	PreprocessSliceBase,
@@ -34,17 +31,6 @@ const createSlice = (
 
 const createDefaultImageTransform = () => ({
 	...DEFAULT_LOCALIZATION_IMAGE_TRANSFORM,
-});
-
-export const createHeFocusAutoProposal = (): HeFocusAutoProposal => ({
-	status: "idle",
-	method: null,
-	coarseBounds: null,
-	refinedBounds: null,
-	refinedQuad: null,
-	rotationDegrees: null,
-	eccCorrelation: null,
-	failureReason: null,
 });
 
 const isFiniteNumber = (value: unknown): value is number =>
@@ -70,15 +56,6 @@ const normalizeRect = (value: unknown): PreprocessRect | null => {
 		: null;
 };
 
-const normalizePoint = (value: unknown): PreprocessPoint | null => {
-	if (!value || typeof value !== "object") return null;
-
-	const point = value as Partial<PreprocessPoint>;
-	return isFiniteNumber(point.x) && isFiniteNumber(point.y)
-		? { x: point.x, y: point.y }
-		: null;
-};
-
 const buildHeFocusHandles = (rect: PreprocessRect): HeFocusSlice["handles"] => [
 	{ id: "nw", label: "NW", point: { x: rect.x, y: rect.y } },
 	{
@@ -97,20 +74,6 @@ const buildHeFocusHandles = (rect: PreprocessRect): HeFocusSlice["handles"] => [
 		point: { x: rect.x, y: rect.y + rect.height },
 	},
 ];
-
-const normalizeQuad = (value: unknown): HeFocusAutoProposal["refinedQuad"] => {
-	if (!Array.isArray(value) || value.length !== 4) return null;
-
-	const normalizedPoints = value.map(normalizePoint);
-	return normalizedPoints.every((point) => point !== null)
-		? [
-				normalizedPoints[0],
-				normalizedPoints[1],
-				normalizedPoints[2],
-				normalizedPoints[3],
-			]
-		: null;
-};
 
 const normalizeCropQcGeometry = (
 	value: unknown,
@@ -180,43 +143,10 @@ const normalizeCropQcSlice = (slice: CropQcSlice): CropQcSlice => {
 	};
 };
 
-const normalizeHeFocusAutoProposal = (
-	autoProposal: LegacyHeFocusSlice["autoProposal"],
-): HeFocusAutoProposal => {
-	const defaults = createHeFocusAutoProposal();
-	if (!autoProposal) return defaults;
-
-	return {
-		status:
-			autoProposal.status === "accepted" ||
-			autoProposal.status === "fallback" ||
-			autoProposal.status === "failed"
-				? autoProposal.status
-				: defaults.status,
-		method:
-			typeof autoProposal.method === "string" && autoProposal.method.length > 0
-				? autoProposal.method
-				: null,
-		coarseBounds: normalizeRect(autoProposal.coarseBounds),
-		refinedBounds: normalizeRect(autoProposal.refinedBounds),
-		refinedQuad: normalizeQuad(autoProposal.refinedQuad),
-		rotationDegrees: isFiniteNumber(autoProposal.rotationDegrees)
-			? autoProposal.rotationDegrees
-			: null,
-		eccCorrelation: isFiniteNumber(autoProposal.eccCorrelation)
-			? autoProposal.eccCorrelation
-			: null,
-		failureReason:
-			typeof autoProposal.failureReason === "string"
-				? autoProposal.failureReason
-				: null,
-	};
-};
-
 export const normalizeAlignmentSource = (
 	source: unknown,
 ): AlignmentSlice["source"] =>
-	source === "auto" || source === "manual" ? source : null;
+	source === "manual" ? source : null;
 
 export const createHeFocusSlice = (
 	status: PreprocessSliceBase["status"],
@@ -226,23 +156,24 @@ export const createHeFocusSlice = (
 	chipBounds: null,
 	handles: [],
 	imageTransform: createDefaultImageTransform(),
-	autoProposal: createHeFocusAutoProposal(),
 	focusedImageDataUrl: null,
 });
 
 export const normalizeHeFocusSlice = (
-	slice: HeFocusSlice | LegacyHeFocusSlice,
+	slice: HeFocusSlice,
 ): HeFocusSlice => {
 	const chipBounds = normalizeRect(slice.chipBounds);
 
 	return {
 		...createHeFocusSlice(slice.status),
-		...slice,
+		status: slice.status,
+		isStale: slice.isStale,
+		updatedAt: slice.updatedAt,
+		error: slice.error,
 		targetImage: "he",
 		chipBounds,
 		handles: chipBounds ? buildHeFocusHandles(chipBounds) : [],
 		imageTransform: normalizeLocalizationImageTransform(slice.imageTransform),
-		autoProposal: normalizeHeFocusAutoProposal(slice.autoProposal),
 		focusedImageDataUrl: slice.focusedImageDataUrl ?? null,
 	};
 };
@@ -324,6 +255,7 @@ export const buildEmptyPreprocessProject = (
 				accepted: false,
 			},
 			solveAccepted: false,
+			forceAccepted: false,
 			failureReason: null,
 			transform: null,
 			previewDataUrl: null,

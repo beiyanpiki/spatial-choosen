@@ -46,6 +46,7 @@ const invalidateAlignmentSlice = (slice: AlignmentSlice): AlignmentSlice => ({
     accepted: false,
   },
   solveAccepted: false,
+  forceAccepted: false,
   failureReason: null,
   transform: null,
   previewDataUrl: null,
@@ -179,16 +180,9 @@ export function invalidateOnHeFocusChipBoundsChange(project: PreprocessProject):
   return invalidateFromStep(project, "heFocus");
 }
 
-export function invalidateOnHeFocusAutoProposalChange(project: PreprocessProject): PreprocessProject {
-  return invalidateSpecificSteps(project, ['alignment', 'cropQc'], 'heFocus');
-}
 
 export function invalidateOnAlignmentChange(project: PreprocessProject): PreprocessProject {
   return invalidateFromStep(project, "alignment");
-}
-
-export function invalidateOnAcceptedAlignmentProvenanceChange(project: PreprocessProject): PreprocessProject {
-  return invalidateSpecificSteps(project, ['cropQc'], 'alignment');
 }
 
 export function invalidateOnCropQcChange(project: PreprocessProject): PreprocessProject {
