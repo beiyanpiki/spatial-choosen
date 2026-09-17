@@ -520,6 +520,61 @@ describe('PreprocessWorkspace crop gating contract', () => {
     expect(latestProject?.cropQc.cropAssets?.he?.fullres.dataUrl).toBe(baseRunResult.cropAssets.he.fullres.dataUrl);
   });
 
+  it('prints the complete registered ROI failure chain and safe input context to the console', async () => {
+    const rootCause = new RangeError('OpenCV destination allocation failed');
+    const cropError = Object.assign(
+      new Error('Crop QC failed while warping the H&E image with OpenCV'),
+      {
+        name: 'CropQcGenerationError',
+        stage: 'warp-moving-image',
+        details: {
+          outputSize: { width: 12000, height: 12000 },
+          outputPixels: 144000000,
+        },
+        cause: rootCause,
+      },
+    );
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockRunCropQc.mockRejectedValueOnce(cropError);
+
+    render(<WorkspaceHarness initialProject={createProject()} />);
+
+    await act(async () => {
+      capturedCropQcPanelProps?.onRunCrop();
+    });
+
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith(
+        '[Crop QC] Registered ROI generation failed',
+        expect.objectContaining({
+          stage: 'warp-moving-image',
+          error: expect.objectContaining({
+            name: 'CropQcGenerationError',
+            stage: 'warp-moving-image',
+            details: {
+              outputSize: { width: 12000, height: 12000 },
+              outputPixels: 144000000,
+            },
+            cause: expect.objectContaining({
+              name: 'RangeError',
+              message: 'OpenCV destination allocation failed',
+            }),
+          }),
+          context: expect.objectContaining({
+            projectId: 'workspace-crop-gating-project',
+            affineMatrix: [1, 0, 0, 0, 1, 0],
+            controlPointCount: 1,
+            inlierCount: 1,
+          }),
+        }),
+        cropError,
+      );
+    });
+
+    expect(latestProject?.cropQc.error).toBe(cropError.message);
+    consoleError.mockRestore();
+  });
+
 	it('preserves emitted Crop/QC export-frame dimensions instead of overwriting them with eosinReferenceGeometry evidence', async () => {
 		mockRunCropQc.mockResolvedValueOnce({
 			...baseRunResult,

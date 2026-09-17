@@ -5,7 +5,7 @@ import type {
   LocalizationImageTransform,
   PreprocessRect,
 } from '@/types/preprocess';
-import { CropQcBlockedError, runCropQc } from './cropQc';
+import { CropQcBlockedError, CropQcGenerationError, runCropQc } from './cropQc';
 import type { CvMat, OpenCvRuntime } from './loadOpenCv';
 
 type CanvasOperation =
@@ -636,6 +636,7 @@ const expectGeometryToBeCloseTo = (
 
 const runCropQcWithArgs = async (args: {
   affineMatrix: AlignmentAffineMatrix;
+  cv?: OpenCvRuntime;
   alignmentAccepted?: boolean;
   acceptedChipQuad?: readonly [
     PreprocessPoint,
@@ -652,7 +653,7 @@ const runCropQcWithArgs = async (args: {
   imageTransform?: LocalizationImageTransform;
 }) => {
   const request = {
-    cv: createOpenCvRuntime(),
+    cv: args.cv ?? createOpenCvRuntime(),
     eosinDataUrl: 'data:image/png;base64,eosin',
     heDataUrl: 'data:image/png;base64,he',
     chipBounds: args.chipBounds ?? CHIP_BOUNDS,
@@ -677,6 +678,75 @@ afterEach(() => {
 });
 
 describe('runCropQc feature match preview', () => {
+  it('preserves the failing stage, original cause, and processing dimensions', async () => {
+    installBrowserStubs();
+    const cv = createOpenCvRuntime();
+    const rootCause = new RangeError('OpenCV could not allocate the destination matrix');
+    cv.warpAffine = () => {
+      throw rootCause;
+    };
+
+    const cropError = await runCropQcWithArgs({
+      cv,
+      affineMatrix: [0.5, 0, 0, 0, 0.5, 0],
+      controlPoints: [],
+      inlierMask: null,
+    }).catch((error: unknown) => error);
+
+    expect(cropError).toBeInstanceOf(CropQcGenerationError);
+    expect(cropError).toMatchObject({
+      name: 'CropQcGenerationError',
+      stage: 'warp-moving-image',
+      cause: rootCause,
+      details: {
+        referenceSize: IMAGE_SIZE,
+        movingSize: IMAGE_SIZE,
+        outputSize: { width: 200, height: 200 },
+        outputPixels: 40000,
+        affineMatrix: [0.5, 0, 0, 0, 0.5, 0],
+      },
+    });
+    expect((cropError as Error).message).toContain(
+      'OpenCV could not allocate the destination matrix',
+    );
+  });
+
+  it('warps only the ROI when a right-angle full-frame allocation would exceed the memory limit', async () => {
+    installBrowserStubs();
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [0.005, 0, 20, 0, 0.005, 30],
+      chipBounds: {
+        x: 0.2,
+        y: 0.3,
+        width: 0.04,
+        height: 0.04,
+      },
+      imageTransform: {
+        rotationDegrees: 90,
+        flipHorizontal: false,
+        flipVertical: false,
+        scale: 1,
+      },
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    expect(getLastWarpAffineCall()).toMatchObject({
+      size: { width: 800, height: 800 },
+    });
+    expect(result.cropWidth).toBe(800);
+    expect(result.cropHeight).toBe(800);
+    expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, {
+      width: 800,
+      height: 800,
+    });
+    expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, {
+      width: 800,
+      height: 800,
+    });
+  });
+
   it('limits feature-match markers to inlier control points', async () => {
     installBrowserStubs();
 
@@ -721,12 +791,42 @@ describe('runCropQc feature match preview', () => {
       inlierMask: [true],
     });
 
-    expect(result.cropRect.x).toBeCloseTo(chipBounds.y);
-    expect(result.cropRect.y).toBeCloseTo(chipBounds.x);
+    expect(result.cropRect.x).toBeCloseTo(chipBounds.x);
+    expect(result.cropRect.y).toBeCloseTo(chipBounds.y);
     expect(result.cropRect.width).toBeCloseTo(chipBounds.width);
     expect(result.cropRect.height).toBeCloseTo(chipBounds.width);
     expect(result.cropWidth).toBe(result.cropHeight);
     expect(result.cropWidth).toBe(74);
+  });
+
+  it('keeps rotated canvas-axis capture bounds unchanged in Registration Review', async () => {
+    installBrowserStubs({ width: 256, height: 281 });
+    const captureBounds = {
+      x: 0.3682958199356913,
+      y: 0.33427888608963446,
+      width: 0.28290443666636905,
+      height: 0.2577350027992544,
+    };
+
+    const result = await runCropQcWithArgs({
+      affineMatrix: [1, 0, 0, 0, 1, 0],
+      chipBounds: captureBounds,
+      imageTransform: {
+        rotationDegrees: 90,
+        flipHorizontal: false,
+        flipVertical: false,
+        scale: 1.01,
+      },
+      controlPoints: [],
+      inlierMask: null,
+    });
+
+    expect(result.cropRect.x).toBeCloseTo(captureBounds.x);
+    expect(result.cropRect.y).toBeCloseTo(captureBounds.y);
+    expect(result.cropRect.width).toBeCloseTo(captureBounds.width);
+    expect(result.cropRect.height).toBeCloseTo(captureBounds.height);
+    expect(result.cropWidth).toBe(72);
+    expect(result.cropHeight).toBe(72);
   });
 
   it('applies localization rotation and flips to emitted crop assets and accepted preview markers', async () => {
@@ -760,16 +860,16 @@ describe('runCropQc feature match preview', () => {
     expectDrawImageCallCloseTo(eosinSummary.drawImageCalls[0], {
       sourceWidth: 100,
       sourceHeight: 100,
-      args: [10, 20, 40, 40, 0, 0, 40, 40],
+      args: [20, 10, 40, 40, 0, 0, 40, 40],
     });
     expectDrawImageCallCloseTo(heSummary.drawImageCalls[0], {
       sourceWidth: 100,
       sourceHeight: 100,
-      args: [10, 20, 40, 40, 0, 0, 40, 40],
+      args: [20, 10, 40, 40, 0, 0, 40, 40],
     });
     expect(featureSummary.arcPoints).toHaveLength(2);
-    expectPreviewPointCloseTo(featureSummary.arcPoints[0], { x: 10, y: 10 });
-    expectPreviewPointCloseTo(featureSummary.arcPoints[1], { x: 74, y: 10 });
+    expectPreviewPointCloseTo(featureSummary.arcPoints[0], { x: 0, y: 20 });
+    expectPreviewPointCloseTo(featureSummary.arcPoints[1], { x: 64, y: 20 });
   });
 
   it('swaps emitted dimensions and crop-local HE geometry for non-square right-angle rotations', async () => {
@@ -800,27 +900,27 @@ describe('runCropQc feature match preview', () => {
       solveAccepted: true,
     });
 
-    const eosinSummary = expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, { width: 80, height: 40 });
-    const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 80, height: 40 });
+    const eosinSummary = expectAssetCanvasSize(result.cropAssets.eosin.fullres.dataUrl, { width: 40, height: 80 });
+    const heSummary = expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 40, height: 80 });
 
-    expect(result.cropWidth).toBe(80);
-    expect(result.cropHeight).toBe(40);
+    expect(result.cropWidth).toBe(40);
+    expect(result.cropHeight).toBe(80);
     expectDrawImageCallCloseTo(eosinSummary.drawImageCalls[0], {
-      sourceWidth: 200,
-      sourceHeight: 100,
-      args: [100, 20, 80, 40, 0, 0, 80, 40],
+      sourceWidth: 100,
+      sourceHeight: 200,
+      args: [20, 20, 40, 80, 0, 0, 40, 80],
     });
     expectDrawImageCallCloseTo(heSummary.drawImageCalls[0], {
-      sourceWidth: 200,
-      sourceHeight: 100,
-      args: [100, 20, 80, 40, 0, 0, 80, 40],
+      sourceWidth: 100,
+      sourceHeight: 200,
+      args: [20, 20, 40, 80, 0, 0, 40, 80],
     });
     expectGeometryToBeCloseTo(result.heQcGeometry, {
       rect: {
-        x: 0.875,
-        y: 0.25,
-        width: 0.125,
-        height: 0.5,
+        x: 2.5,
+        y: 0.75,
+        width: 0.25,
+        height: 0.25,
       },
       width: 10,
       height: 20,
@@ -936,6 +1036,8 @@ describe('runCropQc feature match preview', () => {
     expectAssetCanvasSize(result.cropAssets.he.fullres.dataUrl, { width: 2500, height: 2500 });
     expectAssetCanvasSize(result.cropAssets.he.hires.dataUrl, { width: 2000, height: 2000 });
     expectAssetCanvasSize(result.cropAssets.he.lowres.dataUrl, { width: 800, height: 800 });
+    expectAssetCanvasSize(result.checkerboardDataUrl, { width: 2000, height: 2000 });
+    expectAssetCanvasSize(result.featureMatchesDataUrl, { width: 4024, height: 2000 });
     expect(result.eosinReferenceGeometry.width).toBe(2500);
     expect(result.eosinReferenceGeometry.height).toBe(2500);
     expect(result.cropWidth).toBe(2500);
