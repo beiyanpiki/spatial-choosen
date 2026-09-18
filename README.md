@@ -6,6 +6,7 @@ NATAScope Web 工作台是一个基于 Next.js、React 和 TypeScript 的浏览�
 
 - **Spatial Tissue Region Annotator**：导入空间转录组 bundle 与 H&E 图像，交互式标注组织区域，并导出项目或 CSV 结果。
 - **Spatial Image Preparation**：在 `/preprocess` 中导入 NATA Align 参考图与 H&E 图像，完成捕获区域定位、ROI 对齐、图像配准、质量审核、组织 spot 选择和预处理包导出。
+- **NATA Batch Selection**：在 `/batch` 中一次导入 n 个 NATA 包，手动旋转/缩放把每一张 `tissue_fullres_image.png` 对齐到参考图（image[0]），在参考图上圈选一次即可投射到所有包，并导出带 `in_selected` 列的 `tissue_positions.csv` 与 `transform-matrix.csv`（默认按"本图坐标系"记录该包的旋转/缩放操作矩阵，也可切换为参考图坐标系）。
 - **本地项目管理**：支持保存、继续、导入和删除项目；大体积图像与矩阵数据使用浏览器 IndexedDB 存储。
 
 ## 环境要求
@@ -25,6 +26,7 @@ npm run dev
 
 - <http://localhost:3000>：组织区域标注入口
 - <http://localhost:3000/preprocess>：图像预处理工作台
+- <http://localhost:3000/batch>：多包批量选点工作台
 
 首次开发时也可以使用 `npm install`，但 CI、协作和可复现部署应优先使用 `npm ci`。
 
@@ -46,9 +48,11 @@ src/
 ├── app/
 │   ├── page.tsx                 # 标注项目首页与 bundle 导入
 │   ├── spatial/                 # 组织区域标注工作区
-│   └── preprocess/              # 图像预处理路由、状态与组件
+│   ├── preprocess/              # 图像预处理路由、状态与组件
+│   └── batch/                   # 多包批量选点路由、状态与组件
 ├── lib/                         # 解码、存储、几何、导出等领域逻辑
-│   └── preprocess/              # 配准、组织识别、迁移与打包辅助函数
+│   ├── preprocess/              # 配准、组织识别、迁移与打包辅助函数
+│   └── batch/                   # 包解析、仿射变换、命中判定与批量导出
 ├── types/                       # 共享 TypeScript 数据模型
 └── test/setup.ts                # Vitest jsdom 测试配置
 
