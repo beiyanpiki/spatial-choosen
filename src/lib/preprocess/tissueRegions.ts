@@ -121,6 +121,23 @@ const toGeometryRegion = (region: TissueRegion): Region => {
   };
 };
 
+/**
+ * Converts a polygon ring to a point list.
+ *
+ * `polygon-clipping` returns closed rings (last point repeats the first), but
+ * the single-polygon shortcut below skips the union and therefore yields an
+ * open ring. Dropping the last point unconditionally used to clip a real corner
+ * in that case, turning a rectangle into a triangle.
+ */
+const ringToPoints = (ring: [number, number][]): Region['points'] => {
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  const isClosed = ring.length > 1 && first[0] === last[0] && first[1] === last[1];
+  const open = isClosed ? ring.slice(0, -1) : ring;
+
+  return open.map(([x, y]) => ({ x, y }));
+};
+
 export function deriveSelectedSpotIdsFromRegions(
   regions: TissueRegion[],
   projectedSpots: ProjectedSpot[],
@@ -251,7 +268,8 @@ export function buildDefaultTissueRegionFromDetectedSpots(args: {
   const paths = union
     .flat()
     .filter((ring): ring is [number, number][] => Array.isArray(ring) && ring.length >= 3)
-    .map((ring) => ring.slice(0, -1).map(([x, y]) => ({ x, y })));
+    .map(ringToPoints)
+    .filter((points) => points.length >= 3);
 
   if (paths.length === 0) {
     return null;
