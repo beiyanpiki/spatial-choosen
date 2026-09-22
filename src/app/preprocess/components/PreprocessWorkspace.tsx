@@ -4,6 +4,7 @@ import {
 	Badge,
 	Box,
 	Button,
+	ButtonGroup,
 	Card,
 	CardBody,
 	Flex,
@@ -14,7 +15,6 @@ import {
 	Icon,
 	Image,
 	Input,
-	Select,
 	Spinner,
 	Stack,
 	Text,
@@ -458,6 +458,8 @@ export const getHeFocusComparisonSource = (
 		imageTransform: project.localization.imageTransform,
 	};
 };
+
+const CHIP_SIZE_OPTIONS: readonly string[] = ["15um", "50um"];
 
 const placeholderCopyByStep: Record<
 	PreprocessStepId,
@@ -2149,6 +2151,184 @@ export function PreprocessWorkspace({
 		!project?.cropQc.cropWidth || !project?.cropQc.cropHeight
 			? "Registered ROI size is unavailable. Generate and approve the registered crop in Registration Review before choosing a chip."
 			: null;
+	const handleChipTypeChange = (chipId: string) => {
+		if (!project) return;
+		if (chipId !== "15um" && chipId !== "50um")
+			return;
+																	if (chipId !== "15um" && chipId !== "50um")
+																		return;
+																	if (
+																		!project.cropQc.cropWidth ||
+																		!project.cropQc.cropHeight
+																	) {
+																		toast({
+																			title: "Chip selection unavailable",
+																			description:
+																				"Generate and approve the registered crop in Registration Review first — the spot grid needs the registered ROI size.",
+																			status: "warning",
+																		});
+																		return;
+																	}
+																	const cropWidth = project.cropQc.cropWidth;
+																	const cropHeight = project.cropQc.cropHeight;
+																	const chipRequestToken =
+																		++chipConfigRequestTokenRef.current;
+																	void (async () => {
+																		try {
+																			setChipConfigError(null);
+																			const config =
+																				await loadChipConfigData(chipId);
+																			if (
+																				chipConfigRequestTokenRef.current !==
+																				chipRequestToken
+																			) {
+																				return;
+																			}
+																			const {
+																				projectedSpots,
+																				spotDiameterFullres,
+																				tissueSupport: nextSupport,
+																			} = deriveChipProjectionForCrop({
+																				config,
+																				cropWidth,
+																				cropHeight,
+																			});
+																			const timestamp =
+																				new Date().toISOString();
+
+																			onProjectMutate((current) => {
+																				if (
+																					chipConfigRequestTokenRef.current !==
+																						chipRequestToken ||
+																					current.cropQc.cropWidth !==
+																						cropWidth ||
+																					current.cropQc.cropHeight !==
+																						cropHeight
+																				) {
+																					return current;
+																				}
+																				return {
+																					...current,
+																					cropQc: {
+																						...current.cropQc,
+																						spot_diameter_fullres:
+																							spotDiameterFullres,
+																						updatedAt: timestamp,
+																					},
+																					chipConfig: {
+																						...current.chipConfig,
+																						chipType: config.manifest.id,
+																						rows: config.manifest.gridRows,
+																						columns: config.manifest.gridCols,
+																						pitchX: config.manifest.spotGap,
+																						pitchY: config.manifest.spotGap,
+																						origin: { x: 0, y: 0 },
+																						rotationDegrees: 0,
+																						projectedSpots,
+																						status: "complete",
+																						isStale: false,
+																						updatedAt: timestamp,
+																						error: null,
+																					},
+																					tissueSelection: {
+																						...current.tissueSelection,
+																						supportState:
+																							nextSupport.supportState,
+																						unsupportedReason:
+																							nextSupport.unsupportedReason,
+																						matrix: null,
+																						autoSelectedSpotIds: [],
+																						selectedSpotIds: null,
+																						paritySummary: null,
+																						warning: null,
+																						status: "stale",
+																						isStale: true,
+																						updatedAt: timestamp,
+																						error: null,
+																					},
+																					exportState: {
+																						...current.exportState,
+																						status: "stale",
+																						isStale: true,
+																						updatedAt: timestamp,
+																						lastExportedAt: null,
+																						artifacts: [],
+																						error: null,
+																					},
+																				};
+																			});
+																		} catch (error) {
+																			if (
+																				chipConfigRequestTokenRef.current !==
+																				chipRequestToken
+																			) {
+																				return;
+																			}
+																			const message =
+																				error instanceof Error
+																					? error.message
+																					: "Failed to load chip config";
+																			const nextSupport =
+																				resolveTissueSelectionSupport({
+																					chipType: chipId,
+																					rows: null,
+																					columns: null,
+																				});
+																			setChipConfigError(message);
+																			onProjectMutate((current) => {
+																				if (
+																					chipConfigRequestTokenRef.current !==
+																						chipRequestToken ||
+																					current.cropQc.cropWidth !==
+																						cropWidth ||
+																					current.cropQc.cropHeight !==
+																						cropHeight
+																				) {
+																					return current;
+																				}
+																				return {
+																					...current,
+																					chipConfig: {
+																						...current.chipConfig,
+																						chipType: chipId,
+																						projectedSpots: null,
+																						status: "error",
+																						isStale: false,
+																						updatedAt: new Date().toISOString(),
+																						error: message,
+																					},
+																					tissueSelection: {
+																						...current.tissueSelection,
+																						supportState:
+																							nextSupport.supportState,
+																						unsupportedReason:
+																							nextSupport.unsupportedReason,
+																						matrix: null,
+																						autoSelectedSpotIds: [],
+																						selectedSpotIds: null,
+																						paritySummary: null,
+																						warning: null,
+																						status: "error",
+																						isStale: false,
+																						updatedAt: new Date().toISOString(),
+																						error: message,
+																					},
+																					exportState: {
+																						...current.exportState,
+																						status: "stale",
+																						isStale: true,
+																						updatedAt: new Date().toISOString(),
+																						lastExportedAt: null,
+																						artifacts: [],
+																						error: null,
+																					},
+																				};
+																			});
+																		}
+																	})();
+	};
+
+
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
 	const commitManualTissueSelection = useCallback(
 		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
@@ -2918,188 +3098,38 @@ export function PreprocessWorkspace({
 															>
 																Spot Size
 															</FormLabel>
-															<Select
-																value={project.chipConfig.chipType ?? ""}
-																placeholder="Select capture pitch"
-																data-testid="tissue-chip-size-select"
-																onChange={(event) => {
-																	const chipId = event.target.value;
-																	if (chipId !== "15um" && chipId !== "50um")
-																		return;
-																	if (
-																		!project.cropQc.cropWidth ||
-																		!project.cropQc.cropHeight
-																	) {
-																		toast({
-																			title: "Chip selection unavailable",
-																			description:
-																				"Generate and approve the registered crop in Registration Review first — the spot grid needs the registered ROI size.",
-																			status: "warning",
-																		});
-																		return;
-																	}
-																	const cropWidth = project.cropQc.cropWidth;
-																	const cropHeight = project.cropQc.cropHeight;
-																	const chipRequestToken =
-																		++chipConfigRequestTokenRef.current;
-																	void (async () => {
-																		try {
-																			setChipConfigError(null);
-																			const config =
-																				await loadChipConfigData(chipId);
-																			if (
-																				chipConfigRequestTokenRef.current !==
-																				chipRequestToken
-																			) {
-																				return;
-																			}
-																			const {
-																				projectedSpots,
-																				spotDiameterFullres,
-																				tissueSupport: nextSupport,
-																			} = deriveChipProjectionForCrop({
-																				config,
-																				cropWidth,
-																				cropHeight,
-																			});
-																			const timestamp =
-																				new Date().toISOString();
-
-																			onProjectMutate((current) => {
-																				if (
-																					chipConfigRequestTokenRef.current !==
-																						chipRequestToken ||
-																					current.cropQc.cropWidth !==
-																						cropWidth ||
-																					current.cropQc.cropHeight !==
-																						cropHeight
-																				) {
-																					return current;
-																				}
-																				return {
-																					...current,
-																					cropQc: {
-																						...current.cropQc,
-																						spot_diameter_fullres:
-																							spotDiameterFullres,
-																						updatedAt: timestamp,
-																					},
-																					chipConfig: {
-																						...current.chipConfig,
-																						chipType: config.manifest.id,
-																						rows: config.manifest.gridRows,
-																						columns: config.manifest.gridCols,
-																						pitchX: config.manifest.spotGap,
-																						pitchY: config.manifest.spotGap,
-																						origin: { x: 0, y: 0 },
-																						rotationDegrees: 0,
-																						projectedSpots,
-																						status: "complete",
-																						isStale: false,
-																						updatedAt: timestamp,
-																						error: null,
-																					},
-																					tissueSelection: {
-																						...current.tissueSelection,
-																						supportState:
-																							nextSupport.supportState,
-																						unsupportedReason:
-																							nextSupport.unsupportedReason,
-																						matrix: null,
-																						autoSelectedSpotIds: [],
-																						selectedSpotIds: null,
-																						paritySummary: null,
-																						warning: null,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: timestamp,
-																						error: null,
-																					},
-																					exportState: {
-																						...current.exportState,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: timestamp,
-																						lastExportedAt: null,
-																						artifacts: [],
-																						error: null,
-																					},
-																				};
-																			});
-																		} catch (error) {
-																			if (
-																				chipConfigRequestTokenRef.current !==
-																				chipRequestToken
-																			) {
-																				return;
-																			}
-																			const message =
-																				error instanceof Error
-																					? error.message
-																					: "Failed to load chip config";
-																			const nextSupport =
-																				resolveTissueSelectionSupport({
-																					chipType: chipId,
-																					rows: null,
-																					columns: null,
-																				});
-																			setChipConfigError(message);
-																			onProjectMutate((current) => {
-																				if (
-																					chipConfigRequestTokenRef.current !==
-																						chipRequestToken ||
-																					current.cropQc.cropWidth !==
-																						cropWidth ||
-																					current.cropQc.cropHeight !==
-																						cropHeight
-																				) {
-																					return current;
-																				}
-																				return {
-																					...current,
-																					chipConfig: {
-																						...current.chipConfig,
-																						chipType: chipId,
-																						projectedSpots: null,
-																						status: "error",
-																						isStale: false,
-																						updatedAt: new Date().toISOString(),
-																						error: message,
-																					},
-																					tissueSelection: {
-																						...current.tissueSelection,
-																						supportState:
-																							nextSupport.supportState,
-																						unsupportedReason:
-																							nextSupport.unsupportedReason,
-																						matrix: null,
-																						autoSelectedSpotIds: [],
-																						selectedSpotIds: null,
-																						paritySummary: null,
-																						warning: null,
-																						status: "error",
-																						isStale: false,
-																						updatedAt: new Date().toISOString(),
-																						error: message,
-																					},
-																					exportState: {
-																						...current.exportState,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: new Date().toISOString(),
-																						lastExportedAt: null,
-																						artifacts: [],
-																						error: null,
-																					},
-																				};
-																			});
-																		}
-																	})();
-																}}
+															<ButtonGroup
+																isAttached
+																variant='outline'
+																w='100%'
+																data-testid='tissue-chip-size-control'
 															>
-																<option value="15um">15um</option>
-																<option value="50um">50um</option>
-													</Select>
+																{CHIP_SIZE_OPTIONS.map((chipId) => (
+																	<Button
+																		key={chipId}
+																		flex={1}
+																		size='sm'
+																		colorScheme={
+																			project.chipConfig.chipType === chipId
+																				? 'brand'
+																				: 'gray'
+																		}
+																		variant={
+																			project.chipConfig.chipType === chipId
+																				? 'solid'
+																				: 'outline'
+																		}
+																		aria-pressed={
+																			project.chipConfig.chipType === chipId
+																		}
+																		isDisabled={isChipSelectorDisabled}
+																		onClick={() => handleChipTypeChange(chipId)}
+																		data-testid={`tissue-chip-size-option-${chipId}`}
+																	>
+																		{chipId}
+																	</Button>
+																))}
+															</ButtonGroup>
 												</FormControl>
 												{chipSelectionBlockedReason ? (
 													<Text fontSize="xs" color="orange.600">

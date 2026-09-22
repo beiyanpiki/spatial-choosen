@@ -929,7 +929,8 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     const user = userEvent.setup();
     render(<WorkspaceHarness />);
 
-    const chipSizeSelect = screen.getByTestId('tissue-chip-size-select');
+    const chipSizeOption = (chipId: string) =>
+      screen.getByTestId(`tissue-chip-size-option-${chipId}`);
     const thresholdModeSelect = screen.getByTestId('tissue-threshold-mode-select');
     const runAutoButton = screen.getByTestId('tissue-run-auto');
     const activateButton = screen.getByTestId('tissue-tool-activate');
@@ -958,7 +959,8 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
       warning: null,
     });
 
-    expect(chipSizeSelect).toBeEnabled();
+    expect(chipSizeOption('15um')).toBeEnabled();
+    expect(chipSizeOption('50um')).toBeEnabled();
     expect(thresholdModeSelect).not.toBeDisabled();
     expect(runAutoButton).not.toBeDisabled();
     expect(activateButton).not.toBeDisabled();
@@ -974,19 +976,20 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     await user.selectOptions(thresholdModeSelect, 'gray-max');
     expect(thresholdModeSelect).toHaveValue('gray-max');
-    expect(chipSizeSelect).toBeEnabled();
+    expect(chipSizeOption('50um')).toBeEnabled();
 
-    await user.selectOptions(chipSizeSelect, '50um');
+    await user.click(chipSizeOption('50um'));
 
     await waitFor(() => {
-      expect(chipSizeSelect).toHaveValue('50um');
+      expect(chipSizeOption('50um')).toHaveAttribute('aria-pressed', 'true');
+      expect(chipSizeOption('15um')).toHaveAttribute('aria-pressed', 'false');
     });
 
     expect(
       screen.getByText('Tissue auto-selection currently supports only 15um and 50um capture chips.'),
     ).toBeInTheDocument();
     expect(screen.getByText('50um tissue auto-selection requires a 64x64 spot grid.')).toBeInTheDocument();
-    expect(chipSizeSelect).toBeEnabled();
+    expect(chipSizeOption('50um')).toBeEnabled();
     expect(thresholdModeSelect).toBeDisabled();
     expect(runAutoButton).toBeDisabled();
     expect(activateButton).toBeDisabled();
@@ -1212,7 +1215,7 @@ describe('Preprocess page autosave failure handling', () => {
       expect(screen.getByTestId('autosave-status')).toHaveTextContent('saved');
     });
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-chip-size-select')).toBeInTheDocument();
+      expect(screen.getByTestId('tissue-chip-size-option-15um')).toBeInTheDocument();
     });
 
 		await user.click(screen.getByTestId('tissue-panel-commit-manual-edit'));
