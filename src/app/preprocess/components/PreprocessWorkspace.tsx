@@ -2856,6 +2856,52 @@ export function PreprocessWorkspace({
 												bg="white"
 											>
 												<CardBody p={4}>
+													<Stack spacing={1.5}>
+														<Text
+															fontSize="xs"
+															textTransform="uppercase"
+															letterSpacing="0.12em"
+															color="gray.500"
+														>
+															Selection Overview
+														</Text>
+														<Text
+															fontSize="md"
+															fontWeight="semibold"
+															data-testid="tissue-selected-count"
+														>
+															Number of Tissue Spots:{" "}
+															{tissueSelectedSpotIds.length}
+														</Text>
+														{project.tissueSelection.warning ? (
+															<Text
+																fontSize="sm"
+																color="orange.700"
+																data-testid="tissue-detection-warning"
+															>
+																{project.tissueSelection.warning}
+															</Text>
+														) : (
+															<Text
+																fontSize="sm"
+																color="gray.500"
+																data-testid="tissue-detection-status"
+															>
+																{tissueDetectionStatusMessage}
+															</Text>
+														)}
+													</Stack>
+												</CardBody>
+											</Card>
+
+											<Card
+												border="1px solid"
+												borderColor="gray.200"
+												borderRadius="2xl"
+												boxShadow="sm"
+												bg="white"
+											>
+												<CardBody p={4}>
 													<Stack spacing={3}>
 														<Text fontSize="sm" fontWeight="semibold">
 															Chip Information
@@ -3228,43 +3274,6 @@ export function PreprocessWorkspace({
 												}}
 												onShowSpotsChange={setShowTissueSpots}
 											/>
-
-											<Card
-												border="1px solid"
-												borderColor="gray.200"
-												borderRadius="2xl"
-												boxShadow="sm"
-												bg="white"
-											>
-												<CardBody p={4}>
-													<Stack spacing={1}>
-														<Text
-															fontSize="sm"
-															color="gray.600"
-															data-testid="tissue-selected-count"
-														>
-															Number of Tissue Spots: {tissueSelectedSpotIds.length}
-														</Text>
-														{project.tissueSelection.warning ? (
-															<Text
-																fontSize="sm"
-																color="orange.700"
-																data-testid="tissue-detection-warning"
-															>
-																{project.tissueSelection.warning}
-															</Text>
-														) : (
-															<Text
-																fontSize="sm"
-																color="gray.500"
-																data-testid="tissue-detection-status"
-															>
-																{tissueDetectionStatusMessage}
-															</Text>
-														)}
-													</Stack>
-												</CardBody>
-											</Card>
 										</Stack>
 									</Flex>
 									{isDetectingTissue ? (
