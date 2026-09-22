@@ -1170,14 +1170,25 @@ const syncImageStores = async (projectId: string, image: PreprocessSourceImage |
 };
 
 const syncDerivedImageStore = async (key: string, dataUrl: string | null) => {
-  const payload = dataUrl ? await urlToBlob(dataUrl) : undefined;
-
-  if (payload) {
-    await saveStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key, payload);
+  if (!dataUrl) {
+    await deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key);
     return;
   }
 
-  await deleteStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key);
+  let payload: Blob;
+  try {
+    payload = await urlToBlob(dataUrl);
+  } catch (error) {
+    // Blob: preview URLs are transient view pointers — page code revokes them
+    // as soon as they leave project state, so a fallback persist of an older
+    // snapshot can reference an already-revoked URL. Keep the previously stored
+    // payload (hydration prefers this store anyway) instead of aborting the
+    // whole snapshot save.
+    console.warn('Skipping derived image sync; source URL is no longer readable.', key, error);
+    return;
+  }
+
+  await saveStoreValue(PREPROCESS_DERIVED_IMAGE_STORE, key, payload);
 };
 
 const syncCropQcDerivedImageStores = async (projectId: string, cropQc: PreprocessProject['cropQc']) => {

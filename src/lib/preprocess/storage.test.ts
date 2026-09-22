@@ -1449,4 +1449,59 @@ describe('preprocess storage tissue metadata', () => {
 		const workspace = normalizeProjectForWorkspace(hydrated as PreprocessProject);
 		expect(workspace.heFocus.chipBounds).toEqual(heFocusBounds);
 	});
+
+	it('keeps the previous derived payload when a preview blob URL was revoked instead of failing the snapshot save', async () => {
+		const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL')
+			.mockImplementation((blob: Blob) => `blob:restored:${blob.size}`);
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const fetchMock = vi.fn(async (input: string) => {
+			if (typeof input === 'string' && input.startsWith('blob:')) {
+				// Revoked blob URLs reject exactly like the browser's
+				// net::ERR_FILE_NOT_FOUND on fetch(blob:...).
+				throw new TypeError('Failed to fetch');
+			}
+			if (input === '/preprocess-chip-configs/50um/manifest.json') {
+				return new Response(JSON.stringify({
+					id: '50um',
+					label: '50um',
+					gridRows: 64,
+					gridCols: 64,
+					spotDiameter: 1,
+					spotGap: 1,
+					barcodeTemplatePath: '/template.csv',
+					tissuePositionsPath: '/template.csv',
+				}), { status: 200 });
+			}
+			if (input === '/template.csv') {
+				return new Response([
+					'barcode,array_row,array_col',
+					'spot-a,1,1',
+					'spot-b,2,2',
+				].join('\n'), { status: 200 });
+			}
+			return new Response(null, { status: 404 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		try {
+			const project = createProject();
+			project.heFocus.focusedImageDataUrl = PNG_DATA_URL;
+			await upsertPreprocessProject(project);
+
+			// Simulate page code revoking the preview URL while the project still
+			// points at it, then persisting again (the reported autosave failure).
+			project.heFocus.focusedImageDataUrl = 'blob:revoked-preview';
+			await expect(upsertPreprocessProject(project)).resolves.toBeUndefined();
+
+			const hydrated = await getPreprocessProject(project.id);
+			expect(hydrated).toBeDefined();
+			// The previously stored payload survives and is re-exposed through a
+			// fresh object URL on hydration.
+			expect(hydrated?.heFocus.focusedImageDataUrl?.startsWith('blob:restored:')).toBe(true);
+			expect(warnSpy).toHaveBeenCalled();
+		} finally {
+			createObjectUrlSpy.mockRestore();
+			warnSpy.mockRestore();
+		}
+	});
 });
