@@ -11,6 +11,7 @@ import {
 	FormLabel,
 	Heading,
 	HStack,
+	Icon,
 	Image,
 	Input,
 	Select,
@@ -678,77 +679,251 @@ const deriveChipProjectionForCrop = (args: {
 	};
 };
 
+function formatBytes(sizeBytes: number): string {
+	if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+		return "—";
+	}
+
+	if (sizeBytes < 1024) {
+		return `${sizeBytes} B`;
+	}
+
+	const units = ["KB", "MB", "GB", "TB"];
+	let value = sizeBytes;
+	let unitIndex = -1;
+	do {
+		value /= 1024;
+		unitIndex += 1;
+	} while (value >= 1024 && unitIndex < units.length - 1);
+	return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+const sourceAssetIconProps = {
+	viewBox: "0 0 24 24",
+	fill: "none",
+	stroke: "currentColor",
+	strokeWidth: 1.8,
+	strokeLinecap: "round" as const,
+	strokeLinejoin: "round" as const,
+	"aria-hidden": true,
+};
+
+function ImagePlaceholderIcon(props: ComponentProps<typeof Icon>) {
+	return (
+		<Icon {...sourceAssetIconProps} {...props}>
+			<rect x="3.5" y="5" width="17" height="14" rx="2" />
+			<circle cx="9" cy="10" r="1.5" />
+			<path d="M6 16.6l3.7-3.7a1.4 1.4 0 0 1 2 0l5.8 5.8" />
+		</Icon>
+	);
+}
+
+function UploadTrayIcon(props: ComponentProps<typeof Icon>) {
+	return (
+		<Icon {...sourceAssetIconProps} {...props}>
+			<path d="M12 15.5V4.5" />
+			<path d="M7.8 8.7L12 4.5l4.2 4.2" />
+			<path d="M4.5 15.5v2.6a1.4 1.4 0 0 0 1.4 1.4h12.2a1.4 1.4 0 0 0 1.4-1.4v-2.6" />
+		</Icon>
+	);
+}
+
 function SourceAssetUploader({
 	label,
 	description,
-	buttonLabel,
+	uploadLabel,
+	replaceLabel,
 	emptyText,
 	image,
 	onUpload,
 }: {
 	label: string;
 	description: string;
-	buttonLabel: string;
+	uploadLabel: string;
+	replaceLabel: string;
 	emptyText: string;
 	image: PreprocessProject["sourceAssets"]["images"]["eosin"] | null;
-	onUpload: (fileList: FileList | null) => void;
+	onUpload: (fileList: FileList | null) => void | Promise<void>;
 }) {
+	const [isUploading, setIsUploading] = useState(false);
+	const [isDraggingOver, setIsDraggingOver] = useState(false);
+	const dragDepthRef = useRef(0);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const thumbnailUrl = image
+		? (image.thumbnailObjectUrl ??
+			image.thumbnailDataUrl ??
+			image.objectUrl ??
+			image.dataUrl ??
+			null)
+		: null;
+	const fileFormatLabel = image
+		? (/\.([A-Za-z0-9]+)$/.exec(image.fileName)?.[1]?.toUpperCase() ?? null)
+		: null;
+
+	const startUpload = (fileList: FileList | null) => {
+		const result = onUpload(fileList);
+		if (result instanceof Promise) {
+			setIsUploading(true);
+			void result
+				.catch(() => {})
+				.finally(() => {
+					setIsUploading(false);
+				});
+		}
+	};
+
+	const openFilePicker = () => {
+		fileInputRef.current?.click();
+	};
+
 	return (
 		<Box
 			border="1px solid"
-			borderColor="gray.200"
+			borderColor={isDraggingOver ? "brand.400" : "gray.200"}
 			borderRadius="xl"
-			bg="white"
-			px={4}
-			py={4}
+			bg={isDraggingOver ? "brand.50" : "white"}
+			px={5}
+			py={5}
 			h="full"
+			transition="border-color 150ms ease, background-color 150ms ease"
+			onDragEnter={(event) => {
+				event.preventDefault();
+				dragDepthRef.current += 1;
+				setIsDraggingOver(true);
+			}}
+			onDragOver={(event) => {
+				event.preventDefault();
+			}}
+			onDragLeave={(event) => {
+				event.preventDefault();
+				dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+				if (dragDepthRef.current === 0) {
+					setIsDraggingOver(false);
+				}
+			}}
+			onDrop={(event) => {
+				event.preventDefault();
+				dragDepthRef.current = 0;
+				setIsDraggingOver(false);
+				if (event.dataTransfer.files.length > 0) {
+					startUpload(event.dataTransfer.files);
+				}
+			}}
 		>
-			<Stack spacing={3}>
-				<Flex justify="space-between" align="flex-start" gap={3} wrap="wrap">
-					<Stack spacing={1}>
-						<Heading size="sm">{label}</Heading>
+			<Flex direction="column" h="full" gap={4}>
+				<Flex align="flex-start" gap={4}>
+					<Box
+						flexShrink={0}
+						display="flex"
+						alignItems="center"
+						justifyContent="center"
+						w={16}
+						h={16}
+						borderRadius="md"
+						overflow="hidden"
+						borderWidth={1}
+						borderStyle={image ? "solid" : "dashed"}
+						borderColor={image ? "gray.200" : "gray.300"}
+						bg="gray.50"
+					>
+						{thumbnailUrl ? (
+							<Image
+								src={thumbnailUrl}
+								alt={`${label} preview`}
+								w="full"
+								h="full"
+								objectFit="cover"
+							/>
+						) : (
+							<ImagePlaceholderIcon boxSize={6} color="gray.300" />
+						)}
+					</Box>
+					<Stack spacing={1} flex="1" minW={0}>
+						<Flex justify="space-between" align="center" gap={3}>
+							<Heading size="sm">{label}</Heading>
+							<Badge
+								colorScheme={isUploading ? "orange" : image ? "green" : "orange"}
+								flexShrink={0}
+								borderRadius="full"
+							>
+								{isUploading ? "Uploading" : image ? "Ready" : "Missing"}
+							</Badge>
+						</Flex>
 						<Text fontSize="sm" color="gray.500">
 							{description}
 						</Text>
 					</Stack>
-					<Badge
-						colorScheme={image ? "green" : "orange"}
-						alignSelf="flex-start"
-						borderRadius="full"
-					>
-						{image ? "Ready" : "Missing"}
-					</Badge>
 				</Flex>
-				<Text fontSize="sm" color="gray.600">
-					{image
-						? `${image.fileName} • ${image.width ?? "?"}×${image.height ?? "?"} px`
-						: emptyText}
-				</Text>
-				<Box>
+				{image ? (
+					<Box bg="gray.50" borderRadius="md" px={3} py={2.5}>
+						<Stack spacing={0.5}>
+							<Text
+								fontSize="sm"
+								fontWeight="medium"
+								color="gray.800"
+								isTruncated
+								title={image.fileName}
+							>
+								{image.fileName}
+							</Text>
+							<Text fontSize="xs" color="gray.500">
+								{[
+									`${image.width ?? "?"} × ${image.height ?? "?"} px`,
+									fileFormatLabel,
+									formatBytes(image.sizeBytes),
+								]
+									.filter((part): part is string => Boolean(part))
+									.join(" • ")}
+							</Text>
+						</Stack>
+					</Box>
+				) : (
+					<Box
+						onClick={openFilePicker}
+						border="1px dashed"
+						borderColor="gray.300"
+						borderRadius="md"
+						px={4}
+						py={5}
+						textAlign="center"
+						cursor="pointer"
+						_hover={{ borderColor: "brand.400", bg: "brand.50" }}
+						transition="border-color 150ms ease, background-color 150ms ease"
+					>
+						<Stack spacing={1} align="center">
+							<UploadTrayIcon boxSize={5} color="gray.400" />
+							<Text fontSize="sm" color="gray.600">
+								{emptyText}
+							</Text>
+							<Text fontSize="xs" color="gray.400">
+								Drag &amp; drop an image here, or click to browse
+							</Text>
+						</Stack>
+					</Box>
+				)}
+				<Flex mt="auto">
 					<Button
 						colorScheme="brand"
 						variant={image ? "outline" : "solid"}
 						size="sm"
-						onClick={(event) => {
-							const input = event.currentTarget.nextElementSibling;
-							if (input instanceof HTMLInputElement) {
-								input.click();
-							}
-						}}
+						isLoading={isUploading}
+						onClick={openFilePicker}
 					>
-						{buttonLabel}
+						{image ? replaceLabel : uploadLabel}
 					</Button>
 					<Input
+						ref={fileInputRef}
 						type="file"
 						accept="image/*,.tif,.tiff"
 						display="none"
+						aria-label={`Select ${label} file`}
 						onChange={(event) => {
-							onUpload(event.target.files);
+							startUpload(event.target.files);
 							event.target.value = "";
 						}}
 					/>
-				</Box>
-			</Stack>
+				</Flex>
+			</Flex>
 		</Box>
 	);
 }
@@ -2187,33 +2362,23 @@ export function PreprocessWorkspace({
 									<Box flex={1} minW={0}>
 										<SourceAssetUploader
 											label="NATA Align image"
-											description="The NATA Align image uploaded here should be exported from the NATA Align Spatial Instrument and will be used for downstream chip capture area localization and image analysis."
-											buttonLabel={
-												project.sourceAssets.images.eosin
-													? "Replace reference"
-													: "Replace reference"
-											}
+											description="Exported from the NATA Align Spatial Instrument. Used to localize the chip capture area and anchor downstream image analysis."
+											uploadLabel="Upload reference"
+											replaceLabel="Replace reference"
 											emptyText="No eosin reference image uploaded yet."
 											image={project.sourceAssets.images.eosin}
-											onUpload={(fileList) => {
-												void handleUploadEosin(fileList);
-											}}
+											onUpload={handleUploadEosin}
 										/>
 									</Box>
 									<Box flex={1} minW={0}>
 										<SourceAssetUploader
 											label="H&E stained tissue image"
 											description="Moving image for HE focus, landmark registration, and registered crop generation."
-											buttonLabel={
-												project.sourceAssets.images.he
-													? "Replace image"
-													: "Upload HE image"
-											}
+											uploadLabel="Upload HE image"
+											replaceLabel="Replace image"
 											emptyText="No HE source image uploaded yet."
 											image={project.sourceAssets.images.he}
-											onUpload={(fileList) => {
-												void handleUploadHe(fileList);
-											}}
+											onUpload={handleUploadHe}
 										/>
 									</Box>
 								</Flex>
