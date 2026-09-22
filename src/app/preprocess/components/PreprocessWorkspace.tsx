@@ -2145,6 +2145,10 @@ export function PreprocessWorkspace({
 	const isTissueInteractionDisabled =
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
+	const chipSelectionBlockedReason =
+		!project?.cropQc.cropWidth || !project?.cropQc.cropHeight
+			? "Registered ROI size is unavailable. Generate and approve the registered crop in Registration Review before choosing a chip."
+			: null;
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
 	const commitManualTissueSelection = useCallback(
 		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
@@ -2925,8 +2929,15 @@ export function PreprocessWorkspace({
 																	if (
 																		!project.cropQc.cropWidth ||
 																		!project.cropQc.cropHeight
-																	)
+																	) {
+																		toast({
+																			title: "Chip selection unavailable",
+																			description:
+																				"Generate and approve the registered crop in Registration Review first — the spot grid needs the registered ROI size.",
+																			status: "warning",
+																		});
 																		return;
+																	}
 																	const cropWidth = project.cropQc.cropWidth;
 																	const cropHeight = project.cropQc.cropHeight;
 																	const chipRequestToken =
@@ -3088,13 +3099,18 @@ export function PreprocessWorkspace({
 															>
 																<option value="15um">15um</option>
 																<option value="50um">50um</option>
-															</Select>
-														</FormControl>
-														<Text fontSize="xs" color="gray.500">
-															Changing the capture resolution will clear previous tissue edits,
-															regenerate the projected spot grid, and require tissue auto-selection
-															to be performed again.
-														</Text>
+													</Select>
+												</FormControl>
+												{chipSelectionBlockedReason ? (
+													<Text fontSize="xs" color="orange.600">
+														{chipSelectionBlockedReason}
+													</Text>
+												) : null}
+												<Text fontSize="xs" color="gray.500">
+													Changing the capture resolution will clear previous tissue edits,
+													regenerate the projected spot grid, and require tissue auto-selection
+													to be performed again.
+												</Text>
 														{(chipConfigError ?? project.chipConfig.error) ? (
 															<Text fontSize="sm" color="red.600">
 																{chipConfigError ?? project.chipConfig.error}
