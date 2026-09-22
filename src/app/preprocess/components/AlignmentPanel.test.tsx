@@ -1,4 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
+import { useCallback, useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -55,6 +56,12 @@ beforeAll(() => {
       return 480;
     },
   });
+
+  // jsdom does not implement pointer capture; the panel uses it for pan
+  // sessions on the landmark canvases.
+  HTMLElement.prototype.setPointerCapture = vi.fn();
+  HTMLElement.prototype.releasePointerCapture = vi.fn();
+  HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
 });
 
 const createOpenCvRuntimeStub = () => {
@@ -196,6 +203,13 @@ describe('AlignmentPanel', () => {
     );
     expect(screen.getByText('Image Registration')).toBeInTheDocument();
     expect(screen.getByTestId('alignment-pair-count-badge')).toHaveTextContent('Landmark Pairs: 7 / 15');
+    // The pair-editing toolbar is contextual: hidden until a landmark is selected.
+    expect(screen.queryByTestId('alignment-pair-actions')).not.toBeInTheDocument();
+    const firstLandmark = screen
+      .getByTestId('alignment-add-point-eosin')
+      .querySelector('circle');
+    expect(firstLandmark).not.toBeNull();
+    fireEvent.pointerDown(firstLandmark as Element, { buttons: 1, pointerId: 1 });
     expect(screen.getByRole('button', { name: 'Move NATA Align Image Point' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Move HE point' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Registration Preview' })).toBeInTheDocument();
@@ -262,16 +276,8 @@ describe('AlignmentPanel', () => {
       canvasGrid,
     ]);
     expect(getComputedStyle(workflowCard).position).not.toBe('absolute');
-    expect(
-      within(screen.getByTestId('alignment-pair-actions'))
-        .getAllByRole('button')
-        .map((button) => button.textContent?.trim()),
-    ).toEqual([
-      'Move NATA Align Image Point',
-      'Move HE point',
-      'Delete pair',
-      'Cancel',
-    ]);
+    // The contextual pair-editing toolbar only mounts once a pair is selected.
+    expect(screen.queryByTestId('alignment-pair-actions')).not.toBeInTheDocument();
     expect(
       within(screen.getByTestId('alignment-workspace-actions'))
         .getAllByRole('button')
@@ -282,6 +288,23 @@ describe('AlignmentPanel', () => {
         .getAllByRole('button')
         .map((button) => button.textContent?.trim()),
     ).toEqual(['Review Registration']);
+
+    const firstLandmark = screen
+      .getByTestId('alignment-add-point-eosin')
+      .querySelector('circle');
+    expect(firstLandmark).not.toBeNull();
+    fireEvent.pointerDown(firstLandmark as Element, { buttons: 1, pointerId: 1 });
+
+    expect(
+      within(screen.getByTestId('alignment-pair-actions'))
+        .getAllByRole('button')
+        .map((button) => button.textContent?.trim()),
+    ).toEqual([
+      'Move NATA Align Image Point',
+      'Move HE point',
+      'Delete pair',
+      'Cancel',
+    ]);
   });
 
   it('removes only the retired workflow hints', () => {
@@ -581,4 +604,110 @@ describe('AlignmentPanel', () => {
 		expect(loadOpenCvMock).toHaveBeenCalledTimes(2);
 	});
 
+	it('exposes per-canvas zoom controls that update the visible zoom value', async () => {
+		render(
+			<ChakraProvider theme={theme}>
+				<AlignmentPanel
+					alignment={createAlignmentSlice()}
+					chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+					movingImage={createSourceImage('he')}
+					onSolveAccepted={vi.fn()}
+					referenceImage={createSourceImage('eosin')}
+					referenceImageTransform={createReferenceImageTransform()}
+					showMovingImagePaddingBoundary={false}
+					onAlignmentChange={vi.fn()}
+				/>
+			</ChakraProvider>,
+		);
+
+		const zoomValue = screen.getByTestId('alignment-source-zoom-value');
+		expect(zoomValue).toHaveTextContent('100%');
+		expect(screen.getByTestId('alignment-target-zoom-controls')).toBeInTheDocument();
+
+		const user = userEvent.setup();
+		await user.click(screen.getByTestId('alignment-source-zoom-in'));
+		expect(zoomValue).toHaveTextContent('120%');
+
+		await user.click(screen.getByTestId('alignment-source-zoom-reset'));
+		expect(zoomValue).toHaveTextContent('100%');
+	});
+
+	it('highlights the active canvas and lets undo cancel a pending point before removing pairs', async () => {
+		const onAlignmentChange = vi.fn(
+			(
+				updater: (
+					current: AlignmentSlice,
+				) => AlignmentSlice,
+			) => updater,
+		);
+
+		function StatefulHarness() {
+			const [slice, setSlice] = useState<AlignmentSlice>(() => ({
+				...createAlignmentSlice(),
+				controlPoints: [],
+			}));
+			const handleChange = useCallback(
+				(next: (current: AlignmentSlice) => AlignmentSlice) => {
+					setSlice((current) => next(current));
+				},
+				[],
+			);
+
+			return (
+				<ChakraProvider theme={theme}>
+					<AlignmentPanel
+						alignment={slice}
+						chipBounds={{ x: 0, y: 0, width: 1, height: 1 }}
+						movingImage={createSourceImage('he')}
+						onSolveAccepted={vi.fn()}
+						referenceImage={createSourceImage('eosin')}
+						referenceImageTransform={createReferenceImageTransform()}
+						showMovingImagePaddingBoundary={false}
+						onAlignmentChange={handleChange}
+					/>
+				</ChakraProvider>
+			);
+		}
+
+		render(<StatefulHarness />);
+
+		expect(screen.getByTestId('alignment-source-active-badge')).toBeInTheDocument();
+		expect(
+			screen.queryByTestId('alignment-target-active-badge'),
+		).not.toBeInTheDocument();
+
+		const eosinHost = screen.getByTestId('alignment-add-point-eosin');
+		// jsdom's PointerEvent drops clientX/clientY init, so dispatch events with
+		// assigned coordinates (same pattern as the CanvasStage tests).
+		const firePointer = (el: Element, type: string, x: number, y: number) => {
+			const event = new Event(type, { bubbles: true, cancelable: true });
+			Object.assign(event, { buttons: 1, clientX: x, clientY: y, pointerId: 1 });
+			el.dispatchEvent(event);
+		};
+		firePointer(eosinHost, 'pointerdown', 320, 240);
+		firePointer(eosinHost, 'pointerup', 320, 240);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
+				'Pan or zoom the HE image as needed',
+			);
+		});
+		expect(screen.queryByTestId('alignment-source-active-badge')).not.toBeInTheDocument();
+		expect(screen.getByTestId('alignment-target-active-badge')).toBeInTheDocument();
+
+		const undoButton = screen.getByTestId('alignment-undo-last-point');
+		expect(undoButton).toBeEnabled();
+		const user = userEvent.setup();
+		await user.click(undoButton);
+
+		expect(onAlignmentChange).not.toHaveBeenCalled();
+		await waitFor(() => {
+			expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
+				'Use wheel zoom and drag pan on the eosin reference',
+			);
+		});
+		expect(screen.getByTestId('alignment-pair-count-badge')).toHaveTextContent(
+			'Landmark Pairs: 0 / 15',
+		);
+	});
 });
