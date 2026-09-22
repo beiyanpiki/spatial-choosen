@@ -680,14 +680,16 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 		const { cropCanvas, cropContext } = getLastFocusedPreviewRender();
 
-			expect(cropCanvas.width).toBe(72);
-			expect(cropCanvas.height).toBe(72);
+			// Canvas-axis bounds map directly onto the 180x240 oriented frame:
+			// x=-0.1*180=-18, y=-0.05*240=-12, w=0.3*180=54, h=0.4*240=96.
+			expect(cropCanvas.width).toBe(54);
+			expect(cropCanvas.height).toBe(96);
 			expect(cropContext.fillStyle).toBe('#ffffff');
-			expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+			expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 54, 96);
 			expect(cropContext.drawImage).toHaveBeenCalledTimes(1);
 			const [drawSource, ...drawArgs] = cropContext.drawImage.mock.calls[0] ?? [];
 			expect(drawSource).toMatchObject({ width: 180, height: 240 });
-			expect(drawArgs).toEqual([0, 0, 63, 48, 9, 24, 63, 48]);
+			expect(drawArgs).toEqual([0, 0, 36, 84, 18, 12, 36, 84]);
 	});
 
 	it('renders fully out-of-bounds HEFocus crops as all-white outputs at the requested size', async () => {
@@ -704,10 +706,13 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 		const { cropCanvas, cropContext } = getLastFocusedPreviewRender();
 
-			expect(cropCanvas.width).toBe(72);
-			expect(cropCanvas.height).toBe(72);
+			// Canvas-axis bounds map directly onto the 180x240 oriented frame:
+			// x=1.2*180=216, y=1.1*240=264, w=0.3*180=54, h=0.4*240=96 — fully
+			// outside the frame, so the requested canvas stays all white.
+			expect(cropCanvas.width).toBe(54);
+			expect(cropCanvas.height).toBe(96);
 			expect(cropContext.fillStyle).toBe('#ffffff');
-			expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 72, 72);
+			expect(cropContext.fillRect).toHaveBeenCalledWith(0, 0, 54, 96);
 			expect(cropContext.drawImage).not.toHaveBeenCalled();
 	});
 
@@ -1137,8 +1142,6 @@ describe('PreprocessWorkspace rotation contract', () => {
 
 				const requestedBounds = getOrientedChipBoundsPixelRect(
 					expectedCommittedBounds,
-					latestProject.localization.imageTransform,
-					ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE,
 					{
 						width: ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.height,
 						height: ROTATED_LOCALIZE_SOURCE_IMAGE_SIZE.width,
