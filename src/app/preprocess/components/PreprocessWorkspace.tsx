@@ -2765,6 +2765,10 @@ export function PreprocessWorkspace({
 										null
 									}
 									overlayOpacity={project.cropQc.overlayOpacity}
+									qcAccepted={project.cropQc.qcAccepted}
+									alignmentRmse={project.alignment.reprojectionRmse}
+									alignmentInlierRatio={project.alignment.inlierRatio}
+									alignmentQualityFlags={project.alignment.qualityFlags}
 									onOverlayOpacityCommit={(value: number) => {
 										applyCropQcUpdate(
 											(current) => ({
