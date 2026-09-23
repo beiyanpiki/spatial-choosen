@@ -198,13 +198,10 @@ describe('AlignmentPanel', () => {
       expect(screen.getByTestId('alignment-run-solve')).toBeEnabled();
     });
 
-    expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
-      'Use wheel zoom and drag pan on the eosin reference, then click to place the next reference landmark.',
-    );
     expect(screen.getByText('Image Registration')).toBeInTheDocument();
     expect(screen.getByTestId('alignment-pair-count-badge')).toHaveTextContent('Landmark Pairs: 7 / 15');
-    // The pair-editing toolbar is contextual: hidden until a landmark is selected.
-    expect(screen.queryByTestId('alignment-pair-actions')).not.toBeInTheDocument();
+    // The pair-editing toolbar is contextual: reserved but hidden until a landmark is selected.
+    expect(screen.getByTestId('alignment-pair-actions')).toHaveStyle({ visibility: 'hidden' });
     const firstLandmark = screen
       .getByTestId('alignment-add-point-eosin')
       .querySelector('circle');
@@ -246,7 +243,6 @@ describe('AlignmentPanel', () => {
       expect(targetViewport ? getComputedStyle(targetViewport).width : null).not.toBe(widthBeforeWheel);
     });
     expect(screen.getByAltText('HE landmarks (moving)')).toBeInTheDocument();
-    expect(screen.getByTestId('alignment-workflow-instruction')).not.toHaveTextContent('H&E');
   });
 
   it('lays out registration controls in normal flow with stable action groups', () => {
@@ -272,12 +268,12 @@ describe('AlignmentPanel', () => {
 
     expect(Array.from(layout.children).slice(0, 3)).toEqual([
       workflowCard,
-      messages,
       canvasGrid,
+      messages,
     ]);
     expect(getComputedStyle(workflowCard).position).not.toBe('absolute');
-    // The contextual pair-editing toolbar only mounts once a pair is selected.
-    expect(screen.queryByTestId('alignment-pair-actions')).not.toBeInTheDocument();
+    // The contextual pair-editing toolbar stays mounted but hidden until a pair is selected.
+    expect(screen.getByTestId('alignment-pair-actions')).toHaveStyle({ visibility: 'hidden' });
     expect(
       within(screen.getByTestId('alignment-workspace-actions'))
         .getAllByRole('button')
@@ -672,9 +668,9 @@ describe('AlignmentPanel', () => {
 		render(<StatefulHarness />);
 
 		expect(screen.getByTestId('alignment-source-active-badge')).toBeInTheDocument();
-		expect(
-			screen.queryByTestId('alignment-target-active-badge'),
-		).not.toBeInTheDocument();
+		expect(screen.getByTestId('alignment-target-active-badge')).toHaveStyle({
+			visibility: 'hidden',
+		});
 
 		const eosinHost = screen.getByTestId('alignment-add-point-eosin');
 		// jsdom's PointerEvent drops clientX/clientY init, so dispatch events with
@@ -688,12 +684,11 @@ describe('AlignmentPanel', () => {
 		firePointer(eosinHost, 'pointerup', 320, 240);
 
 		await waitFor(() => {
-			expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
-				'Pan or zoom the HE image as needed',
-			);
+			expect(screen.getByTestId('alignment-target-active-badge')).toBeVisible();
 		});
-		expect(screen.queryByTestId('alignment-source-active-badge')).not.toBeInTheDocument();
-		expect(screen.getByTestId('alignment-target-active-badge')).toBeInTheDocument();
+		expect(screen.getByTestId('alignment-source-active-badge')).toHaveStyle({
+			visibility: 'hidden',
+		});
 
 		const undoButton = screen.getByTestId('alignment-undo-last-point');
 		expect(undoButton).toBeEnabled();
@@ -701,11 +696,6 @@ describe('AlignmentPanel', () => {
 		await user.click(undoButton);
 
 		expect(onAlignmentChange).not.toHaveBeenCalled();
-		await waitFor(() => {
-			expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
-				'Use wheel zoom and drag pan on the eosin reference',
-			);
-		});
 		expect(screen.getByTestId('alignment-pair-count-badge')).toHaveTextContent(
 			'Landmark Pairs: 0 / 15',
 		);

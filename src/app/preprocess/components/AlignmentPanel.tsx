@@ -5,6 +5,7 @@ import {
 	Box,
 	Button,
 	Flex,
+	Grid,
 	Heading,
 	HStack,
 	SimpleGrid,
@@ -441,17 +442,16 @@ function LandmarkCanvas({
 						{title}
 					</Text>
 				</HStack>
-				{isActive ? (
-					<Badge
+				<Badge
 						colorScheme="brand"
 						borderRadius="full"
 						px={2}
 						py={0.5}
+						visibility={isActive ? "visible" : "hidden"}
 						data-testid={`${testIdPrefix}-active-badge`}
 					>
 						Place point here
 					</Badge>
-				) : null}
 			</Flex>
 			<Box
 				border="1px solid"
@@ -994,6 +994,8 @@ export function AlignmentPanel({
 			? "Selected pair ready. Move either landmark, delete the pair, or solve registration."
 			: "Start on the eosin reference, then place the matching landmark on the HE image.";
 	}, [alignment.solveAccepted, interactionMode, selectedPair]);
+	// Exposed for assistive tech and tests without rendering shifting copy on the card.
+	const workflowInstructionAriaLabel = `Workflow status: ${workflowInstruction}`;
 
 	const activeCanvas: "source" | "target" | null = useMemo(() => {
 		if (
@@ -1175,9 +1177,9 @@ export function AlignmentPanel({
 		!alignment.solveAccepted &&
 		!alignment.forceAccepted;
 
-	// The pair-editing toolbar is contextual: it only appears while a pair is
-	// selected or a placement is in progress, keeping the default action row to
-	// the persistent controls.
+	// The pair-editing toolbar is contextual: it swaps in for the status badges
+	// only while a pair is selected or a placement is in progress. Both stay
+	// mounted in the same grid cell so the swap never reflows the card.
 	const pairActionsActive =
 		Boolean(selectedPair) ||
 		interactionMode === "reposition-source" ||
@@ -1229,7 +1231,7 @@ export function AlignmentPanel({
 					gap={3}
 					wrap="wrap"
 				>
-					<Stack spacing={2} flex="1" minW="240px">
+					<Stack spacing={2} flex="1" minW="240px" aria-label={workflowInstructionAriaLabel}>
 						<Flex align="center" gap={2} wrap="wrap">
 							<Text
 								fontSize="xs"
@@ -1253,23 +1255,21 @@ export function AlignmentPanel({
 							>
 								Landmark Pairs: {alignment.controlPoints.length} /{" "}
 								{ALIGNMENT_TARGET_PAIRS}
-							</Badge>
-						</Flex>
-				<Text
-						fontSize={{ base: "sm", md: "md" }}
-						fontWeight="semibold"
-						lineHeight="1.45"
-						data-testid="alignment-workflow-instruction"
-					>
-						{workflowInstruction}
-					</Text>
+						</Badge>
+					</Flex>
 				</Stack>
-						<Flex
-							gap={2}
-							wrap="wrap"
-							align="center"
-							justify={{ base: "flex-start", lg: "flex-end" }}
-						>
+						{/* Status badges and the pair-editing toolbar share one grid cell so
+							swapping between them never changes the card height. */}
+						<Grid templateColumns="1fr" flexShrink={0}>
+							<Flex
+								gridColumn="1"
+								gridRow="1"
+								gap={2}
+								wrap="wrap"
+								align="center"
+								justify={{ base: "flex-start", lg: "flex-end" }}
+								visibility={pairActionsActive ? "hidden" : "visible"}
+							>
 							<Badge
 								colorScheme={
 									runtimeStatus === "ready"
@@ -1312,22 +1312,133 @@ export function AlignmentPanel({
 									? "Rejected"
 									: "Not solved"}
 						</Badge>
-						{selectedPair ? (
-							<Badge
+						<Badge
 								colorScheme="purple"
 								borderRadius="full"
 								px={2.5}
 								py={1}
+								visibility={selectedPair ? "visible" : "hidden"}
 								data-testid="alignment-selected-pair-badge"
 							>
-								Selected pair #
-								{alignment.controlPoints.findIndex(
-									(pair) => pair.id === selectedPair.id,
-								) + 1}
+								{selectedPair
+										? `Selected pair #${
+												alignment.controlPoints.findIndex(
+													(pair) => pair.id === selectedPair.id,
+												) + 1
+											}`
+										: "Selected pair"}
 							</Badge>
-						) : null}
+						</Flex>
+							<Flex
+								gridColumn="1"
+								gridRow="1"
+								role="group"
+								aria-label="Selected landmark controls"
+								align="center"
+								gap={2}
+								px={2}
+								py={1}
+								borderRadius="xl"
+								border="1px solid"
+								borderColor="blue.200"
+								bg="rgba(235, 244, 255, 0.85)"
+								visibility={pairActionsActive ? "visible" : "hidden"}
+								data-testid="alignment-pair-actions"
+							>
+								{selectedPair ? (
+									<Badge
+										colorScheme="purple"
+										borderRadius="full"
+										px={2.5}
+										py={1}
+										data-testid="alignment-editing-pair-badge"
+									>
+										Editing pair #
+										{alignment.controlPoints.findIndex(
+											(pair) => pair.id === selectedPair.id,
+										) + 1}
+									</Badge>
+								) : (
+									<Badge
+										colorScheme="orange"
+										borderRadius="full"
+										px={2.5}
+										py={1}
+										data-testid="alignment-editing-pair-badge"
+									>
+										New pair
+									</Badge>
+								)}
+								<Button
+									size="sm"
+									variant="outline"
+									color="gray.700"
+									borderColor="gray.300"
+									bg="white"
+									_hover={{ bg: "gray.50" }}
+									onClick={() => {
+										if (!selectedPairId) return;
+										setPendingSourcePoint(null);
+										setRepositionPairId(selectedPairId);
+										setInteractionMode("reposition-source");
+									}}
+									isDisabled={!selectedPairId}
+									data-testid="alignment-select-reposition-source"
+								>
+									Move NATA Align Image Point
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									color="gray.700"
+									borderColor="gray.300"
+									bg="white"
+									_hover={{ bg: "gray.50" }}
+									onClick={() => {
+										if (!selectedPairId) return;
+										setPendingSourcePoint(null);
+										setRepositionPairId(selectedPairId);
+										setInteractionMode("reposition-target");
+									}}
+									isDisabled={!selectedPairId}
+									data-testid="alignment-select-reposition-target"
+								>
+									Move HE point
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									colorScheme="red"
+									onClick={() => {
+										if (!selectedPairId) return;
+										setPendingSourcePoint(null);
+										setRepositionPairId(null);
+										mutateControlPoints(
+											(controlPoints) =>
+												controlPoints.filter(
+													(point) => point.id !== selectedPairId,
+												),
+											{ afterApply: clearLocalInteractionState },
+										);
+									}}
+									isDisabled={!selectedPairId}
+									data-testid="alignment-select-delete-pair"
+								>
+									Delete pair
+								</Button>
+								<Button
+									size="sm"
+									variant="ghost"
+									color="gray.700"
+									_hover={{ bg: "whiteAlpha.500" }}
+									onClick={clearLocalInteractionState}
+									data-testid="alignment-select-cancel"
+								>
+									Cancel
+								</Button>
+							</Flex>
+						</Grid>
 					</Flex>
-				</Flex>
 				<Box
 					h="1.5"
 					w="100%"
@@ -1347,114 +1458,6 @@ export function AlignmentPanel({
 						transition="width 200ms ease, background-color 200ms ease"
 					/>
 				</Box>
-				{pairActionsActive ? (
-					<Flex
-						role="group"
-						aria-label="Selected landmark controls"
-						align="center"
-						gap={2}
-						wrap="wrap"
-						px={3}
-						py={2}
-						borderRadius="xl"
-						border="1px solid"
-						borderColor="blue.200"
-						bg="rgba(235, 244, 255, 0.85)"
-						data-testid="alignment-pair-actions"
-					>
-						{selectedPair ? (
-							<Badge
-								colorScheme="purple"
-								borderRadius="full"
-								px={2.5}
-								py={1}
-								data-testid="alignment-editing-pair-badge"
-							>
-								Editing pair #
-								{alignment.controlPoints.findIndex(
-									(pair) => pair.id === selectedPair.id,
-								) + 1}
-							</Badge>
-						) : (
-							<Badge
-								colorScheme="orange"
-								borderRadius="full"
-								px={2.5}
-								py={1}
-								data-testid="alignment-editing-pair-badge"
-							>
-								New pair
-							</Badge>
-						)}
-						<Button
-							size="sm"
-							variant="outline"
-							color="gray.700"
-							borderColor="gray.300"
-							bg="white"
-							_hover={{ bg: "gray.50" }}
-							onClick={() => {
-								if (!selectedPairId) return;
-								setPendingSourcePoint(null);
-								setRepositionPairId(selectedPairId);
-								setInteractionMode("reposition-source");
-							}}
-							isDisabled={!selectedPairId}
-							data-testid="alignment-select-reposition-source"
-						>
-							Move NATA Align Image Point
-						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							color="gray.700"
-							borderColor="gray.300"
-							bg="white"
-							_hover={{ bg: "gray.50" }}
-							onClick={() => {
-								if (!selectedPairId) return;
-								setPendingSourcePoint(null);
-								setRepositionPairId(selectedPairId);
-								setInteractionMode("reposition-target");
-							}}
-							isDisabled={!selectedPairId}
-							data-testid="alignment-select-reposition-target"
-						>
-							Move HE point
-						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							colorScheme="red"
-							onClick={() => {
-								if (!selectedPairId) return;
-								setPendingSourcePoint(null);
-								setRepositionPairId(null);
-								mutateControlPoints(
-									(controlPoints) =>
-										controlPoints.filter(
-											(point) => point.id !== selectedPairId,
-										),
-									{ afterApply: clearLocalInteractionState },
-								);
-							}}
-							isDisabled={!selectedPairId}
-							data-testid="alignment-select-delete-pair"
-						>
-							Delete pair
-						</Button>
-						<Button
-							size="sm"
-							variant="ghost"
-							color="gray.700"
-							_hover={{ bg: "whiteAlpha.500" }}
-							onClick={clearLocalInteractionState}
-							data-testid="alignment-select-cancel"
-						>
-							Cancel
-						</Button>
-					</Flex>
-				) : null}
 				<Flex justify="space-between" align="center" gap={2} wrap="wrap">
 					<Flex
 						role="group"
@@ -1564,6 +1567,48 @@ export function AlignmentPanel({
 	return (
 		<Stack spacing={4} w="100%" data-testid="alignment-layout">
 			{workflowCard}
+			<SimpleGrid
+				columns={{ base: 1, lg: 2 }}
+				gap={4}
+				w="100%"
+				minW={0}
+				data-testid="alignment-canvas-grid"
+			>
+				<LandmarkCanvas
+					image={referenceImage}
+					imageKey="source"
+					imageTransform={referenceImageTransform}
+					points={sourcePoints}
+					pendingPoint={pendingSourcePoint}
+					title="Eosin landmarks (reference)"
+					roleLabel="Reference · NATA Align"
+					interactionMode={interactionMode}
+					isActive={activeCanvas === "source"}
+					onBackgroundPoint={handleBackgroundPoint}
+					onBackgroundFallback={clearLocalInteractionState}
+					onSelectPoint={handleSelectPair}
+					onRepositionPoint={handleRepositionPoint}
+					testIdPrefix="alignment-source"
+				/>
+				<LandmarkCanvas
+					image={movingImage}
+					imageKey="target"
+					imageTransform={alignment.movingImageTransform}
+					points={targetPoints}
+					pendingPoint={null}
+					title="HE landmarks (moving)"
+					roleLabel="Moving · HE"
+					interactionMode={interactionMode}
+					isActive={activeCanvas === "target"}
+					showImageBoundary={showMovingImagePaddingBoundary}
+					onBackgroundPoint={handleBackgroundPoint}
+					onBackgroundFallback={clearLocalInteractionState}
+					onSelectPoint={handleSelectPair}
+					onRepositionPoint={handleRepositionPoint}
+					testIdPrefix="alignment-target"
+				/>
+			</SimpleGrid>
+			{/* Rendered below the canvases so toggling warnings never shifts the clicking surfaces. */}
 			{coverage.warning || runtimeError ? (
 				<Stack spacing={2} w="100%" data-testid="alignment-messages">
 					{coverage.warning ? (
@@ -1618,47 +1663,6 @@ export function AlignmentPanel({
 					) : null}
 				</Stack>
 			) : null}
-			<SimpleGrid
-				columns={{ base: 1, lg: 2 }}
-				gap={4}
-				w="100%"
-				minW={0}
-				data-testid="alignment-canvas-grid"
-			>
-				<LandmarkCanvas
-					image={referenceImage}
-					imageKey="source"
-					imageTransform={referenceImageTransform}
-					points={sourcePoints}
-					pendingPoint={pendingSourcePoint}
-					title="Eosin landmarks (reference)"
-					roleLabel="Reference · NATA Align"
-					interactionMode={interactionMode}
-					isActive={activeCanvas === "source"}
-					onBackgroundPoint={handleBackgroundPoint}
-					onBackgroundFallback={clearLocalInteractionState}
-					onSelectPoint={handleSelectPair}
-					onRepositionPoint={handleRepositionPoint}
-					testIdPrefix="alignment-source"
-				/>
-				<LandmarkCanvas
-					image={movingImage}
-					imageKey="target"
-					imageTransform={alignment.movingImageTransform}
-					points={targetPoints}
-					pendingPoint={null}
-					title="HE landmarks (moving)"
-					roleLabel="Moving · HE"
-					interactionMode={interactionMode}
-					isActive={activeCanvas === "target"}
-					showImageBoundary={showMovingImagePaddingBoundary}
-					onBackgroundPoint={handleBackgroundPoint}
-					onBackgroundFallback={clearLocalInteractionState}
-					onSelectPoint={handleSelectPair}
-					onRepositionPoint={handleRepositionPoint}
-					testIdPrefix="alignment-target"
-				/>
-			</SimpleGrid>
 			{showDiagnostics ? (
 				<Stack spacing={2} fontSize="sm">
 					<HStack justify="space-between">
