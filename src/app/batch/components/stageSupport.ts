@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { clamp } from '@/lib/batch/affine';
 import type { BatchImageSize } from '@/types/batch';
 
 export type ViewportSize = {
@@ -66,6 +67,95 @@ export function useViewportSize<T extends HTMLElement>() {
   }, [element]);
 
   return { ref, size, element, setElement };
+}
+
+type OverlayDragState = {
+  startX: number;
+  startY: number;
+  startOffsetX: number;
+  startOffsetY: number;
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+};
+
+const OVERLAY_MARGIN = 8;
+
+/**
+ * Drag state for a floating overlay panel (toolbars, transform controls).
+ *
+ * The panel is allowed to leave the image, it only has to stay reachable inside
+ * the window, so the clamp runs against the viewport rather than the canvas.
+ */
+export function useDraggableOverlay() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<OverlayDragState | null>(null);
+
+  const startDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const panel = ref.current;
+    if (!panel) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const rect = panel.getBoundingClientRect();
+    dragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startOffsetX: offset.x,
+      startOffsetY: offset.y,
+      width: rect.width,
+      height: rect.height,
+      left: rect.left,
+      top: rect.top,
+    };
+    setIsDragging(true);
+  }, [offset.x, offset.y]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+
+      const viewportWidth = window.innerWidth || drag.left + drag.width;
+      const viewportHeight = window.innerHeight || drag.top + drag.height;
+      const desiredLeft = drag.left + (event.clientX - drag.startX);
+      const desiredTop = drag.top + (event.clientY - drag.startY);
+      const maxLeft = Math.max(OVERLAY_MARGIN, viewportWidth - drag.width - OVERLAY_MARGIN);
+      const maxTop = Math.max(OVERLAY_MARGIN, viewportHeight - drag.height - OVERLAY_MARGIN);
+      const nextLeft = clamp(desiredLeft, OVERLAY_MARGIN, maxLeft);
+      const nextTop = clamp(desiredTop, OVERLAY_MARGIN, maxTop);
+
+      setOffset({
+        x: drag.startOffsetX + (nextLeft - drag.left),
+        y: drag.startOffsetY + (nextTop - drag.top),
+      });
+    };
+
+    const handlePointerUp = () => {
+      dragRef.current = null;
+      setIsDragging(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [isDragging]);
+
+  const reset = useCallback(() => setOffset({ x: 0, y: 0 }), []);
+
+  return { ref, offset, isDragging, startDrag, reset };
 }
 
 export const imageAspectRatio = (size: BatchImageSize | null | undefined) => (

@@ -13,6 +13,8 @@ import {
 } from './positions';
 import {
   IN_SELECTED_VALUE,
+  SELECTED_CLASS_FILE_COLUMN,
+  SELECTED_COLOR_FILE_COLUMN,
   TRANSFORM_MATRIX_FILE_PATTERN,
   parseTransformMatrixCsv,
   similarityParamsFromOwnFrameMatrix,
@@ -305,6 +307,7 @@ export async function buildBatchPackage(
     fullresSize: null,
     previewUrl: null,
     previewSize: null,
+    contentBounds: null,
     spotDiameterFullres: null,
     spots: null,
     positions: null,
@@ -345,14 +348,39 @@ export async function buildBatchPackage(
     }
 
     const selectedColumn = positions.columnIndex.in_selected;
+    const classColumn = positions.columnIndex[SELECTED_CLASS_FILE_COLUMN];
+    const barcodeColumn = positions.columnIndex.barcode ?? 0;
+    const selectedRows = selectedColumn === undefined
+      ? []
+      : positions.rows.filter((row) => (row[selectedColumn] ?? '').trim() === IN_SELECTED_VALUE);
     const selectedBarcodes = selectedColumn === undefined
       ? null
-      : positions.rows
-        .filter((row) => (row[selectedColumn] ?? '').trim() === IN_SELECTED_VALUE)
-        .map((row) => (row[positions.columnIndex.barcode ?? 0] ?? '').trim())
+      : selectedRows
+        .map((row) => (row[barcodeColumn] ?? '').trim())
         .filter((barcode) => barcode !== '');
+    const classByBarcode = classColumn === undefined || selectedBarcodes === null
+      ? null
+      : new Map(
+          selectedRows
+            .map((row): [string, number] => [
+              (row[barcodeColumn] ?? '').trim(),
+              Number((row[classColumn] ?? '').trim()),
+            ])
+            .filter(([barcode, classId]) => barcode !== '' && Number.isFinite(classId) && classId > 0),
+        );
     const matrix = matrixText ? parseTransformMatrixCsv(matrixText) : null;
     const alignment = matrix ? similarityParamsFromOwnFrameMatrix(matrix, fullresSize) : null;
+    const colorColumn = positions.columnIndex[SELECTED_COLOR_FILE_COLUMN];
+    const colorByClass = colorColumn === undefined || classByBarcode === null
+      ? null
+      : new Map(
+          selectedRows
+            .map((row): [number, string] => [
+              Number((row[classColumn ?? -1] ?? '').trim()),
+              (row[colorColumn] ?? '').trim(),
+            ])
+            .filter(([classId, hex]) => Number.isFinite(classId) && classId > 0 && hex !== ''),
+        );
     const preview = await createPreviewDerivative(fullresFile.blob);
 
     return {
@@ -360,10 +388,13 @@ export async function buildBatchPackage(
       fullresSize,
       previewUrl: URL.createObjectURL(preview.blob),
       previewSize: preview.size,
+      contentBounds: preview.contentBounds,
       spotDiameterFullres: readSpotDiameter(scalefactorsText),
       spots: readSpotsFromPositions(positions),
       positions,
-      resume: selectedBarcodes || alignment ? { alignment, selectedBarcodes } : null,
+      resume: selectedBarcodes || alignment
+        ? { alignment, selectedBarcodes, classByBarcode, colorByClass }
+        : null,
       status: 'ready',
       error: null,
     };

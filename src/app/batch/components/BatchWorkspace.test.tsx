@@ -20,10 +20,13 @@ const renderWorkspace = () => render(
 );
 
 describe('BatchWorkspace', () => {
-  it('starts on the import step with the batch workflow rail', () => {
+  it('starts on the import step with the workflow rail', () => {
     renderWorkspace();
 
-    expect(screen.getByText('NATA Batch Selection')).toBeInTheDocument();
+    // The page is the multi-slide alignment workspace: "batch" is deliberately
+    // absent from every operator-facing string.
+    expect(screen.getByRole('heading', { name: 'Multi Slides Alignment' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Alignment workflow' })).toBeInTheDocument();
     expect(screen.getByTestId('batch-workflow-rail')).toBeInTheDocument();
     expect(screen.getByTestId('batch-step-import')).toBeInTheDocument();
     expect(screen.getByTestId('batch-drop-zone')).toBeInTheDocument();
@@ -37,5 +40,11 @@ describe('BatchWorkspace', () => {
     expect(screen.getByTestId('batch-step-reference-region')).toBeDisabled();
     expect(screen.getByTestId('batch-step-image-regions')).toBeDisabled();
     expect(screen.getByTestId('batch-step-review')).toBeDisabled();
+  });
+
+  it('keeps "batch" out of the operator-facing copy', () => {
+    const { container } = renderWorkspace();
+
+    expect(container.textContent ?? '').not.toMatch(/batch/i);
   });
 });

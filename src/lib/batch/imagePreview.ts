@@ -1,4 +1,4 @@
-import type { BatchImageSize } from '@/types/batch';
+import type { BatchBounds, BatchImageSize } from '@/types/batch';
 
 export const BATCH_PREVIEW_MAX_DIMENSION = 1600;
 export const BATCH_PREVIEW_MIME_TYPE = 'image/jpeg';
@@ -134,6 +134,102 @@ const canvasToBlob = (canvas: HTMLCanvasElement, mimeType: string, quality: numb
 export type PreviewDerivative = {
   blob: Blob;
   size: BatchImageSize;
+  /** Normalized bounds of the non-white area, or null when nothing was trimmed. */
+  contentBounds: { x: number; y: number; width: number; height: number } | null;
+};
+
+/** How much darker than the slide background a row/column has to be. */
+const BACKGROUND_MARGIN = 12;
+/** Extra room kept around the tissue so it does not sit flush against the edge. */
+const CONTENT_MARGIN_RATIO = 0.015;
+
+const median = (values: readonly number[]) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)];
+};
+
+const firstIndexBelow = (means: readonly number[], threshold: number) =>
+  means.findIndex((mean) => mean < threshold);
+
+const lastIndexBelow = (means: readonly number[], threshold: number) => {
+  for (let index = means.length - 1; index >= 0; index -= 1) {
+    if (means[index] < threshold) return index;
+  }
+  return -1;
+};
+
+/**
+ * Finds the bounding box of the tissue.
+ *
+ * NATA crops keep a lot of empty slide around the sample: pale scan background
+ * (and, in some packages, a pure-white band where the scan did not reach). Whole
+ * rows and columns are therefore judged by their *mean* brightness, so scattered
+ * dust does not drag the box open, and anything that is not clearly darker than
+ * the background is treated as empty margin.
+ */
+export function contentBoundsFromPixels(
+  data: Uint8ClampedArray | number[],
+  width: number,
+  height: number,
+): BatchBounds | null {
+  if (width <= 0 || height <= 0 || data.length < width * height * 4) return null;
+
+  const rowSum = new Float64Array(height);
+  const columnSum = new Float64Array(width);
+
+  for (let y = 0; y < height; y += 1) {
+    const rowOffset = y * width * 4;
+    for (let x = 0; x < width; x += 1) {
+      const offset = rowOffset + x * 4;
+      const value = (data[offset] + data[offset + 1] + data[offset + 2]) / 3;
+      rowSum[y] += value;
+      columnSum[x] += value;
+    }
+  }
+
+  const rowMeans = Array.from(rowSum, (sum) => sum / width);
+  const columnMeans = Array.from(columnSum, (sum) => sum / height);
+  const background = median(rowMeans);
+  const threshold = background - BACKGROUND_MARGIN;
+
+  const firstRow = firstIndexBelow(rowMeans, threshold);
+  const lastRow = lastIndexBelow(rowMeans, threshold);
+  const firstColumn = firstIndexBelow(columnMeans, threshold);
+  const lastColumn = lastIndexBelow(columnMeans, threshold);
+
+  if (firstRow < 0 || lastRow < 0 || firstColumn < 0 || lastColumn < 0) return null;
+
+  const padX = Math.round(width * CONTENT_MARGIN_RATIO);
+  const padY = Math.round(height * CONTENT_MARGIN_RATIO);
+  const minX = Math.max(0, firstColumn - padX);
+  const minY = Math.max(0, firstRow - padY);
+  const maxX = Math.min(width - 1, lastColumn + padX);
+  const maxY = Math.min(height - 1, lastRow + padY);
+
+  // Nothing worth trimming when the tissue already fills the frame.
+  const coversWidth = (maxX - minX + 1) / width;
+  const coversHeight = (maxY - minY + 1) / height;
+  if (coversWidth > 0.98 && coversHeight > 0.98) return null;
+
+  return {
+    x: minX / width,
+    y: minY / height,
+    width: (maxX - minX + 1) / width,
+    height: (maxY - minY + 1) / height,
+  };
+}
+
+const computeContentBounds = (context: CanvasRenderingContext2D, width: number, height: number) => {
+  let imageData: ImageData;
+
+  try {
+    imageData = context.getImageData(0, 0, width, height);
+  } catch {
+    return null;
+  }
+
+  return contentBoundsFromPixels(imageData.data, width, height);
 };
 
 /**
@@ -154,7 +250,7 @@ export async function createPreviewDerivative(
     const height = Math.max(1, Math.round(source.height * scale));
 
     if (scale === 1) {
-      return { blob, size: { width, height } };
+      return { blob, size: { width, height }, contentBounds: null };
     }
 
     const canvas = document.createElement('canvas');
@@ -163,13 +259,14 @@ export async function createPreviewDerivative(
     const context = canvas.getContext('2d');
 
     if (!context) {
-      return { blob, size: { width: source.width, height: source.height } };
+      return { blob, size: { width: source.width, height: source.height }, contentBounds: null };
     }
 
     context.drawImage(source.source, 0, 0, width, height);
+    const contentBounds = computeContentBounds(context, width, height);
     const previewBlob = await canvasToBlob(canvas, BATCH_PREVIEW_MIME_TYPE, BATCH_PREVIEW_QUALITY);
 
-    return { blob: previewBlob, size: { width, height } };
+    return { blob: previewBlob, size: { width, height }, contentBounds };
   } finally {
     source.release();
   }

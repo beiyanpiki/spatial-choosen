@@ -55,10 +55,25 @@ describe('writePositionsWithSelection', () => {
     const csv = writePositionsWithSelection(table!, new Set(['BBB']));
     const lines = csv.trim().split('\n');
 
-    expect(lines[0]).toBe('barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres,in_selected');
-    expect(lines[1]).toBe('AAA,0,1,1,10,20,0');
-    expect(lines[2]).toBe('BBB,1,1,2,30,40,1');
-    expect(lines[3]).toBe('CCC,1,2,1,50,60,0');
+    expect(lines[0]).toBe('barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres,in_selected,selected_class,selected_color');
+    expect(lines[1]).toBe('AAA,0,1,1,10,20,0,0,');
+    expect(lines[2]).toBe('BBB,1,1,2,30,40,1,1,');
+    expect(lines[3]).toBe('CCC,1,2,1,50,60,0,0,');
+  });
+
+  it('writes the region class and colour so a spreadsheet can tell them apart', () => {
+    const table = parsePositionsTable(POSITIONS_CSV);
+    const csv = writePositionsWithSelection(
+      table!,
+      new Set(['AAA', 'BBB']),
+      new Map([['AAA', 3], ['BBB', 2]]),
+      new Map([['AAA', '#38A169'], ['BBB', '#3182CE']]),
+    );
+    const lines = csv.trim().split('\n');
+
+    expect(lines[0].endsWith('in_selected,selected_class,selected_color')).toBe(true);
+    expect(lines[1]).toBe('AAA,0,1,1,10,20,1,3,#38A169');
+    expect(lines[2]).toBe('BBB,1,1,2,30,40,1,2,#3182CE');
   });
 
   it('overwrites a pre-existing in_selected column in place', () => {
@@ -72,16 +87,16 @@ describe('writePositionsWithSelection', () => {
     const result = writePositionsWithSelection(table!, new Set(['AAA']));
     const lines = result.trim().split('\n');
 
-    expect(lines[0]).toBe('barcode,in_selected,in_tissue,pxl_row_in_fullres,pxl_col_in_fullres');
-    expect(lines[1]).toBe('AAA,1,0,10,20');
-    expect(lines[2]).toBe('BBB,0,1,30,40');
+    expect(lines[0]).toBe('barcode,in_selected,in_tissue,pxl_row_in_fullres,pxl_col_in_fullres,selected_class,selected_color');
+    expect(lines[1]).toBe('AAA,1,0,10,20,1,');
+    expect(lines[2]).toBe('BBB,0,1,30,40,0,');
   });
 
   it('marks every barcode as excluded when the selection is empty', () => {
     const table = parsePositionsTable(POSITIONS_CSV);
     const csv = writePositionsWithSelection(table!, new Set());
 
-    expect(csv.trim().split('\n').slice(1).every((line) => line.endsWith(',0'))).toBe(true);
+    expect(csv.trim().split('\n').slice(1).every((line) => line.endsWith(',0,0,'))).toBe(true);
   });
 });
 

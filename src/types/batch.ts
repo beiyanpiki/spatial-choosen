@@ -27,6 +27,13 @@ export type BatchImageSize = {
   height: number;
 };
 
+export type BatchBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 /**
  * Affine transform stored row-major as `[a, b, c, d, e, f]`.
  *
@@ -56,6 +63,14 @@ export type BatchSimilarityParams = {
 export type BatchRegion = {
   id: string;
   points: BatchPoint[];
+  /** Inner rings cut out of `points`, normalized like it. */
+  holes?: BatchPoint[][];
+  /**
+   * 1-based region class. The class drives the drawing colour and the value
+   * written to `selected_class`, so different colours can be told apart in the
+   * exported table.
+   */
+  colorId: number;
 };
 
 export type BatchSpot = {
@@ -92,6 +107,10 @@ export type BatchPackageResume = {
   alignment: BatchSimilarityParams | null;
   /** Barcodes flagged by a previous export, or null when there was no such column. */
   selectedBarcodes: string[] | null;
+  /** Region class per barcode, when the export recorded `selected_class`. */
+  classByBarcode: Map<string, number> | null;
+  /** Colour per class, when the export recorded `selected_color`. */
+  colorByClass: Map<number, string> | null;
 };
 
 export type BatchPackage = {
@@ -105,6 +124,11 @@ export type BatchPackage = {
   fullresSize: BatchImageSize | null;
   previewUrl: string | null;
   previewSize: BatchImageSize | null;
+  /**
+   * Normalized bounds of the non-white content, used to trim the pure-white
+   * padding some packages carry. Null when there is nothing to trim.
+   */
+  contentBounds: BatchBounds | null;
   spotDiameterFullres: number | null;
   spots: BatchSpot[] | null;
   positions: BatchPositionsTable | null;
@@ -139,5 +163,7 @@ export type BatchSelectionSettings = {
 export type BatchSelectionResult = {
   selectedBarcodes: string[];
   selectedBarcodeSet: Set<string>;
+  /** Region class (1..n) per selected barcode, for the exported class column. */
+  classByBarcode: Map<string, number>;
   totalSpots: number;
 };

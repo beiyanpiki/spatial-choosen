@@ -186,4 +186,27 @@ describe('resuming a step 5 export', () => {
 
     expect(pkg.resume).toBeNull();
   });
+
+  it('reads the region class of a newer export', async () => {
+    const zip = new JSZip();
+    zip.file('spatial/tissue_fullres_image.png', pngHeaderBytes());
+    zip.file('spatial/scalefactors_json.json', JSON.stringify({ spot_diameter_fullres: 20 }));
+    zip.file('spatial/tissue_positions.csv', [
+      'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres,in_selected,selected_class,selected_color',
+      'AAA,1,1,1,100,100,1,2,#3182CE',
+      'BBB,1,1,2,140,100,1,3,#38A169',
+      'CCC,1,1,3,180,100,0,0,',
+      '',
+    ].join('\n'));
+    const archive = await zip.generateAsync({ type: 'arraybuffer' });
+
+    const { files } = await readBatchSourceFiles([
+      { path: '250926-SPA-GW1-batch.zip', name: '250926-SPA-GW1-batch.zip', blob: new Blob([archive]) },
+    ]);
+    const pkg = await buildBatchPackage(groupSourceFiles(files)[0], 'pkg-3');
+
+    expect(pkg.resume?.selectedBarcodes).toEqual(['AAA', 'BBB']);
+    expect([...(pkg.resume?.classByBarcode ?? new Map())]).toEqual([['AAA', 2], ['BBB', 3]]);
+    expect([...(pkg.resume?.colorByClass ?? new Map())]).toEqual([[2, '#3182CE'], [3, '#38A169']]);
+  });
 });

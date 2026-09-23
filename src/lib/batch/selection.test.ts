@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BatchRegion, BatchSpot } from '@/types/batch';
 
 import { selectBarcodes, spotCenter, spotRect } from './selection';
+import { classifyBarcodes } from './selection';
 
 const spot = (barcode: string, pxlRowInFullres: number, pxlColInFullres: number): BatchSpot => ({
   barcode,
@@ -15,6 +16,7 @@ const spot = (barcode: string, pxlRowInFullres: number, pxlColInFullres: number)
 
 const square = (x: number, y: number, width: number, height: number): BatchRegion => ({
   id: `region-${x}-${y}`,
+  colorId: 1,
   points: [
     { x, y },
     { x: x + width, y },
@@ -95,5 +97,43 @@ describe('selectBarcodes', () => {
     });
 
     expect(selected).toEqual(['inside', 'outside']);
+  });
+});
+
+describe('classifyBarcodes', () => {
+  const spots = [
+    spot('only-red', 100, 100),
+    spot('overlap', 100, 120),
+    spot('outside', 900, 900),
+  ];
+  const red = { ...square(50, 50, 140, 140), id: 'red', colorId: 1 };
+  const blue = { ...square(50, 50, 200, 200), id: 'blue', colorId: 2 };
+
+  it('reports the class of every selected barcode', () => {
+    const result = classifyBarcodes({
+      spots,
+      regions: [red],
+      anchorMode: 'center',
+      hitMode: 'center',
+      spotDiameterFullres: 20,
+    });
+
+    expect(result.classByBarcode.get('only-red')).toBe(1);
+    expect(result.classByBarcode.get('overlap')).toBe(1);
+    expect(result.classByBarcode.has('outside')).toBe(false);
+  });
+
+  it('lets the later region win where regions overlap', () => {
+    const result = classifyBarcodes({
+      spots,
+      regions: [red, blue],
+      anchorMode: 'center',
+      hitMode: 'center',
+      spotDiameterFullres: 20,
+    });
+
+    // Blue is drawn last, so it decides the value of the overlapping barcode.
+    expect(result.classByBarcode.get('overlap')).toBe(2);
+    expect(result.classByBarcode.get('only-red')).toBe(2);
   });
 });

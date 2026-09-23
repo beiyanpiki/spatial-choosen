@@ -13,8 +13,9 @@ import type {
 import { DEFAULT_MATRIX_CONVENTION, formatMatrixCsv, resolvePackageMatrix } from './affine';
 import type { BatchPackageExportInput } from './exportPackages';
 import { writePositionsWithSelection } from './positions';
+import { BATCH_REGION_COLORS, regionColor, type BatchRegionColor } from './regionColors';
 import { regionsToPixelSpace } from './regions';
-import { selectBarcodes } from './selection';
+import { classifyBarcodes } from './selection';
 
 export type ComputeSelectionArgs = {
   spots: readonly BatchSpot[];
@@ -32,7 +33,7 @@ export function computeSelection({
   settings,
   spotDiameterFullres,
 }: ComputeSelectionArgs): BatchSelectionResult {
-  const selectedBarcodes = selectBarcodes({
+  const { selectedBarcodes, classByBarcode } = classifyBarcodes({
     spots,
     regions: regionsToPixelSpace(regions, size),
     anchorMode: settings.anchorMode,
@@ -43,6 +44,7 @@ export function computeSelection({
   return {
     selectedBarcodes,
     selectedBarcodeSet: new Set(selectedBarcodes),
+    classByBarcode,
     totalSpots: spots.length,
   };
 }
@@ -70,6 +72,8 @@ export type BuildExportInputsArgs = {
   selectionByPackage: Record<string, BatchSelectionResult>;
   matrixLayout: BatchMatrixLayout;
   matrixConvention: BatchMatrixConvention;
+  /** Palette used to resolve each class into the colour written to the table. */
+  colors?: readonly BatchRegionColor[];
 };
 
 export function buildExportInputs({
@@ -79,14 +83,28 @@ export function buildExportInputs({
   selectionByPackage,
   matrixLayout,
   matrixConvention,
+  colors = BATCH_REGION_COLORS,
 }: BuildExportInputsArgs): BatchPackageExportInput[] {
   const referencePackage = packages.find((entry) => entry.id === referencePackageId) ?? packages[0];
   const referenceSize = referencePackage?.fullresSize ?? null;
 
   return packages.map((entry) => {
     const selection = selectionByPackage[entry.id];
+    const colorByBarcode = selection
+      ? new Map(
+          [...selection.classByBarcode].map(([barcode, classId]) => [
+            barcode,
+            regionColor(classId, colors).hex,
+          ]),
+        )
+      : undefined;
     const positionsCsv = entry.positions
-      ? writePositionsWithSelection(entry.positions, selection?.selectedBarcodeSet ?? new Set<string>())
+      ? writePositionsWithSelection(
+          entry.positions,
+          selection?.selectedBarcodeSet ?? new Set<string>(),
+          selection?.classByBarcode,
+          colorByBarcode,
+        )
       : '';
     const matrixCsv = referenceSize && entry.fullresSize
       ? buildTransformMatrixCsv({

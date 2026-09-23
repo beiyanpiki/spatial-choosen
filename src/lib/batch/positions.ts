@@ -4,6 +4,8 @@ import { parseCsv, readColumnIndex, stringifyCsv } from './csv';
 
 export const POSITIONS_FILE_PATTERN = /^tissue_positions?\.csv$/i;
 export const IN_SELECTED_COLUMN = 'in_selected';
+export const SELECTED_CLASS_COLUMN = 'selected_class';
+export const SELECTED_COLOR_COLUMN = 'selected_color';
 export const FULLRES_IMAGE_FILE_PATTERN = /^tissue_fullres_image\.(png|tif|tiff|jpe?g)$/i;
 export const SCALEFACTORS_FILE_PATTERN = /^scalefactors_json\.json$/i;
 
@@ -89,18 +91,38 @@ export function readSpotsFromPositions(table: BatchPositionsTable): BatchSpot[] 
 export function writePositionsWithSelection(
   table: BatchPositionsTable,
   selectedBarcodes: ReadonlySet<string>,
+  classByBarcode?: ReadonlyMap<string, number>,
+  colorByBarcode?: ReadonlyMap<string, string>,
 ): string {
   const selectedIndex = table.columnIndex[IN_SELECTED_COLUMN];
-  const header = selectedIndex === undefined
-    ? [...table.header, IN_SELECTED_COLUMN]
-    : [...table.header];
-  const effectiveSelectedIndex = selectedIndex ?? table.header.length;
+  const classIndex = table.columnIndex[SELECTED_CLASS_COLUMN];
+  const colorIndex = table.columnIndex[SELECTED_COLOR_COLUMN];
+  const header = [...table.header];
+
+  if (selectedIndex === undefined) header.push(IN_SELECTED_COLUMN);
+  if (classIndex === undefined) header.push(SELECTED_CLASS_COLUMN);
+  if (colorIndex === undefined) header.push(SELECTED_COLOR_COLUMN);
+
+  const effectiveSelectedIndex = selectedIndex ?? header.indexOf(IN_SELECTED_COLUMN);
+  const effectiveClassIndex = classIndex ?? header.indexOf(SELECTED_CLASS_COLUMN);
+  const effectiveColorIndex = colorIndex ?? header.indexOf(SELECTED_COLOR_COLUMN);
   const barcodeIndex = table.columnIndex.barcode ?? 0;
 
   const rows = table.rows.map((row) => {
     const cells = header.map((_, index) => row[index] ?? '');
     const barcode = (row[barcodeIndex] ?? '').trim();
-    cells[effectiveSelectedIndex] = selectedBarcodes.has(barcode) ? '1' : '0';
+    const selected = selectedBarcodes.has(barcode);
+
+    cells[effectiveSelectedIndex] = selected ? '1' : '0';
+    // The class is what makes different coloured regions distinguishable in a
+    // spreadsheet; 0 means "not selected".
+    cells[effectiveClassIndex] = selected
+      ? String(classByBarcode?.get(barcode) ?? 1)
+      : '0';
+    // The colour itself, so a re-import can bring the palette back.
+    cells[effectiveColorIndex] = selected
+      ? colorByBarcode?.get(barcode) ?? ''
+      : '';
     return cells;
   });
 

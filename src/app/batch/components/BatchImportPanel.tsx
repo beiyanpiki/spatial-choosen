@@ -36,6 +36,8 @@ type BatchImportPanelProps = {
   onReferenceChange: (packageId: string) => void;
   onSelectedFiles: (files: BatchSelectedFile[]) => void;
   onClear: () => void;
+  /** Moves a package to a new position in the sample order. */
+  onReorder: (packageId: string, toIndex: number) => void;
 };
 
 const statusTone: Record<BatchPackage['status'], string> = {
@@ -55,10 +57,13 @@ export function BatchImportPanel({
   onReferenceChange,
   onSelectedFiles,
   onClear,
+  onReorder,
 }: BatchImportPanelProps) {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const zipInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [draggingPackageId, setDraggingPackageId] = useState<string | null>(null);
+  const [dropPackageIndex, setDropPackageIndex] = useState<number | null>(null);
 
   useEffect(() => {
     const input = folderInputRef.current;
@@ -191,17 +196,49 @@ export function BatchImportPanel({
                   <Table size='sm'>
                     <Thead>
                       <Tr>
+                        <Th w='40px'>Order</Th>
                         <Th w='70px'>Reference</Th>
                         <Th>Package</Th>
                         <Th isNumeric>Fullres</Th>
                         <Th isNumeric>Spots</Th>
                         <Th isNumeric>Spot Ø</Th>
                         <Th>Status</Th>
+                        <Th w='72px'>Move</Th>
                       </Tr>
                     </Thead>
                     <Tbody>
-                      {packages.map((entry) => (
-                        <Tr key={entry.id}>
+                      {packages.map((entry, index) => (
+                        <Tr
+                          key={entry.id}
+                          draggable
+                          data-testid={`batch-package-row-${entry.name}`}
+                          opacity={draggingPackageId === entry.id ? 0.5 : 1}
+                          bg={dropPackageIndex === index && draggingPackageId && draggingPackageId !== entry.id
+                            ? 'brand.50'
+                            : undefined}
+                          cursor='grab'
+                          onDragStart={(event) => {
+                            setDraggingPackageId(entry.id);
+                            event.dataTransfer.effectAllowed = 'move';
+                            event.dataTransfer.setData('text/plain', entry.name);
+                          }}
+                          onDragOver={(event) => {
+                            if (!draggingPackageId) return;
+                            event.preventDefault();
+                            setDropPackageIndex(index);
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            if (draggingPackageId) onReorder(draggingPackageId, index);
+                            setDraggingPackageId(null);
+                            setDropPackageIndex(null);
+                          }}
+                          onDragEnd={() => {
+                            setDraggingPackageId(null);
+                            setDropPackageIndex(null);
+                          }}
+                        >
+                          <Td color='gray.400' title='Drag to change the sample order'>⠿</Td>
                           <Td>
                             <Radio
                               value={entry.id}
@@ -232,6 +269,34 @@ export function BatchImportPanel({
                             <Badge colorScheme={statusTone[entry.status]} borderRadius='full'>
                               {entry.status}
                             </Badge>
+                          </Td>
+                          <Td>
+                            <HStack spacing={0}>
+                              {index > 0 ? (
+                                <Button
+                                  size='xs'
+                                  variant='ghost'
+                                  data-testid={`batch-package-up-${entry.name}`}
+                                  aria-label={`Move ${entry.name} up`}
+                                  title='Move this sample earlier'
+                                  onClick={() => onReorder(entry.id, index - 1)}
+                                >
+                                  ↑
+                                </Button>
+                              ) : null}
+                              {index < packages.length - 1 ? (
+                                <Button
+                                  size='xs'
+                                  variant='ghost'
+                                  data-testid={`batch-package-down-${entry.name}`}
+                                  aria-label={`Move ${entry.name} down`}
+                                  title='Move this sample later'
+                                  onClick={() => onReorder(entry.id, index + 1)}
+                                >
+                                  ↓
+                                </Button>
+                              ) : null}
+                            </HStack>
                           </Td>
                         </Tr>
                       ))}

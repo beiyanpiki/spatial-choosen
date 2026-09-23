@@ -26,6 +26,7 @@ const packageFixture = (overrides: Partial<BatchPackage> = {}): BatchPackage => 
     fullresSize: { width: 1000, height: 1000 },
     previewUrl: null,
     previewSize: { width: 500, height: 500 },
+    contentBounds: null,
     spotDiameterFullres: 20,
     spots: positions ? readSpotsFromPositions(positions) : null,
     positions,
@@ -38,6 +39,7 @@ const packageFixture = (overrides: Partial<BatchPackage> = {}): BatchPackage => 
 
 const square = (x: number, y: number, width: number, height: number): BatchRegion => ({
   id: `region-${x}`,
+  colorId: 1,
   points: [
     { x, y },
     { x: x + width, y },
@@ -168,7 +170,10 @@ describe('buildExportInputs', () => {
     expect(inputs).toHaveLength(2);
     expect(inputs[0].positionsFileName).toBe('spatial/tissue_positions.csv');
     expect(inputs[0].positionsCsv.split('\n')[0]).toContain('in_selected');
-    expect(inputs[0].positionsCsv).toContain('INSIDE,1,1,1,100,100,1');
+    expect(inputs[0].positionsCsv.split('\n')[0]).toContain('selected_color');
+    // Class 1 is the built-in red, so its hex travels with the barcode.
+    expect(inputs[0].positionsCsv).toContain('INSIDE,1,1,1,100,100,1,1,#E53E3E');
+    expect(inputs[0].positionsCsv).toContain('OUTSIDE,1,1,2,900,900,0,0,');
     expect(inputs[0].transformMatrixCsv).toBe('1,0,0\n0,1,0\n');
     // The 500px package is upscaled into the 1000px reference frame.
     expect(inputs[1].transformMatrixCsv).toBe('2,0,0\n0,2,0\n');

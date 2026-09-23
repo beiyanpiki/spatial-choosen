@@ -233,4 +233,36 @@ describe('regionsFromSelectedBarcodes on an irregular selection', () => {
     expect(replayed.selectedBarcodes).toHaveLength(selected.length);
     expect([...replayed.selectedBarcodes].sort()).toEqual([...selected].sort());
   });
+
+  it('rebuilds one outline per region class', () => {
+    const { spots, selected } = buildIrregular();
+    const size = { width: 40 * 30, height: 40 * 30 };
+    const [firstHalf, secondHalf] = [selected.slice(0, 40), selected.slice(40, 80)];
+    const classByBarcode = new Map<string, number>([
+      ...firstHalf.map((barcode): [string, number] => [barcode, 2]),
+      ...secondHalf.map((barcode): [string, number] => [barcode, 5]),
+    ]);
+
+    const regions = regionsFromSelectedBarcodes({
+      spots,
+      selectedBarcodes: [...firstHalf, ...secondHalf],
+      classByBarcode,
+      size,
+      anchorMode: 'top-left',
+      spotDiameterFullres: DIAMETER,
+    });
+
+    const classes = new Set(regions.map((region) => region.colorId));
+    expect([...classes].sort()).toEqual([2, 5]);
+
+    const replayed = computeSelection({
+      spots,
+      regions,
+      size,
+      settings: { anchorMode: 'top-left', hitMode: 'overlap' },
+      spotDiameterFullres: DIAMETER,
+    });
+
+    expect([...replayed.selectedBarcodes].sort()).toEqual([...[...firstHalf, ...secondHalf]].sort());
+  });
 });

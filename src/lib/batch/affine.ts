@@ -236,6 +236,56 @@ export function resolvePackageMatrix(args: {
   return referenceFrame;
 }
 
+/**
+ * Turns a normalized similarity matrix back into parameters.
+ *
+ * Mirroring is folded into `flipVertical` and the rotation, which always yields
+ * an equivalent transform without needing to know how it was originally dialled
+ * in.
+ */
+export function decomposeNormalizedSimilarity(
+  matrix: BatchAffineMatrix,
+): BatchSimilarityParams | null {
+  const [a, b, c, d, e, f] = matrix;
+  const scale = Math.hypot(a, b);
+
+  if (!Number.isFinite(scale) || scale <= 1e-9) return null;
+
+  const rotationRadians = Math.atan2(-b, a);
+  const cos = Math.cos(rotationRadians);
+  const sin = Math.sin(rotationRadians);
+  const reflected = d * (scale * sin) + e * (scale * cos) < 0;
+  const flipY = reflected ? -1 : 1;
+
+  return normalizeSimilarityParams({
+    rotationDegrees: (rotationRadians * 180) / Math.PI,
+    scale,
+    flipHorizontal: false,
+    flipVertical: reflected,
+    offsetX: c - 0.5 + scale * (0.5 * cos - 0.5 * sin),
+    offsetY: f - 0.5 + flipY * scale * (0.5 * sin + 0.5 * cos),
+  });
+}
+
+/**
+ * Re-expresses a `package -> reference` alignment against a different reference.
+ *
+ * Switching the reference image must not move anything: the old reference
+ * becomes an ordinary package, so every transform (and the region drawn on it)
+ * is re-based with `inverse(newReference) * oldTransform`.
+ */
+export function rebaseSimilarityParams(
+  params: BatchSimilarityParams,
+  newReferenceParams: BatchSimilarityParams,
+): BatchSimilarityParams {
+  const fallback = normalizeSimilarityParams(params);
+  const toNewReference = invertAffine(similarityNormalizedMatrix(newReferenceParams));
+  if (!toNewReference) return fallback;
+
+  const rebased = composeAffine(toNewReference, similarityNormalizedMatrix(params));
+  return decomposeNormalizedSimilarity(rebased) ?? fallback;
+}
+
 export function normalizedToPixelPoints(
   points: readonly BatchPoint[],
   size: BatchImageSize,

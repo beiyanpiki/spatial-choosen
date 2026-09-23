@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BatchSimilarityParams } from '@/types/batch';
+import type { BatchAffineMatrix, BatchSimilarityParams } from '@/types/batch';
 
 import {
+  IDENTITY_AFFINE,
   applyAffine,
   composeAffine,
+  decomposeNormalizedSimilarity,
   formatMatrixCsv,
   invertAffine,
   normalizeSimilarityParams,
   resolvePackageMatrix,
+  rebaseSimilarityParams,
   similarityNormalizedMatrix,
   similarityPixelMatrix,
   toSourceFrameMatrix,
@@ -167,6 +170,68 @@ describe('matrix frames', () => {
     );
 
     expect(matrix).toEqual([8, 0, -200, 0, 4, 100]);
+  });
+});
+
+describe('decomposeNormalizedSimilarity', () => {
+  const cases: Array<[string, Partial<BatchSimilarityParams>]> = [
+    ['identity', {}],
+    ['rotation', { rotationDegrees: 41 }],
+    ['scale and offset', { scale: 1.7, offsetX: -0.08, offsetY: 0.12 }],
+    ['mirrored', { rotationDegrees: -17, scale: 0.8, flipHorizontal: true }],
+  ];
+
+  it.each(cases)('round trips the %s transform', (_label, overrides) => {
+    const params = normalizeSimilarityParams(overrides);
+    const matrix = similarityNormalizedMatrix(params);
+
+    const recovered = decomposeNormalizedSimilarity(matrix);
+    expect(recovered).not.toBeNull();
+
+    const rewritten = similarityNormalizedMatrix(recovered as BatchSimilarityParams);
+    rewritten.forEach((value, index) => {
+      expect(value).toBeCloseTo(matrix[index], 10);
+    });
+  });
+
+  it('rejects a degenerate matrix', () => {
+    expect(decomposeNormalizedSimilarity([0, 0, 0, 0, 0, 0])).toBeNull();
+  });
+});
+
+describe('rebaseSimilarityParams', () => {
+  it('keeps every package in place when the reference changes', () => {
+    const referenceB = normalizeSimilarityParams({ rotationDegrees: 32, scale: 1.4, offsetX: 0.05 });
+    const packageC = normalizeSimilarityParams({ rotationDegrees: -12, scale: 0.75, offsetY: 0.1 });
+
+    // Everything is expressed against A; now move the frame to B.
+    const rebasedB = rebaseSimilarityParams(referenceB, referenceB);
+    const rebasedC = rebaseSimilarityParams(packageC, referenceB);
+    const toB = invertAffine(similarityNormalizedMatrix(referenceB));
+    expect(toB).not.toBeNull();
+
+    // B itself lands on the identity, and C's pixels keep their place on screen.
+    const identity = similarityNormalizedMatrix(rebasedB);
+    identity.forEach((value, index) => {
+      expect(value).toBeCloseTo(IDENTITY_AFFINE[index], 8);
+    });
+
+    const throughB = similarityNormalizedMatrix(rebasedC);
+    const expected = composeAffine(toB as BatchAffineMatrix, similarityNormalizedMatrix(packageC));
+    throughB.forEach((value, index) => {
+      expect(value).toBeCloseTo(expected[index], 8);
+    });
+  });
+
+  it('returns the original transform when rebased onto the identity', () => {
+    const params = normalizeSimilarityParams({ rotationDegrees: 25, scale: 1.2, offsetX: 0.03 });
+    const rebased = rebaseSimilarityParams(params, normalizeSimilarityParams({}));
+    const matrix = similarityNormalizedMatrix(rebased);
+    const original = similarityNormalizedMatrix(params);
+
+    matrix.forEach((value, index) => {
+      expect(value).toBeCloseTo(original[index], 8);
+    });
   });
 });
 

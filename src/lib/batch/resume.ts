@@ -9,11 +9,14 @@ import type {
 } from '@/types/batch';
 
 import { normalizeSimilarityParams } from './affine';
+import { normalizeRegionColorId } from './regionColors';
 import { createRegionId } from './regions';
 import { spotRect } from './selection';
 
 export const TRANSFORM_MATRIX_FILE_PATTERN = /^transform-matrix\.csv$/i;
 export const IN_SELECTED_VALUE = '1';
+export const SELECTED_CLASS_FILE_COLUMN = 'selected_class';
+export const SELECTED_COLOR_FILE_COLUMN = 'selected_color';
 
 /**
  * Reads the two affine rows written by step 5 (`a,b,c` / `d,e,f`).
@@ -175,38 +178,60 @@ const ringToPoints = (ring: Ring) => {
 export function regionsFromSelectedBarcodes(args: {
   spots: readonly BatchSpot[];
   selectedBarcodes: Iterable<string>;
+  /** Region class per barcode, when the previous export recorded one. */
+  classByBarcode?: ReadonlyMap<string, number> | null;
   size: BatchImageSize;
   anchorMode: BatchSpotAnchorMode;
   spotDiameterFullres: number | null;
 }): BatchRegion[] {
-  const selected = new Set(args.selectedBarcodes);
-  if (selected.size === 0 || args.spots.length === 0) return [];
-  if (args.size.width <= 0 || args.size.height <= 0) return [];
-
-  const selectedSquares = args.spots
-    .filter((spot) => selected.has(spot.barcode))
-    .map((spot): Square => {
-      const rect = spotRect(spot, args.anchorMode, args.spotDiameterFullres);
-      return { ...rect, arrayRow: spot.arrayRow, arrayCol: spot.arrayCol };
-    });
-
-  if (selectedSquares.length === 0) return [];
-
-  const runs = mergeRowRuns(selectedSquares);
-  let union: [Ring][] = [[toRing(runs[0])]];
-  for (const run of runs.slice(1)) {
-    union = polygonClipping.union(union as never, [toRing(run)] as never) as unknown as [Ring][];
+  const byClass = new Map<number, Set<string>>();
+  for (const barcode of args.selectedBarcodes) {
+    const classId = normalizeRegionColorId(args.classByBarcode?.get(barcode) ?? 1);
+    const bucket = byClass.get(classId);
+    if (bucket) {
+      bucket.add(barcode);
+    } else {
+      byClass.set(classId, new Set([barcode]));
+    }
   }
 
-  return union
-    .flat()
-    .map((ring) => ringToPoints(ring as Ring))
-    .filter((points) => points.length >= 3)
-    .map((points) => ({
-      id: createRegionId('resumed'),
-      points: points.map((point) => ({
-        x: point.x / args.size.width,
-        y: point.y / args.size.height,
-      })),
-    }));
+  if (byClass.size === 0 || args.spots.length === 0) return [];
+  if (args.size.width <= 0 || args.size.height <= 0) return [];
+
+  const regions: BatchRegion[] = [];
+
+  for (const [classId, barcodes] of byClass) {
+    const selectedSquares = args.spots
+      .filter((spot) => barcodes.has(spot.barcode))
+      .map((spot): Square => {
+        const rect = spotRect(spot, args.anchorMode, args.spotDiameterFullres);
+        return { ...rect, arrayRow: spot.arrayRow, arrayCol: spot.arrayCol };
+      });
+
+    if (selectedSquares.length === 0) continue;
+
+    const runs = mergeRowRuns(selectedSquares);
+    let union: [Ring][] = [[toRing(runs[0])]];
+    for (const run of runs.slice(1)) {
+      union = polygonClipping.union(union as never, [toRing(run)] as never) as unknown as [Ring][];
+    }
+
+    // Only the outline survives the round trip: the export stores per-barcode
+    // flags, so holes cannot be reconstructed.
+    for (const polygon of union) {
+      const points = ringToPoints(polygon[0] as Ring);
+      if (points.length < 3) continue;
+
+      regions.push({
+        id: createRegionId('resumed'),
+        points: points.map((point) => ({
+          x: point.x / args.size.width,
+          y: point.y / args.size.height,
+        })),
+        colorId: classId,
+      });
+    }
+  }
+
+  return regions;
 }

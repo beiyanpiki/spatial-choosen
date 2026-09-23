@@ -18,6 +18,7 @@ const packageFixture = (overrides: Partial<BatchPackage> = {}): BatchPackage => 
   fullresSize: { width: 2884, height: 2884 },
   previewUrl: 'blob:preview',
   previewSize: { width: 1600, height: 1600 },
+  contentBounds: null,
   spotDiameterFullres: 18.97,
   spots: [],
   positions: { header: ['barcode'], rows: [], columnIndex: { barcode: 0 } },
@@ -31,6 +32,7 @@ const renderPanel = (props: Partial<React.ComponentProps<typeof BatchImportPanel
   const onReferenceChange = vi.fn();
   const onSelectedFiles = vi.fn();
   const onClear = vi.fn();
+  const onReorder = vi.fn();
 
   render(
     <ChakraProvider theme={theme}>
@@ -41,12 +43,13 @@ const renderPanel = (props: Partial<React.ComponentProps<typeof BatchImportPanel
         onReferenceChange={onReferenceChange}
         onSelectedFiles={onSelectedFiles}
         onClear={onClear}
+        onReorder={onReorder}
         {...props}
       />
     </ChakraProvider>,
   );
 
-  return { onReferenceChange, onSelectedFiles, onClear };
+  return { onReferenceChange, onSelectedFiles, onClear, onReorder };
 };
 
 describe('BatchImportPanel', () => {
@@ -86,6 +89,32 @@ describe('BatchImportPanel', () => {
     await user.click(screen.getByTestId('batch-reference-250926-SPA-GW3'));
 
     expect(onReferenceChange).toHaveBeenCalledWith('pkg-2');
+  });
+
+  it('moves rows with the arrow buttons and hides the impossible direction', async () => {
+    const user = userEvent.setup();
+    const { onReorder } = renderPanel({
+      packages: [
+        packageFixture(),
+        packageFixture({ id: 'pkg-2', name: '250926-SPA-GW3' }),
+        packageFixture({ id: 'pkg-3', name: '251103-SPA-hT05' }),
+      ],
+      referencePackageId: 'pkg-1',
+    });
+
+    // First row can only go down, last row only up, the middle row both ways.
+    expect(screen.queryByTestId('batch-package-up-250926-SPA-GW1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('batch-package-down-250926-SPA-GW1')).toBeInTheDocument();
+    expect(screen.getByTestId('batch-package-up-250926-SPA-GW3')).toBeInTheDocument();
+    expect(screen.getByTestId('batch-package-down-250926-SPA-GW3')).toBeInTheDocument();
+    expect(screen.getByTestId('batch-package-up-251103-SPA-hT05')).toBeInTheDocument();
+    expect(screen.queryByTestId('batch-package-down-251103-SPA-hT05')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('batch-package-up-251103-SPA-hT05'));
+    expect(onReorder).toHaveBeenCalledWith('pkg-3', 1);
+
+    await user.click(screen.getByTestId('batch-package-down-250926-SPA-GW1'));
+    expect(onReorder).toHaveBeenCalledWith('pkg-1', 1);
   });
 
   it('clears the workspace through the toolbar button', async () => {

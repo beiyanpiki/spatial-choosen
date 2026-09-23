@@ -38,7 +38,7 @@ export function BatchStepRail({ currentStep, items, onSelect }: BatchStepRailPro
     >
       <Box bg='white' border='1px solid' borderColor='gray.200' borderRadius='2xl' boxShadow='sm' px={4} py={4}>
         <Stack spacing={1}>
-          <Heading size='sm'>Batch Workflow</Heading>
+          <Heading size='sm'>Alignment workflow</Heading>
           <Text fontSize='sm' color='gray.500'>
             Import n NATA packages, align every section to a reference, then annotate once and propagate.
           </Text>
