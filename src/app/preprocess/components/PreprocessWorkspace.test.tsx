@@ -669,17 +669,15 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     const user = userEvent.setup();
     render(<WorkspaceHarness />);
 
-    const selectedCount = screen.getByTestId('tissue-selected-count');
     const panelSelectedCount = screen.getByTestId('tissue-panel-selected-count');
-    const toggleButton = screen.getByRole('button', { name: 'Hide spot grid' });
+    const spotGridSwitch = screen.getByRole('switch');
 
-    expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
     expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(spotGridSwitch).toBeChecked();
 
-    await user.click(toggleButton);
+    await user.click(spotGridSwitch);
 
-    expect(screen.getByRole('button', { name: 'Show spot grid' })).toBeInTheDocument();
-    expect(selectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(spotGridSwitch).not.toBeChecked();
     expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
   });
 
@@ -711,7 +709,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     const blockInput = screen.getByTestId('tissue-block-threshold-input');
     const runAutoButton = screen.getByTestId('tissue-run-auto');
 
-    expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('raw');
+    expect(screen.getByTestId('tissue-threshold-mode-option-raw')).toHaveAttribute('aria-pressed', 'true');
     expect(activationInput).toHaveValue(0.1);
     expect(blockInput).toHaveValue(120);
 
@@ -931,7 +929,6 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     const chipSizeOption = (chipId: string) =>
       screen.getByTestId(`tissue-chip-size-option-${chipId}`);
-    const thresholdModeSelect = screen.getByTestId('tissue-threshold-mode-select');
     const runAutoButton = screen.getByTestId('tissue-run-auto');
     const activateButton = screen.getByTestId('tissue-tool-activate');
     const deactivateButton = screen.getByTestId('tissue-tool-deactivate');
@@ -961,21 +958,21 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     expect(chipSizeOption('15um')).toBeEnabled();
     expect(chipSizeOption('50um')).toBeEnabled();
-    expect(thresholdModeSelect).not.toBeDisabled();
+    expect(screen.getByTestId('tissue-threshold-mode-option-raw')).toBeEnabled();
     expect(runAutoButton).not.toBeDisabled();
     expect(activateButton).not.toBeDisabled();
     expect(deactivateButton).not.toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
 
     await user.click(runAutoButton);
 
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
       expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
 
-    await user.selectOptions(thresholdModeSelect, 'gray-max');
-    expect(thresholdModeSelect).toHaveValue('gray-max');
+    await user.click(screen.getByTestId('tissue-threshold-mode-option-gray-max'));
+    expect(screen.getByTestId('tissue-threshold-mode-option-gray-max')).toHaveAttribute('aria-pressed', 'true');
     expect(chipSizeOption('50um')).toBeEnabled();
 
     await user.click(chipSizeOption('50um'));
@@ -990,11 +987,11 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     ).toBeInTheDocument();
     expect(screen.getByText('50um tissue auto-selection requires a 64x64 spot grid.')).toBeInTheDocument();
     expect(chipSizeOption('50um')).toBeEnabled();
-    expect(thresholdModeSelect).toBeDisabled();
+    expect(screen.getByTestId('tissue-threshold-mode-option-raw')).toBeDisabled();
     expect(runAutoButton).toBeDisabled();
     expect(activateButton).toBeDisabled();
     expect(deactivateButton).toBeDisabled();
-    expect(screen.getByTestId('tissue-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
+    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
     expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
   });
 
@@ -1066,11 +1063,11 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     await flushPromises();
 
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-threshold-mode-select')).not.toBeDisabled();
-      expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('raw');
+      expect(screen.getByTestId('tissue-threshold-mode-option-raw')).toBeEnabled();
+      expect(screen.getByTestId('tissue-threshold-mode-option-raw')).toHaveAttribute('aria-pressed', 'true');
     });
 
-    await user.selectOptions(screen.getByTestId('tissue-threshold-mode-select'), 'gray-max');
+    await user.click(screen.getByTestId('tissue-threshold-mode-option-gray-max'));
     await user.click(screen.getByTestId('tissue-run-auto'));
 
     await waitFor(() => {
@@ -1102,7 +1099,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     await flushPromises();
 
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
+      expect(screen.getByTestId('tissue-threshold-mode-option-gray-max')).toHaveAttribute('aria-pressed', 'true');
       expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
 
@@ -1131,7 +1128,7 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     await flushPromises();
 
     await waitFor(() => {
-      expect(screen.getByTestId('tissue-threshold-mode-select')).toHaveValue('gray-max');
+      expect(screen.getByTestId('tissue-threshold-mode-option-gray-max')).toHaveAttribute('aria-pressed', 'true');
       expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
     });
   });

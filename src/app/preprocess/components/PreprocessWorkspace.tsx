@@ -4,12 +4,7 @@ import {
 	Badge,
 	Box,
 	Button,
-	ButtonGroup,
-	Card,
-	CardBody,
 	Flex,
-	FormControl,
-	FormLabel,
 	Heading,
 	HStack,
 	Icon,
@@ -42,6 +37,7 @@ import type {
 	PreprocessSourceImage,
 	PreprocessStepId,
 	TissueActivationValue,
+	TissueSpotStyle,
 } from "@/types/preprocess";
 import {
 	normalizeAlignmentSlice,
@@ -92,6 +88,9 @@ import {
 } from "@/lib/preprocess/spotProjection";
 import type { PreprocessPersistMode } from "@/lib/preprocess/storage";
 import { selectedSpotIdsFromMatrix } from "@/lib/preprocess/tissueMatrix";
+import {
+	DEFAULT_TISSUE_SPOT_STYLE,
+} from "@/lib/preprocess/tissueSpotStyle";
 import { runTissueAutoSelection } from "@/lib/preprocess/tissuePipeline";
 import { resolveTissueSelectionSupport } from "@/lib/preprocess/tissueSupport";
 import { AlignmentPanel } from "./AlignmentPanel";
@@ -100,9 +99,9 @@ import { CropQcPanel } from "./CropQcPanel";
 import { ExportPanel } from "./ExportPanel";
 import { StepSidebar } from "./StepSidebar";
 import {
-	TissueSelectionControls,
+	TissueControlPanel,
 	type TissueTool,
-} from "./TissueSelectionControls";
+} from "./TissueControlPanel";
 import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
@@ -956,6 +955,10 @@ export function PreprocessWorkspace({
 	const [heFocusDraftChipBounds, setHeFocusDraftChipBounds] =
 		useState<PreprocessRect | null>(null);
 	const [tissueTool, setTissueTool] = useState<TissueTool>("activate");
+	const [spotStyle, setSpotStyle] = useState<TissueSpotStyle>({
+		color: "#38A169",
+		opacity: 0.8,
+	});
 	const [isDetectingTissue, setIsDetectingTissue] = useState(false);
 	const tissueDetectionRequestTokenRef = useRef(0);
 	const chipConfigRequestTokenRef = useRef(0);
@@ -2375,6 +2378,29 @@ export function PreprocessWorkspace({
 		[onProjectMutate, tissueTool],
 	);
 
+	const handleSpotStyleChange = useCallback(
+		(style: TissueSpotStyle) => {
+			setSpotStyle(style);
+			// The style is global: persisting it re-renders every tissue-selected
+			// spot with the new color/opacity immediately.
+			onProjectMutate(
+				(current) => {
+					const updatedAt = new Date().toISOString();
+					return {
+						...current,
+						tissueSelection: {
+							...current.tissueSelection,
+							spotStyle: style,
+							updatedAt,
+						},
+					};
+				},
+				{ mode: "tissue", strategy: "debounced" },
+			);
+		},
+		[onProjectMutate],
+	);
+
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
 		setProjectNameDraft(project.name);
@@ -3014,6 +3040,10 @@ export function PreprocessWorkspace({
 												}
 												projectedSpots={tissueProjectedSpots}
 												selectedSpotIds={tissueSelectedSpotIds}
+												spotStyle={
+													project.tissueSelection.spotStyle ??
+													DEFAULT_TISSUE_SPOT_STYLE
+												}
 												showSpots={showTissueSpots}
 												showControls={false}
 												tool={tissueTool}
@@ -3032,125 +3062,21 @@ export function PreprocessWorkspace({
 											spacing={4}
 											flexShrink={0}
 										>
-											<Card
-												border="1px solid"
-												borderColor="gray.200"
-												borderRadius="2xl"
-												boxShadow="sm"
-												bg="white"
-											>
-												<CardBody p={4}>
-													<Stack spacing={1.5}>
-														<Text
-															fontSize="xs"
-															textTransform="uppercase"
-															letterSpacing="0.12em"
-															color="gray.500"
-														>
-															Selection Overview
-														</Text>
-														<Text
-															fontSize="md"
-															fontWeight="semibold"
-															data-testid="tissue-selected-count"
-														>
-															Number of Tissue Spots:{" "}
-															{tissueSelectedSpotIds.length}
-														</Text>
-														{project.tissueSelection.warning ? (
-															<Text
-																fontSize="sm"
-																color="orange.700"
-																data-testid="tissue-detection-warning"
-															>
-																{project.tissueSelection.warning}
-															</Text>
-														) : (
-															<Text
-																fontSize="sm"
-																color="gray.500"
-																data-testid="tissue-detection-status"
-															>
-																{tissueDetectionStatusMessage}
-															</Text>
-														)}
-													</Stack>
-												</CardBody>
-											</Card>
-
-											<Card
-												border="1px solid"
-												borderColor="gray.200"
-												borderRadius="2xl"
-												boxShadow="sm"
-												bg="white"
-											>
-												<CardBody p={4}>
-													<Stack spacing={3}>
-														<Text fontSize="sm" fontWeight="semibold">
-															Chip Information
-														</Text>
-														<FormControl isDisabled={isChipSelectorDisabled}>
-															<FormLabel
-																fontSize="xs"
-																color="gray.500"
-																mb={1.5}
-															>
-																Spot Size
-															</FormLabel>
-															<ButtonGroup
-																isAttached
-																variant='outline'
-																w='100%'
-																data-testid='tissue-chip-size-control'
-															>
-																{CHIP_SIZE_OPTIONS.map((chipId) => (
-																	<Button
-																		key={chipId}
-																		flex={1}
-																		size='sm'
-																		colorScheme={
-																			project.chipConfig.chipType === chipId
-																				? 'brand'
-																				: 'gray'
-																		}
-																		variant={
-																			project.chipConfig.chipType === chipId
-																				? 'solid'
-																				: 'outline'
-																		}
-																		aria-pressed={
-																			project.chipConfig.chipType === chipId
-																		}
-																		isDisabled={isChipSelectorDisabled}
-																		onClick={() => handleChipTypeChange(chipId)}
-																		data-testid={`tissue-chip-size-option-${chipId}`}
-																	>
-																		{chipId}
-																	</Button>
-																))}
-															</ButtonGroup>
-												</FormControl>
-												{chipSelectionBlockedReason ? (
-													<Text fontSize="xs" color="orange.600">
-														{chipSelectionBlockedReason}
-													</Text>
-												) : null}
-												<Text fontSize="xs" color="gray.500">
-													Changing the capture resolution will clear previous tissue edits,
-													regenerate the projected spot grid, and require tissue auto-selection
-													to be performed again.
-												</Text>
-														{(chipConfigError ?? project.chipConfig.error) ? (
-															<Text fontSize="sm" color="red.600">
-																{chipConfigError ?? project.chipConfig.error}
-															</Text>
-														) : null}
-													</Stack>
-												</CardBody>
-											</Card>
-
-											<TissueSelectionControls
+											<TissueControlPanel
+												spotStyle={spotStyle}
+												onSpotStyleChange={handleSpotStyleChange}
+												detectionWarning={
+													project.tissueSelection.warning
+												}
+												detectionStatus={tissueDetectionStatusMessage}
+												chipType={project.chipConfig.chipType}
+												chipOptions={CHIP_SIZE_OPTIONS}
+												isChipSelectorDisabled={isChipSelectorDisabled}
+												onChipTypeChange={handleChipTypeChange}
+												chipBlockedReason={chipSelectionBlockedReason}
+												chipError={
+													chipConfigError ?? project.chipConfig.error
+												}
 												thresholdMode={project.tissueSelection.thresholdMode}
 												activationThreshold={
 													project.tissueSelection.activationThreshold
