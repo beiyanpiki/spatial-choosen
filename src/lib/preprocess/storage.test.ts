@@ -558,6 +558,7 @@ describe('preprocess storage tissue metadata', () => {
         tissueUpdatedAt: '2026-04-14T00:00:00.000Z',
         matrix,
         autoSelectedSpotIds: ['spot-a'],
+        spotStyle: { color: '#38A169', opacity: 0.8 },
       },
     });
   });
@@ -571,6 +572,7 @@ describe('preprocess storage tissue metadata', () => {
       tissueUpdatedAt: '2026-04-15T00:00:00.000Z',
       matrix: project.tissueSelection.matrix,
       autoSelectedSpotIds: ['spot-a'],
+      spotStyle: { color: '#38A169', opacity: 0.8 },
     });
 
     project.tissueSelection.updatedAt = null;
@@ -592,6 +594,7 @@ describe('preprocess storage tissue metadata', () => {
         tissueUpdatedAt: null,
         matrix: null,
         autoSelectedSpotIds: [],
+        spotStyle: { color: '#38A169', opacity: 0.8 },
       },
     });
   });

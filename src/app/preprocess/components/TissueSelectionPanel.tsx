@@ -13,7 +13,6 @@ import {
 } from '@chakra-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { colorForLabel } from '../../../lib/colors';
 import {
   computeBaseView,
   computeZoomTransform,
@@ -21,7 +20,8 @@ import {
   relativeToImage,
 } from '../../../lib/canvasViewport';
 import type { Point } from '@/types/project';
-import type { PreprocessPoint, ProjectedSpot } from '@/types/preprocess';
+import type { PreprocessPoint, ProjectedSpot, TissueSpotStyle } from '@/types/preprocess';
+import { DEFAULT_TISSUE_SPOT_STYLE } from '../../../lib/preprocess/tissueSpotStyle';
 
 export type ToolMode = 'activate' | 'deactivate';
 
@@ -35,6 +35,7 @@ type TissueSelectionPanelProps = {
   eosinCropDataUrl: string | null;
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
+  spotStyle?: TissueSpotStyle;
   showSpots?: boolean;
   disabled?: boolean;
   showControls?: boolean;
@@ -48,6 +49,7 @@ export function TissueSelectionPanel({
   eosinCropDataUrl,
   projectedSpots,
   selectedSpotIds,
+  spotStyle,
   showSpots = true,
   disabled = false,
   showControls = true,
@@ -197,7 +199,6 @@ export function TissueSelectionPanel({
   }, [eosinCropDataUrl, imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
-  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}40`, []);
   const neutralSpotFillColor = '#e5e5e520';
 
   const computeBaseViewCb = useCallback(
@@ -513,8 +514,15 @@ export function TissueSelectionPanel({
         const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
         const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
         const selected = selectedSpotIdSet.has(spot.id);
-        ctx.fillStyle = selected ? assignedSpotFillColor : neutralSpotFillColor;
+        if (selected) {
+          const style = spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE;
+          ctx.globalAlpha = clamp(style.opacity, 0, 1);
+          ctx.fillStyle = style.color;
+        } else {
+          ctx.fillStyle = neutralSpotFillColor;
+        }
         ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -539,7 +547,6 @@ export function TissueSelectionPanel({
     }
   }, [
     activeTool,
-    assignedSpotFillColor,
     canvasRefresh,
     getTransformCb,
     hostRect,
@@ -547,6 +554,7 @@ export function TissueSelectionPanel({
     projectedSpots,
     selectedSpotIdSet,
     showSpots,
+    spotStyle,
   ]);
 
   return (

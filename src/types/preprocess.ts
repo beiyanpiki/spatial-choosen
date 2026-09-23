@@ -472,6 +472,11 @@ export type TissueSelectionSupportState = 'supported' | 'unsupported';
 
 export type TissueThresholdMode = 'raw' | 'gray-max' | 'gray-min';
 
+export type TissueSpotStyle = {
+  color: string;
+  opacity: number;
+};
+
 export type LegacyTissueThresholdMode = TissueThresholdMode | 'dark' | 'light';
 
 export type CanonicalTissueSelectionMode = 'matrix' | 'imported';
@@ -497,6 +502,8 @@ export type CanonicalTissueSelectionSlice = PreprocessSliceBase & {
     maskCoverage: number;
   } | null;
   warning: string | null;
+  /** Global presentation for tissue-selected spots on the canvas. */
+  spotStyle?: TissueSpotStyle;
 };
 
 type TissueSelectionLegacyCompatibilityFields = {

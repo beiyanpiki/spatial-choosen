@@ -10,7 +10,9 @@ import type {
   SourceAssetsSlice,
   TissueActivationMatrix,
   TissueSelectionSlice,
+  TissueSpotStyle,
 } from '@/types/preprocess';
+import { DEFAULT_TISSUE_SPOT_STYLE, normalizeTissueSpotStyle } from './tissueSpotStyle';
 import { loadChipConfigData } from './chipConfigs';
 import {
   PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
@@ -135,6 +137,7 @@ export type StoredTissueSelectionPayloadV1 = {
   tissueUpdatedAt: string | null;
   matrix: TissueActivationMatrix | null;
   autoSelectedSpotIds: string[];
+  spotStyle?: TissueSpotStyle;
 };
 
 type ParsedTissueSelectionPayload =
@@ -234,6 +237,7 @@ export const toStoredTissueSelectionPayload = (
   tissueUpdatedAt: tissueSelection.updatedAt ?? null,
   matrix: tissueSelection.matrix ? validateTissueActivationMatrix(tissueSelection.matrix) : null,
   autoSelectedSpotIds: [...tissueSelection.autoSelectedSpotIds],
+  spotStyle: normalizeTissueSpotStyle(tissueSelection.spotStyle),
 });
 
 export const parseTissueSelectionPayload = (rawValue: unknown): ParsedTissueSelectionPayload => {
@@ -278,12 +282,16 @@ export const parseTissueSelectionPayload = (rawValue: unknown): ParsedTissueSele
     return { invalid: true };
   }
 
+  // Optional additive field: payloads written before spot styling lack it.
+  const spotStyle = normalizeTissueSpotStyle(parsed.spotStyle);
+
   return {
     canonical: {
       version: 1,
       tissueUpdatedAt: parsed.tissueUpdatedAt,
       matrix,
       autoSelectedSpotIds: parsed.autoSelectedSpotIds,
+      spotStyle,
     },
   };
 };
@@ -1016,12 +1024,14 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
   const storedTissueSelection = await readTissueSelectionStore(repairedMeta.id);
   let autoSelectedSpotIds: string[] = [];
   let matrix: TissueActivationMatrix | null = null;
+  let storedSpotStyle: TissueSpotStyle = DEFAULT_TISSUE_SPOT_STYLE;
   let runtimeSelectedSpotIds: string[] | null = null;
   let invalidTissueSelectionPayload = false;
 
   if (storedTissueSelection && 'canonical' in storedTissueSelection) {
     autoSelectedSpotIds = [...storedTissueSelection.canonical.autoSelectedSpotIds];
     matrix = storedTissueSelection.canonical.matrix;
+    storedSpotStyle = normalizeTissueSpotStyle(storedTissueSelection.canonical.spotStyle);
     runtimeSelectedSpotIds = matrix
       ? selectedSpotIdsFromStoredIndex(matrix, repairedProjectedSpotIndex)
       : null;
@@ -1113,6 +1123,7 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
       matrix,
       selectedSpotIds: runtimeSelectedSpotIds,
       autoSelectedSpotIds,
+      spotStyle: storedSpotStyle,
     }))(project.tissueSelection),
   };
 

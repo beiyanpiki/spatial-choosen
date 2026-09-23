@@ -3,8 +3,8 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { theme } from '../../../theme';
-import { colorForLabel } from '../../../lib/colors';
 import { TissueSelectionPanel } from './TissueSelectionPanel';
+import { DEFAULT_TISSUE_SPOT_STYLE } from '../../../lib/preprocess/tissueSpotStyle';
 
 const requestAnimationFrameMock = vi.fn<(callback: FrameRequestCallback) => number>((callback) => {
 	callback(0);
@@ -102,13 +102,14 @@ afterEach(() => {
 
 describe('TissueSelectionPanel', () => {
 	it('renders spots without borders and with more transparent fills', async () => {
-		const assignedFill = colorForLabel(1).toLowerCase();
-		const expectedAssignedFill = `${assignedFill}40`;
+		const expectedAssignedFill = DEFAULT_TISSUE_SPOT_STYLE.color.toLowerCase();
 		const expectedNeutralFill = '#e5e5e520';
 		const fillStyles: string[] = [];
+		const alphasAtFill: number[] = [];
 
 		fillRectMock.mockImplementation(() => {
 			fillStyles.push(String(contextStub.fillStyle).toLowerCase());
+			alphasAtFill.push(contextStub.globalAlpha);
 		});
 
 		render(
@@ -150,6 +151,9 @@ describe('TissueSelectionPanel', () => {
 			expect(fillStyles).toContain(expectedAssignedFill);
 			expect(fillStyles).toContain(expectedNeutralFill);
 		});
+		const selectedIndex = fillStyles.indexOf(expectedAssignedFill);
+		expect(fillStyles[selectedIndex]).toBe(expectedAssignedFill);
+		expect(alphasAtFill[selectedIndex]).toBeCloseTo(DEFAULT_TISSUE_SPOT_STYLE.opacity);
 		expect(strokeRectMock).not.toHaveBeenCalled();
 
 		expect(screen.getByText('Tissue Spot Selection')).toBeInTheDocument();
