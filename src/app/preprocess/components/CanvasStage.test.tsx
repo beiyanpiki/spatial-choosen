@@ -992,4 +992,38 @@ describe('CanvasStage', () => {
 		});
 		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedNudge);
 	});
+
+	it('flushes a pending keyboard nudge on unmount instead of dropping it', async () => {
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
+
+		const { unmount } = render(
+			<StageCommitHarness
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const host = screen.getByTestId('localize-canvas-host');
+		await act(async () => {
+			fireEvent.keyDown(host, { key: 'ArrowRight' });
+		});
+
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const expectedNudge = translateChipBounds(
+			initialRect,
+			{ x: 0.0025, y: 0 },
+			IMAGE_ASPECT_RATIO,
+		);
+		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
+
+		unmount();
+
+		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
+		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedNudge);
+	});
 });

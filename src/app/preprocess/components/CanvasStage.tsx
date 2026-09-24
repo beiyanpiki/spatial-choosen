@@ -251,11 +251,21 @@ export function CanvasStage({
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const keyboardCommitTimeoutRef = useRef<number | null>(null);
   const pendingKeyboardBoundsRef = useRef<PreprocessRect | null>(null);
+  // Latest-ref so the unmount-only cleanup below can flush pending nudges
+  // through the current callback even though its identity changes per render.
+  const onChipBoundsCommitRef = useRef(onChipBoundsCommit);
+  onChipBoundsCommitRef.current = onChipBoundsCommit;
   const imageDataUrl = image?.workingDataUrl ?? image?.thumbnailDataUrl ?? image?.dataUrl ?? null;
 
   useEffect(() => () => {
     if (keyboardCommitTimeoutRef.current !== null) {
       window.clearTimeout(keyboardCommitTimeoutRef.current);
+      keyboardCommitTimeoutRef.current = null;
+    }
+    const pendingBounds = pendingKeyboardBoundsRef.current;
+    pendingKeyboardBoundsRef.current = null;
+    if (pendingBounds) {
+      onChipBoundsCommitRef.current?.(pendingBounds);
     }
   }, []);
 
