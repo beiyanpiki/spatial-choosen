@@ -3,6 +3,7 @@
 import {
   Badge,
   Box,
+  type BoxProps,
   Button,
   ButtonGroup,
   Flex,
@@ -91,8 +92,16 @@ type BatchRegionStageProps = {
   overlayRegions?: readonly BatchRegion[];
   overlayLabel?: string;
   interactive?: boolean;
-  /** Read-only reference panel: no drawing, no view zoom, no tool controls. */
-  locked?: boolean;
+  /**
+   * Where the toolbar sits by default. `outside` puts it in its own column to
+   * the right of the picture (the picture panel of steps 3 and 4); `inside`
+   * floats it over the picture's top-right corner (the reference panel, which
+   * leaves the column beside it to the picture being drawn).
+   * `floating` parks it in the empty space to the right of the whole stage, so
+   * the picture keeps the full column width; it falls back to the `outside`
+   * column when the window is too narrow to hold it.
+   */
+  toolbarPlacement?: 'outside' | 'inside' | 'floating';
   tool?: BatchRegionTool;
   onToolChange?: (tool: BatchRegionTool) => void;
   activeColorId?: number;
@@ -147,6 +156,10 @@ const COMPARE_CURRENT_DOT = 'rgba(49, 130, 206, 0.95)';
 const OVERLAY_STROKE = 'rgba(214, 158, 46, 0.95)';
 const CUT_STROKE = 'rgba(229, 62, 62, 0.9)';
 const CLICK_MOVEMENT_THRESHOLD_PX = 4;
+/** Width the toolbar occupies, shared by the layout maths and the drag clamp. */
+const TOOLBAR_WIDTH_PX = 250;
+/** Gap between the picture and a toolbar parked beside it, plus breathing room. */
+const TOOLBAR_GAP_PX = 12;
 
 export function BatchRegionStage({
   title,
@@ -159,7 +172,7 @@ export function BatchRegionStage({
   overlayRegions = EMPTY_REGIONS,
   overlayLabel = 'Reference guide',
   interactive = true,
-  locked = false,
+  toolbarPlacement = 'outside',
   tool = 'merge',
   onToolChange,
   activeColorId = 1,
@@ -191,6 +204,8 @@ export function BatchRegionStage({
     element: hostElement,
     setElement: setHostElement,
   } = useViewportSize<HTMLDivElement>();
+  /** The picture + toolbar row, used to measure the space to its right. */
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pathRef = useRef<BatchPoint[]>([]);
   const drawingRef = useRef(false);
@@ -216,6 +231,14 @@ export function BatchRegionStage({
     onViewPanChange?.(value);
   }, [controlledPan, onViewPanChange]);
   const [isDrawing, setIsDrawing] = useState(false);
+  /**
+   * What a left-drag on the picture does. `draw` keeps the old default — trace
+   * the region — while `move` drags the picture instead, which is easier to
+   * reach than the middle-button pan. The middle button always pans.
+   */
+  const [interactionMode, setInteractionMode] = useState<'draw' | 'move'>('draw');
+  /** Move mode — or a panel that cannot be drawn on, like the reference. */
+  const leftDragMovesPicture = !interactive || interactionMode === 'move';
   const [showGrid, setShowGrid] = useState(true);
   const [showUnmarkedSpots, setShowUnmarkedSpots] = useState(true);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -525,15 +548,19 @@ export function BatchRegionStage({
   }, [requestRefresh]);
 
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!interactive) return;
+    // The middle button always pans; the left button pans when the picture mode
+    // is selected, and on a panel that cannot be drawn on (the reference).
+    const movesPicture = event.button === 1 || (event.button === 0 && leftDragMovesPicture);
 
-    if (event.button === 1) {
+    if (movesPicture) {
       event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
       panningRef.current = true;
       panStartRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
 
+    if (!interactive) return;
     if (event.button !== 0) return;
     const point = screenToFrame(event.clientX, event.clientY);
     if (!point) return;
@@ -546,7 +573,7 @@ export function BatchRegionStage({
     drawingRef.current = true;
     setIsDrawing(true);
     requestRefresh();
-  }, [interactive, requestRefresh, screenToFrame]);
+  }, [interactive, leftDragMovesPicture, requestRefresh, screenToFrame]);
 
   const handlePointerMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (panningRef.current && panStartRef.current) {
@@ -604,7 +631,7 @@ export function BatchRegionStage({
    * view out of its centre.
    */
   useEffect(() => {
-    if (!hostElement || !stage || locked) return;
+    if (!hostElement || !stage) return;
     if (stage.width <= 0 || stage.height <= 0) return;
 
     const handleWheel = (event: WheelEvent) => {
@@ -631,9 +658,62 @@ export function BatchRegionStage({
 
     hostElement.addEventListener('wheel', handleWheel, { passive: false });
     return () => hostElement.removeEventListener('wheel', handleWheel);
-  }, [applyViewPan, applyViewZoom, baseView, hostElement, locked, stage, viewZoom]);
+  }, [applyViewPan, applyViewZoom, baseView, hostElement, stage, viewZoom]);
 
-  const showRegionTools = interactive && !locked && Boolean(onUndoRegion || onClearRegions);
+  const showRegionTools = interactive && Boolean(onUndoRegion || onClearRegions);
+  /**
+   * Room for the toolbar beside the stage.
+   *
+   * `floating` only wins while the window really has space to the right of this
+   * stage; otherwise the toolbar would be pushed off screen. The measurement is
+   * taken from the row, whose right edge does not depend on where the toolbar
+   * is drawn, so the two placements cannot oscillate.
+   */
+  const [hasRoomBeside, setHasRoomBeside] = useState(false);
+  useEffect(() => {
+    // Leftover state is harmless: `hasRoomBeside` is only ever read together
+    // with a `floating` placement, which is the only case measured here.
+    if (toolbarPlacement !== 'floating') return;
+
+    const measure = () => {
+      const element = bodyRef.current;
+      if (!element) return;
+      const room = window.innerWidth - element.getBoundingClientRect().right;
+      setHasRoomBeside(room >= TOOLBAR_WIDTH_PX + TOOLBAR_GAP_PX + TOOLBAR_GAP_PX);
+    };
+
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [toolbarPlacement]);
+
+  const floatingToolbar = toolbarPlacement === 'floating' && hasRoomBeside;
+  /** Only a toolbar that takes part in the layout steals width from the picture. */
+  const toolbarTakesLayoutSpace = toolbarPlacement === 'outside'
+    || (toolbarPlacement === 'floating' && !hasRoomBeside);
+  /**
+   * `inside` takes the toolbar out of the flow and pins it to the picture's
+   * top-right corner, which also hands the whole row width to the picture. The
+   * row itself is the containing block, and the picture is its only in-flow
+   * child, so the two placements share one DOM structure.
+   */
+  const toolbarBoxProps: BoxProps = toolbarPlacement === 'inside'
+    ? { position: 'absolute', top: 4, right: 4, maxW: '300px', maxH: 'calc(100% - 32px)' }
+    : floatingToolbar
+      ? {
+          position: 'absolute',
+          top: 0,
+          left: `calc(100% + ${TOOLBAR_GAP_PX}px)`,
+          w: `${TOOLBAR_WIDTH_PX}px`,
+          maxH: '100%',
+        }
+      : {
+          alignSelf: 'flex-start',
+          flexShrink: 0,
+          w: `${TOOLBAR_WIDTH_PX}px`,
+          maxW: '100%',
+          maxH: { base: '360px', lg: '820px' },
+        };
 
   return (
     <Stack spacing={4} flex='1' minW={0} data-testid={`${testIdPrefix}-stage`}>
@@ -661,76 +741,91 @@ export function BatchRegionStage({
         </HStack>
       </Flex>
 
+      {/* The picture and its toolbar are two columns: the toolbar sits outside
+          the tissue on the right by default instead of covering it. It is still
+          draggable and can be parked on top of the picture when that is wanted. */}
+      <Flex
+        ref={bodyRef}
+        gap={3}
+        align='flex-start'
+        wrap='wrap'
+        position='relative'
+        data-testid={`${testIdPrefix}-body`}
+        data-placement={toolbarPlacement}
+      >
       <Box
         position='relative'
-        minH={{ base: '420px', lg: '620px' }}
-        h={{ base: '54vh', lg: '64vh' }}
-        maxH='820px'
-        borderRadius='2xl'
-        bg='gray.900'
-      >
-        {/* The canvas layer is clipped; the control panel below deliberately is
-            not, so it can be parked outside the image. */}
-        <Box position='absolute' inset={0} overflow='hidden' borderRadius='2xl'>
-          <Box
-            ref={(node) => {
-              hostRef.current = node;
-              setHostElement(node);
-            }}
-            position='absolute'
-            inset={0}
-          >
-            <canvas
-              ref={canvasRef}
-              style={{
-                display: 'block',
-                width: '100%',
-                height: '100%',
-                touchAction: 'none',
-                cursor: !interactive ? 'default' : 'crosshair',
+        flex={toolbarTakesLayoutSpace ? '1 1 240px' : '1 1 auto'}
+        minW={0}
+          minH={{ base: '420px', lg: '620px' }}
+          h={{ base: '54vh', lg: '64vh' }}
+          maxH='820px'
+          borderRadius='2xl'
+          bg='gray.900'
+        >
+          {/* The canvas layer is clipped to the rounded card; the toolbar is a
+              sibling column, so it is never cut off by the picture. */}
+          <Box position='absolute' inset={0} overflow='hidden' borderRadius='2xl'>
+            <Box
+              ref={(node) => {
+                hostRef.current = node;
+                setHostElement(node);
               }}
-              data-testid={`${testIdPrefix}-surface`}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
-            />
-          </Box>
+              position='absolute'
+              inset={0}
+            >
+              <canvas
+                ref={canvasRef}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  height: '100%',
+                  touchAction: 'none',
+                  cursor: leftDragMovesPicture ? 'grab' : 'crosshair',
+                }}
+                data-testid={`${testIdPrefix}-surface`}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerUp}
+              />
+            </Box>
 
-          {!image ? (
-            <Flex position='absolute' inset={0} align='center' justify='center' px={6} textAlign='center'>
-              <Text color='whiteAlpha.700'>{emptyMessage}</Text>
-            </Flex>
-          ) : null}
+            {!image ? (
+              <Flex position='absolute' inset={0} align='center' justify='center' px={6} textAlign='center'>
+                <Text color='whiteAlpha.700'>{emptyMessage}</Text>
+              </Flex>
+            ) : null}
 
-          <Box
-            position='absolute'
-            left={4}
-            bottom={4}
-            bg='blackAlpha.700'
-            color='whiteAlpha.800'
-            px={3}
-            py={2}
-            borderRadius='lg'
-            maxW='460px'
-          >
-            <Text fontSize='xs'>
-              {locked
-                ? 'Reference view is fixed.'
-                : isDrawing
-                  ? 'Release to commit the region.'
-                  : tool === 'merge'
-                    ? 'Drag to add to the active region · middle-drag to pan · wheel to zoom'
-                    : 'Drag to cut out · middle-drag to pan · wheel to zoom'}
-            </Text>
+            <Box
+              position='absolute'
+              left={4}
+              bottom={4}
+              bg='blackAlpha.700'
+              color='whiteAlpha.800'
+              px={3}
+              py={2}
+              borderRadius='lg'
+              maxW='460px'
+            >
+              <Text fontSize='xs'>
+                {!interactive
+                  ? 'Reference view — drag to move the picture · wheel to zoom'
+                  : isDrawing
+                    ? 'Release to commit the region.'
+                    : leftDragMovesPicture
+                      ? 'Drag to move the picture · wheel to zoom'
+                      : tool === 'merge'
+                        ? 'Drag to add to the active region · middle-drag to pan · wheel to zoom'
+                        : 'Drag to cut out · middle-drag to pan · wheel to zoom'}
+              </Text>
+            </Box>
           </Box>
         </Box>
 
         <Box
           ref={panelRef}
-          position='absolute'
-          top={4}
-          right={4}
+          {...toolbarBoxProps}
           bg='blackAlpha.700'
           color='whiteAlpha.900'
           border='1px solid'
@@ -739,8 +834,6 @@ export function BatchRegionStage({
           px={3}
           py={3}
           backdropFilter='blur(12px)'
-          maxW='300px'
-          maxH='calc(100% - 32px)'
           overflowY='auto'
           style={{ transform: `translate(${panelOffset.x}px, ${panelOffset.y}px)` }}
         >
@@ -766,6 +859,49 @@ export function BatchRegionStage({
                 <Text fontSize='xs' color='whiteAlpha.500'>drag</Text>
               </HStack>
             </Box>
+
+            {/*
+              The primary mode switch: a left-drag either moves the picture or
+              draws the region. Middle-drag always pans, so the old gesture keeps
+              working while the picture is being drawn on.
+            */}
+            <Stack spacing={2}>
+              <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>
+                Tool
+              </Text>
+              <ButtonGroup size='xs' variant='outline' isAttached w='100%'>
+                <Button
+                  flex={1}
+                  color='white'
+                  borderColor='whiteAlpha.400'
+                  bg={leftDragMovesPicture ? 'whiteAlpha.300' : undefined}
+                  _hover={{ bg: 'whiteAlpha.200' }}
+                  data-testid={`${testIdPrefix}-mode-move`}
+                  onClick={() => setInteractionMode('move')}
+                >
+                  Move image
+                </Button>
+                <Button
+                  flex={1}
+                  color='white'
+                  borderColor='whiteAlpha.400'
+                  bg={leftDragMovesPicture ? undefined : 'whiteAlpha.300'}
+                  _hover={{ bg: 'whiteAlpha.200' }}
+                  data-testid={`${testIdPrefix}-mode-draw`}
+                  isDisabled={!interactive}
+                  onClick={() => setInteractionMode('draw')}
+                >
+                  Draw region
+                </Button>
+              </ButtonGroup>
+              <Text fontSize='xs' color='whiteAlpha.700'>
+                {!interactive
+                  ? 'Read-only: drag the picture to move it; wheel to zoom.'
+                  : leftDragMovesPicture
+                    ? 'A left-drag moves the picture; wheel to zoom.'
+                    : 'A left-drag draws; middle-drag moves the picture; wheel to zoom.'}
+              </Text>
+            </Stack>
 
             {interactive && onActiveColorChange ? (
               <Stack spacing={2}>
@@ -892,7 +1028,7 @@ export function BatchRegionStage({
 
             {interactive ? (
               <Stack spacing={2}>
-                <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Tool</Text>
+                <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Stroke</Text>
                 <ButtonGroup size='xs' variant='outline' isAttached w='100%'>
                   <Button
                     flex={1}
@@ -985,49 +1121,48 @@ export function BatchRegionStage({
               ) : null}
             </Stack>
 
-            {locked ? (
-              <Text fontSize='xs' color='whiteAlpha.700'>Fixed reference view</Text>
-            ) : (
-              <Stack spacing={1}>
-                <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>View</Text>
-                <HStack spacing={2}>
-                  <ButtonGroup size='xs' variant='outline' isAttached>
-                    <Button
-                      color='white'
-                      borderColor='whiteAlpha.400'
-                      _hover={{ bg: 'whiteAlpha.200' }}
-                      onClick={() => applyViewZoom(viewZoom * 0.9)}
-                    >
-                      −
-                    </Button>
-                    <Button
-                      color='white'
-                      borderColor='whiteAlpha.400'
-                      _hover={{ bg: 'whiteAlpha.200' }}
-                      onClick={() => applyViewZoom(viewZoom * 1.1)}
-                    >
-                      +
-                    </Button>
-                  </ButtonGroup>
+            {/* Every panel zooms on its own: the reference view is not slaved to
+                the picture next to it, so switching that picture cannot rescale
+                the reference. */}
+            <Stack spacing={1}>
+              <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>View</Text>
+              <HStack spacing={2}>
+                <ButtonGroup size='xs' variant='outline' isAttached>
                   <Button
-                    size='xs'
-                    variant='outline'
                     color='white'
                     borderColor='whiteAlpha.400'
                     _hover={{ bg: 'whiteAlpha.200' }}
-                    onClick={() => {
-                      applyViewZoom(1);
-                      applyViewPan({ x: 0, y: 0 });
-                    }}
+                    onClick={() => applyViewZoom(viewZoom * 0.9)}
                   >
-                    Fit
+                    −
                   </Button>
-                  <Text fontSize='xs' color='whiteAlpha.700' data-testid={`${testIdPrefix}-zoom`}>
-                    {Math.round(viewZoom * 100)}%
-                  </Text>
-                </HStack>
-              </Stack>
-            )}
+                  <Button
+                    color='white'
+                    borderColor='whiteAlpha.400'
+                    _hover={{ bg: 'whiteAlpha.200' }}
+                    onClick={() => applyViewZoom(viewZoom * 1.1)}
+                  >
+                    +
+                  </Button>
+                </ButtonGroup>
+                <Button
+                  size='xs'
+                  variant='outline'
+                  color='white'
+                  borderColor='whiteAlpha.400'
+                  _hover={{ bg: 'whiteAlpha.200' }}
+                  onClick={() => {
+                    applyViewZoom(1);
+                    applyViewPan({ x: 0, y: 0 });
+                  }}
+                >
+                  Fit
+                </Button>
+                <Text fontSize='xs' color='whiteAlpha.700' data-testid={`${testIdPrefix}-zoom`}>
+                  {Math.round(viewZoom * 100)}%
+                </Text>
+              </HStack>
+            </Stack>
 
             {showRegionTools ? (
               <Stack spacing={2}>
@@ -1134,7 +1269,7 @@ export function BatchRegionStage({
           </Stack>
         </Box>
 
-      </Box>
+      </Flex>
     </Stack>
   );
 }

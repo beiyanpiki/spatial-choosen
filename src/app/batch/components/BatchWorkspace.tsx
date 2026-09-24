@@ -220,9 +220,14 @@ export function BatchWorkspace() {
   /** Last base image the operator picked in step 2, reused for other samples. */
   const [alignBaseId, setAlignBaseId] = useState<string | null>(null);
   const [walkthroughPackageId, setWalkthroughPackageId] = useState<string | null>(null);
-  /** Shared view of the two walkthrough panels, so they stay aligned.
- */
+  /** View of the picture panel on the right; the reference keeps its own below. */
   const [walkthroughView, setWalkthroughView] = useState({ zoom: 1, pan: { x: 0, y: 0 } });
+  /**
+   * The reference panel zooms and pans on its own. It must not follow the
+   * picture beside it: sharing one view used to rescale the reference whenever
+   * the right-hand image was switched or zoomed, which broke the comparison.
+   */
+  const [referenceView, setReferenceView] = useState({ zoom: 1, pan: { x: 0, y: 0 } });
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -1171,7 +1176,7 @@ export function BatchWorkspace() {
     <Stack spacing={6} data-testid='batch-workspace'>
       <Flex justify='space-between' align={{ base: 'flex-start', md: 'center' }} gap={4} wrap='wrap'>
         <Stack spacing={1}>
-          <Heading size='lg'>Multi Slides Alignment</Heading>
+          <Heading size='lg'>NATA toolkit - Multi Slides Alignment</Heading>
           <Text color='gray.500' maxW='780px'>
             Import n NATA packages, align every full-resolution slide to the reference, outline the tissue
             region once, then export each package with a barcode selection column and its transform matrix.
@@ -1549,11 +1554,11 @@ export function BatchWorkspace() {
                             <SimpleGrid columns={{ base: 1, xl: 2 }} spacing={4} alignItems='start'>
                               <BatchRegionStage
                                 title={`Reference — ${referencePackage?.name ?? ''}`}
-                                description='Locked reference view. Use it to compare shape and position while you draw on the right.'
+                                description='Reference view with its own zoom, so switching the picture on the right never rescales it.'
                                 imageUrl={referencePackage?.previewUrl ?? null}
                                 imageSize={referencePackage?.fullresSize ?? null}
                                 frame={referenceAlignedFrame}
-                                viewBounds={walkthroughViewBounds}
+                                viewBounds={referenceViewBounds}
                                 regions={referenceWorldRegions}
                                 spots={referencePackage?.spots ?? null}
                                 selectedBarcodeSet={
@@ -1563,10 +1568,12 @@ export function BatchWorkspace() {
                                 }
                                 spotDiameterFullres={referencePackage?.spotDiameterFullres ?? null}
                                 anchorMode={selection.anchorMode}
-                                viewZoom={walkthroughView.zoom}
-                                viewPan={walkthroughView.pan}
-                                locked
+                                viewZoom={referenceView.zoom}
+                                viewPan={referenceView.pan}
+                                onViewZoomChange={(zoom) => setReferenceView((previous) => ({ ...previous, zoom }))}
+                                onViewPanChange={(pan) => setReferenceView((previous) => ({ ...previous, pan }))}
                                 interactive={false}
+                                toolbarPlacement='inside'
                                 testIdPrefix='batch-walkthrough-reference'
                               />
                               <BatchRegionStage
@@ -1607,6 +1614,9 @@ export function BatchWorkspace() {
                                     ? clearSharedRegions()
                                     : clearPackageRegions(walkthroughPackage.id)
                                 )}
+                                // Outside the picture, in the free space to the
+                                // right of the stage, so the image keeps its width.
+                                toolbarPlacement='floating'
                                 testIdPrefix='batch-walkthrough-draw'
                               />
                             </SimpleGrid>
@@ -1737,13 +1747,15 @@ export function BatchWorkspace() {
                       <SimpleGrid columns={{ base: 1, xl: 2 }} spacing={4} alignItems='start'>
                         <BatchRegionStage
                           title={`Reference — ${referencePackage?.name ?? ''}`}
-                          description='Locked reference view, sharing the view of the panel on the right.'
+                          description='Reference view with its own zoom, so switching the picture on the right never rescales it.'
                           imageUrl={referencePackage?.previewUrl ?? null}
                           imageSize={referencePackage?.fullresSize ?? null}
                           frame={referenceAlignedFrame}
-                          viewBounds={regionViewBounds}
-                          viewZoom={walkthroughView.zoom}
-                          viewPan={walkthroughView.pan}
+                          viewBounds={referenceViewBounds}
+                          viewZoom={referenceView.zoom}
+                          viewPan={referenceView.pan}
+                          onViewZoomChange={(zoom) => setReferenceView((previous) => ({ ...previous, zoom }))}
+                          onViewPanChange={(pan) => setReferenceView((previous) => ({ ...previous, pan }))}
                           regions={referenceWorldRegions}
                           spots={referencePackage?.spots ?? null}
                           selectedBarcodeSet={
@@ -1753,8 +1765,8 @@ export function BatchWorkspace() {
                           }
                           spotDiameterFullres={referencePackage?.spotDiameterFullres ?? null}
                           anchorMode={selection.anchorMode}
-                          locked
                           interactive={false}
+                          toolbarPlacement='inside'
                           testIdPrefix='batch-regions-reference'
                         />
                         <BatchRegionStage
@@ -1800,6 +1812,9 @@ export function BatchWorkspace() {
                               ? clearSharedRegions()
                               : clearPackageRegions(activeRegionPackage.id)
                           )}
+                          // Outside the picture, in the free space to the right
+                          // of the stage, so the image keeps its width.
+                          toolbarPlacement='floating'
                           testIdPrefix='batch-image-region'
                         />
                       </SimpleGrid>

@@ -138,16 +138,19 @@ const renderStage = () => render(
   </ChakraProvider>,
 );
 
-const renderLockedStage = () => render(
+const renderReferenceStage = (onViewZoomChange = vi.fn()) => render(
   <ChakraProvider theme={theme}>
     <BatchRegionStage
       title='250926-SPA-GW1'
-      description='Locked reference view.'
+      description='Reference view with its own zoom.'
       imageUrl={null}
       imageSize={{ width: 2884, height: 2884 }}
       regions={[]}
-      locked
+      // Read-only: the reference is never drawn on, but it still zooms on its
+      // own so the picture beside it cannot rescale it.
       interactive={false}
+      viewZoom={1}
+      onViewZoomChange={onViewZoomChange}
       testIdPrefix='batch-reference'
     />
   </ChakraProvider>,
@@ -184,14 +187,21 @@ const wheel = (target: Element, deltaY: number) => {
 };
 
 describe('BatchRegionStage wheel handling', () => {
-  it('keeps the wheel to the page when the panel is a locked reference', () => {
-    renderLockedStage();
+  it('zooms the reference on its own without a way to draw on it', () => {
+    const onViewZoomChange = vi.fn();
+    renderReferenceStage(onViewZoomChange);
 
     const event = wheel(screen.getByTestId('batch-reference-surface'), -100);
 
-    expect(event.defaultPrevented).toBe(false);
-    expect(screen.queryByRole('button', { name: 'Fit' })).not.toBeInTheDocument();
-    expect(screen.getByText('Fixed reference view')).toBeInTheDocument();
+    // The wheel belongs to the picture under the pointer: the reference reports
+    // the zoom through its own controlled view instead of the shared one.
+    expect(event.defaultPrevented).toBe(true);
+    expect(onViewZoomChange).toHaveBeenCalledTimes(1);
+    expect(onViewZoomChange.mock.calls[0][0]).toBeCloseTo(1.1, 6);
+    // Read-only: no drawing tools, but the view controls are there.
+    expect(screen.getByRole('button', { name: 'Fit' })).toBeInTheDocument();
+    expect(screen.getByTestId('batch-reference-mode-draw')).toBeDisabled();
+    expect(screen.queryByTestId('batch-reference-undo')).not.toBeInTheDocument();
   });
 
   it('zooms the image and suppresses page scrolling while the pointer is over the image', () => {
@@ -537,6 +547,89 @@ describe('BatchRegionStage control panel', () => {
     fireEvent.doubleClick(handle);
 
     expect(panel.style.transform).toBe('translate(0px, 0px)');
+  });
+
+  it('sits outside the picture card instead of floating over the tissue', () => {
+    const { panel } = renderPanel();
+
+    const body = screen.getByTestId('batch-panel-body');
+    // The toolbar is a column of the body row, and the picture card is the
+    // sibling in front of it — this is what keeps the tissue uncovered.
+    expect(body).toHaveAttribute('data-placement', 'outside');
+    expect(panel.parentElement).toBe(body);
+    const picture = panel.previousElementSibling as HTMLElement | null;
+    expect(picture).not.toBeNull();
+    expect((picture as HTMLElement).contains(screen.getByTestId('batch-panel-surface'))).toBe(true);
+  });
+
+  it('floats the toolbar over the picture when asked for the inside placement', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <BatchRegionStage
+          title='250926-SPA-GW1'
+          description='Reference panel.'
+          imageUrl={null}
+          imageSize={{ width: 2884, height: 2884 }}
+          regions={[]}
+          interactive={false}
+          toolbarPlacement='inside'
+          testIdPrefix='batch-inside'
+        />
+      </ChakraProvider>,
+    );
+
+    const body = screen.getByTestId('batch-inside-body');
+    expect(body).toHaveAttribute('data-placement', 'inside');
+    // Out of the flow, so the picture keeps the whole row width and the toolbar
+    // ends up on the picture's top-right corner.
+    const handle = screen.getByTestId('batch-inside-panel-handle');
+    const panel = handle.closest('div[style*="transform"]') as HTMLElement;
+    expect(window.getComputedStyle(panel).position).toBe('absolute');
+  });
+
+  const renderFloating = () => render(
+    <ChakraProvider theme={theme}>
+      <BatchRegionStage
+        title='260206-SPA-K506'
+        description='Drawing panel.'
+        imageUrl={null}
+        imageSize={{ width: 2884, height: 2884 }}
+        regions={[]}
+        toolbarPlacement='floating'
+        testIdPrefix='batch-float'
+      />
+    </ChakraProvider>,
+  );
+
+  const withInnerWidth = async (width: number, run: () => Promise<void>) => {
+    const original = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    try {
+      await run();
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: original });
+    }
+  };
+
+  it('parks the toolbar beside the stage when the window has room for it', async () => {
+    // The stubbed row ends at x=900, so 1400px of window leaves plenty.
+    await withInnerWidth(1400, async () => {
+      renderFloating();
+      const handle = screen.getByTestId('batch-float-panel-handle');
+      const panel = handle.closest('div[style*="transform"]') as HTMLElement;
+
+      await waitFor(() => expect(window.getComputedStyle(panel).position).toBe('absolute'));
+    });
+  });
+
+  it('falls back to a toolbar column when the window is too narrow', async () => {
+    await withInnerWidth(1000, async () => {
+      renderFloating();
+      const handle = screen.getByTestId('batch-float-panel-handle');
+      const panel = handle.closest('div[style*="transform"]') as HTMLElement;
+
+      await waitFor(() => expect(window.getComputedStyle(panel).position).not.toBe('absolute'));
+    });
   });
 
   it('can be parked outside the image, only the window limits it', () => {

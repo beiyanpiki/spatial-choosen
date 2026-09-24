@@ -35,14 +35,32 @@ src/app/batch/
 - Regions are stored in normalized `0..1` coordinates of the image that owns them.
 - Alignment parameters always describe `moving -> reference`; projecting the
   reference selection onto a package therefore needs the inverted matrix.
-- Steps 3 and 4 show **two panels side by side**: a `locked` read-only
+- Steps 3 and 4 show **two panels side by side**: a read-only (`interactive={false}`)
   `BatchRegionStage` for the reference and an interactive one for the package being
-  drawn. They share one `viewBounds` and one controlled `viewZoom`/`viewPan`, so the
-  two pictures line up exactly; only the right panel can move the view.
+  drawn. Each panel owns its view — the reference uses `referenceViewBounds` and
+  `referenceView`, the right one `viewBoundsFor(package)` and `walkthroughView` — so
+  switching the picture on the right (or zooming it) never rescales the reference.
+  Sharing one `viewBounds`/`viewZoom` again is a reported bug: the reference jumps
+  every time another image is selected.
+- `toolbarPlacement` picks where a `BatchRegionStage` parks its toolbar, and the
+  modes are not interchangeable:
+  - `floating` (the drawing panel of steps 3 and 4): absolute, just past the stage's
+    right edge, so the picture keeps the whole column and the toolbar sits in the
+    empty space beside it. It only wins while `window.innerWidth` really leaves room
+    for `TOOLBAR_WIDTH_PX` past the row, otherwise it falls back to `outside` — never
+    park it off screen;
+  - `inside` (the reference panel next to it): absolute over the picture's top-right
+    corner, which frees the column beside it for the picture being drawn;
+  - `outside` (default, used by the full-width stages): the toolbar takes its own
+    column and the picture shrinks to `flex='1 1 240px'`.
+  All three share one DOM node — the toolbar is merely taken out of the flow — so
+  drag, double-click-to-snap-back and the window clamp behave identically. The
+  panel's first control is the left-drag mode: `Move image` or `Draw region`; the
+  middle button pans in either mode.
 - The step-3 walkthrough walks **every** ready package, the reference included, so
   the reference can be loaded into the right panel and appear on both sides. On the
   strip the chip loads the image into the right panel and the ☆ moves the reference
-  (which also swaps the locked panel), so never filter the reference out of
+  (which also swaps the panel on the left), so never filter the reference out of
   `walkthroughPackages` or block `onSelect` for it.
 - The reference package defaults to `image[0]` but any package can take its place
   through `changeReference`. It must invert the **new** reference's transform (the old
@@ -51,7 +69,7 @@ src/app/batch/
   becomes the reference outline, and the old outline becomes the old reference's own
   region. Miss either step and the operator's work appears to vanish.
 - `changeReference` must leave the panel selection alone. Starring another chip only
-  swaps the reference (and with it the locked left panel); the image on the right
+  swaps the reference (and with it the panel on the left); the image on the right
   stays whatever the operator picked, so it can legitimately be the reference itself
   and the two panels then show the same photo. Forcing the right panel back to the
   old reference reads as "the photo jumped" and is a reported bug.
@@ -100,7 +118,7 @@ src/app/batch/
 - The `StrokeScopeToggle` decides where a stroke on an aligned panel lands, and the
   two steps keep **separate** state: step 3 defaults to `all`, step 4 to `image`.
   `all` goes through `applySharedStroke`: the stroke joins the reference outline so
-  every adjusted image takes it — the locked reference panel included — and packages
+  every adjusted image takes it — the read-only reference panel included — and packages
   that carry an override get the same stroke in their own frame, otherwise the
   override would mask the shared edit. `image` writes the package's own override
   through `commitPackageStroke`. Do not reintroduce a path that writes only

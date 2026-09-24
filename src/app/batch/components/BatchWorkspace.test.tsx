@@ -25,7 +25,7 @@ describe('BatchWorkspace', () => {
 
     // The page is the multi-slide alignment workspace: "batch" is deliberately
     // absent from every operator-facing string.
-    expect(screen.getByRole('heading', { name: 'Multi Slides Alignment' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'NATA toolkit - Multi Slides Alignment' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Alignment workflow' })).toBeInTheDocument();
     expect(screen.getByTestId('batch-workflow-rail')).toBeInTheDocument();
     expect(screen.getByTestId('batch-step-import')).toBeInTheDocument();
