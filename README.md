@@ -6,7 +6,7 @@ NATAScope Web 工作台是一个基于 Next.js、React 和 TypeScript 的浏览�
 
 - **Spatial Tissue Region Annotator**：导入空间转录组 bundle 与 H&E 图像，交互式标注组织区域，并导出项目或 CSV 结果。
 - **Spatial Image Preparation**：在 `/preprocess` 中导入 NATA Align 参考图与 H&E 图像，完成捕获区域定位、ROI 对齐、图像配准、质量审核、组织 spot 选择和预处理包导出。
-- **NATA Batch Selection**：在 `/batch` 中一次导入 n 个 NATA 包，手动旋转/缩放把每一张 `tissue_fullres_image.png` 对齐到参考图（image[0]）。Step 2 的底图可以换成任意一张已导入的图，因此支持链式对齐：先把 image 2 对到 image 1，再用 image 2 当底图把 image 3 对到它上面（链上的图会跟随底图的后续调整）。Step 3 可只画一次参考区域投射到所有包，也可以逐张标注；两种模式下待标注的图都按对齐后的姿态显示，支持多颜色分类、区域合并/相减/删除以及纯白边自动裁剪。导出时只改 `tissue_positions.csv`（新增 `in_selected` 与 `selected_class`）并附加 `transform-matrix.csv`（默认"本图坐标系"的 2×3 旋转缩放矩阵），导出的包可以重新导入继续修改。
+- **NATA toolkit - Multi Slides Alignment**：在 `/batch` 中一次导入 n 个 NATA 包，手动旋转/缩放把每一张 `tissue_fullres_image.png` 对齐到参考图（image[0]）。Step 2 的底图可以换成任意一张已导入的图，因此支持链式对齐：先把 image 2 对到 image 1，再用 image 2 当底图把 image 3 对到它上面（链上的图会跟随底图的后续调整）。Step 3 可只画一次参考区域投射到所有包，也可以逐张标注；两种模式下待标注的图都按对齐后的姿态显示，支持多颜色分类、区域合并/相减/删除以及纯白边自动裁剪。导出时只改 `tissue_positions.csv`（新增 `in_selected` 与 `selected_class`）并附加 `transform-matrix.csv`（默认"本图坐标系"的 2×3 旋转缩放矩阵），导出的包可以重新导入继续修改。
 - **本地项目管理**：支持保存、继续、导入和删除项目；大体积图像与矩阵数据使用浏览器 IndexedDB 存储。
 
 ## 环境要求
