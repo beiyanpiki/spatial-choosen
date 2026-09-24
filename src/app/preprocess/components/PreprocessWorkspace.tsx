@@ -955,10 +955,6 @@ export function PreprocessWorkspace({
 	const [heFocusDraftChipBounds, setHeFocusDraftChipBounds] =
 		useState<PreprocessRect | null>(null);
 	const [tissueTool, setTissueTool] = useState<TissueTool>("activate");
-	const [spotStyle, setSpotStyle] = useState<TissueSpotStyle>({
-		color: "#38A169",
-		opacity: 0.8,
-	});
 	const [isDetectingTissue, setIsDetectingTissue] = useState(false);
 	const tissueDetectionRequestTokenRef = useRef(0);
 	const chipConfigRequestTokenRef = useRef(0);
@@ -2151,6 +2147,8 @@ export function PreprocessWorkspace({
 
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+	const effectiveSpotStyle =
+		project?.tissueSelection.spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE;
 	const exportRoiSummary =
 		project?.cropQc.cropWidth && project?.cropQc.cropHeight
 			? `${project.cropQc.cropWidth} × ${project.cropQc.cropHeight} px`
@@ -2406,9 +2404,8 @@ export function PreprocessWorkspace({
 
 	const handleSpotStyleChange = useCallback(
 		(style: TissueSpotStyle) => {
-			setSpotStyle(style);
-			// The style is global: persisting it re-renders every tissue-selected
-			// spot with the new color/opacity immediately.
+			// The style is global: persisting it re-renders the palette and every
+			// tissue-selected spot with the new color/opacity immediately.
 			onProjectMutate(
 				(current) => {
 					const updatedAt = new Date().toISOString();
@@ -3066,10 +3063,7 @@ export function PreprocessWorkspace({
 												}
 												projectedSpots={tissueProjectedSpots}
 												selectedSpotIds={tissueSelectedSpotIds}
-												spotStyle={
-													project.tissueSelection.spotStyle ??
-													DEFAULT_TISSUE_SPOT_STYLE
-												}
+												spotStyle={effectiveSpotStyle}
 												showSpots={showTissueSpots}
 												showControls={false}
 												tool={tissueTool}
@@ -3089,7 +3083,7 @@ export function PreprocessWorkspace({
 											flexShrink={0}
 										>
 											<TissueControlPanel
-												spotStyle={spotStyle}
+												spotStyle={effectiveSpotStyle}
 												onSpotStyleChange={handleSpotStyleChange}
 												detectionWarning={
 													project.tissueSelection.warning

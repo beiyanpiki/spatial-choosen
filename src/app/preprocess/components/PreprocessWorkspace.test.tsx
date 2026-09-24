@@ -1,5 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -684,6 +684,36 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
 
     expect(spotGridSwitch).not.toBeChecked();
     expect(panelSelectedCount).toHaveTextContent('Number of Tissue Spots: 0');
+  });
+
+  it('shows the persisted spot style in the control panel on load', () => {
+    const initialProject = createProject();
+    initialProject.tissueSelection.spotStyle = { color: '#E53E3E', opacity: 0.5 };
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(screen.getByTestId('tissue-style-color')).toHaveAttribute(
+      'title',
+      '#E53E3E',
+    );
+    expect(screen.getByTestId('tissue-style-opacity-slider')).toHaveValue('50');
+  });
+
+  it('keeps the persisted spot color when only the opacity is adjusted', () => {
+    const initialProject = createProject();
+    initialProject.tissueSelection.spotStyle = { color: '#E53E3E', opacity: 0.5 };
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    fireEvent.change(screen.getByTestId('tissue-style-opacity-slider'), {
+      target: { value: '60' },
+    });
+
+    expect(screen.getByTestId('tissue-style-color')).toHaveAttribute(
+      'title',
+      '#E53E3E',
+    );
+    expect(screen.getByTestId('tissue-style-opacity-slider')).toHaveValue('60');
   });
 
   it('uses edited activation and block thresholds for the next auto-detection run without auto-running on edit', async () => {
