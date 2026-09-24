@@ -82,8 +82,11 @@ export function TissueSelectionPanel({
 
   useEffect(() => {
     // Hold Space and drag to pan (in addition to the middle mouse button).
-    // Global so the modifier works even when the pointer is already down on
-    // the canvas; editable elements and buttons keep their space behavior.
+    // Listened on window so the modifier works even when the pointer is
+    // already down on the canvas, but only activated for keys that originate
+    // from the stage (or the page body): swallowing Space anywhere else would
+    // break keyboard scrolling and other page shortcuts. keyup/blur stay
+    // unscoped so the pressed state always clears.
     const isEditableTarget = (target: EventTarget | null) =>
       target instanceof HTMLElement &&
       (target.tagName === 'INPUT'
@@ -92,8 +95,15 @@ export function TissueSelectionPanel({
         || target.isContentEditable
         || target.tagName === 'BUTTON');
 
+    const isStageTarget = (target: EventTarget | null) =>
+      target === document.body
+      || (target instanceof Node && hostRef.current?.contains(target) === true);
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'Space' || event.repeat || isEditableTarget(event.target)) {
+        return;
+      }
+      if (!isStageTarget(event.target)) {
         return;
       }
       event.preventDefault();
