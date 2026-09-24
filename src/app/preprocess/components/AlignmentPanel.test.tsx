@@ -642,12 +642,15 @@ describe('AlignmentPanel', () => {
 				...createAlignmentSlice(),
 				controlPoints: [],
 			}));
-			const handleChange = useCallback(
-				(next: (current: AlignmentSlice) => AlignmentSlice) => {
-					setSlice((current) => next(current));
-				},
-				[],
-			);
+		const handleChange = useCallback(
+			(next: (current: AlignmentSlice) => AlignmentSlice) => {
+				onAlignmentChange(next);
+				setSlice((current) => next(current));
+			},
+			// onAlignmentChange comes from the enclosing test scope and never
+			// changes identity between renders.
+			[],
+		);
 
 			return (
 				<ChakraProvider theme={theme}>
