@@ -1948,13 +1948,17 @@ export function PreprocessWorkspace({
 		[applyLocalizationUpdate, localizationMetadataPersistOptions],
 	);
 
-	const tissueSupport = project
-		? resolveTissueSelectionSupport({
-				chipType: project.chipConfig.chipType,
-				rows: project.chipConfig.rows,
-				columns: project.chipConfig.columns,
-			})
-		: { supportState: "unsupported" as const, unsupportedReason: null };
+	const tissueSupport = useMemo(
+		() =>
+			project
+				? resolveTissueSelectionSupport({
+						chipType: project.chipConfig.chipType,
+						rows: project.chipConfig.rows,
+						columns: project.chipConfig.columns,
+					})
+				: { supportState: "unsupported" as const, unsupportedReason: null },
+		[project],
+	);
 
 	const runTissueAutoDetection = useCallback(async () => {
 		if (!project) {
