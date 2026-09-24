@@ -3,6 +3,7 @@ import type { LocalizationImageTransform, PreprocessPoint, PreprocessRect } from
 import {
 	applyImageDisplayTransform,
 	getLowerLeftMarkerPoints,
+	getOrientedChipBoundsPixelRect,
 	getTransformedRectCorners,
 	invertDisplayRectPointToSource,
 	invertImageDisplayTransform,
@@ -143,5 +144,42 @@ describe('imageTransforms', () => {
 		expectPointCloseTo(markerPoints[1], lowerLeftCorner);
 		expectPointCloseTo(markerPoints[0], { x: 0.49, y: 0.2 });
 		expectPointCloseTo(markerPoints[2], { x: 0.45, y: 0.24 });
+	});
+
+	it('maps canvas-axis chip bounds directly onto the oriented pixel frame under rotation', () => {
+		// A 4504x4096 source rotated 90 degrees is displayed in a 4096x4504 oriented
+		// frame; the box the user draws on that frame must crop that same frame.
+		const rect: PreprocessRect = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+		const orientedRect = getOrientedChipBoundsPixelRect(
+			rect,
+			{ width: 4096, height: 4504 },
+		);
+
+		expect(orientedRect).toEqual({
+			x: Math.round(0.1 * 4096),
+			y: Math.round(0.2 * 4504),
+			width: Math.round(0.3 * 4096),
+			height: Math.round(0.4 * 4504),
+		});
+	});
+
+	it('maps canvas-axis chip bounds without mirroring when flips are active', () => {
+		const rect: PreprocessRect = { x: 0.05, y: 0.1, width: 0.25, height: 0.5 };
+		// The oriented frame size equals the source size at rotation 0; a flip
+		// mirrors the content inside the frame, not the frame coordinates, so the
+		// crop rect must not be mirrored either.
+		const orientedRect = getOrientedChipBoundsPixelRect(
+			rect,
+			{ width: 400, height: 300 },
+		);
+
+		expect(orientedRect).toEqual({
+			x: Math.round(rect.x * 400),
+			y: Math.round(rect.y * 300),
+			width: Math.round(rect.width * 400),
+			height: Math.round(rect.height * 300),
+		});
+		// Sanity: the old double-transform behavior would have mirrored this rect.
+		expect(orientedRect.x).toBeLessThan(400 / 2);
 	});
 });

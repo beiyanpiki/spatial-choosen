@@ -7,6 +7,7 @@ import {
 } from "@/lib/preprocess/localization";
 import { migratePreprocessProject } from "@/lib/preprocess/migrations";
 import { DEFAULT_TISSUE_PARAMS } from "@/lib/preprocess/tissueThresholds";
+import { DEFAULT_TISSUE_SPOT_STYLE } from "@/lib/preprocess/tissueSpotStyle";
 import type {
 	AlignmentSlice,
 	CanonicalCropQcGeometry,
@@ -294,6 +295,7 @@ export const buildEmptyPreprocessProject = (
 		tissueSelection: {
 			...createSlice("idle"),
 			...DEFAULT_TISSUE_PARAMS,
+			spotStyle: DEFAULT_TISSUE_SPOT_STYLE,
 			mode: "matrix",
 			thresholdMode: "raw",
 			autoSelectedSpotIds: [],

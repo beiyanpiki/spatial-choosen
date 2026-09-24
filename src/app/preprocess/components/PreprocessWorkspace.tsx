@@ -4,16 +4,12 @@ import {
 	Badge,
 	Box,
 	Button,
-	Card,
-	CardBody,
 	Flex,
-	FormControl,
-	FormLabel,
 	Heading,
 	HStack,
+	Icon,
 	Image,
 	Input,
-	Select,
 	Spinner,
 	Stack,
 	Text,
@@ -41,6 +37,7 @@ import type {
 	PreprocessSourceImage,
 	PreprocessStepId,
 	TissueActivationValue,
+	TissueSpotStyle,
 } from "@/types/preprocess";
 import {
 	normalizeAlignmentSlice,
@@ -91,6 +88,9 @@ import {
 } from "@/lib/preprocess/spotProjection";
 import type { PreprocessPersistMode } from "@/lib/preprocess/storage";
 import { selectedSpotIdsFromMatrix } from "@/lib/preprocess/tissueMatrix";
+import {
+	DEFAULT_TISSUE_SPOT_STYLE,
+} from "@/lib/preprocess/tissueSpotStyle";
 import { runTissueAutoSelection } from "@/lib/preprocess/tissuePipeline";
 import { resolveTissueSelectionSupport } from "@/lib/preprocess/tissueSupport";
 import { AlignmentPanel } from "./AlignmentPanel";
@@ -99,9 +99,9 @@ import { CropQcPanel } from "./CropQcPanel";
 import { ExportPanel } from "./ExportPanel";
 import { StepSidebar } from "./StepSidebar";
 import {
-	TissueSelectionControls,
+	TissueControlPanel,
 	type TissueTool,
-} from "./TissueSelectionControls";
+} from "./TissueControlPanel";
 import { TissueSelectionPanel } from "./TissueSelectionPanel";
 
 type AutosaveStatus = "saving" | "saved" | "retrying" | "error";
@@ -367,8 +367,6 @@ export const generateFocusedHeDataUrl = async (args: {
 	);
 	const orientedChipBounds = getOrientedChipBoundsPixelRect(
 		args.chipBounds,
-		args.imageTransform,
-		{ width: sourceWidth, height: sourceHeight },
 		{ width: orientedWidth, height: orientedHeight },
 	);
 	const requestedX = orientedChipBounds.x;
@@ -459,6 +457,8 @@ export const getHeFocusComparisonSource = (
 		imageTransform: project.localization.imageTransform,
 	};
 };
+
+const CHIP_SIZE_OPTIONS: readonly string[] = ["15um", "50um"];
 
 const placeholderCopyByStep: Record<
 	PreprocessStepId,
@@ -678,77 +678,251 @@ const deriveChipProjectionForCrop = (args: {
 	};
 };
 
+function formatBytes(sizeBytes: number): string {
+	if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+		return "—";
+	}
+
+	if (sizeBytes < 1024) {
+		return `${sizeBytes} B`;
+	}
+
+	const units = ["KB", "MB", "GB", "TB"];
+	let value = sizeBytes;
+	let unitIndex = -1;
+	do {
+		value /= 1024;
+		unitIndex += 1;
+	} while (value >= 1024 && unitIndex < units.length - 1);
+	return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+const sourceAssetIconProps = {
+	viewBox: "0 0 24 24",
+	fill: "none",
+	stroke: "currentColor",
+	strokeWidth: 1.8,
+	strokeLinecap: "round" as const,
+	strokeLinejoin: "round" as const,
+	"aria-hidden": true,
+};
+
+function ImagePlaceholderIcon(props: ComponentProps<typeof Icon>) {
+	return (
+		<Icon {...sourceAssetIconProps} {...props}>
+			<rect x="3.5" y="5" width="17" height="14" rx="2" />
+			<circle cx="9" cy="10" r="1.5" />
+			<path d="M6 16.6l3.7-3.7a1.4 1.4 0 0 1 2 0l5.8 5.8" />
+		</Icon>
+	);
+}
+
+function UploadTrayIcon(props: ComponentProps<typeof Icon>) {
+	return (
+		<Icon {...sourceAssetIconProps} {...props}>
+			<path d="M12 15.5V4.5" />
+			<path d="M7.8 8.7L12 4.5l4.2 4.2" />
+			<path d="M4.5 15.5v2.6a1.4 1.4 0 0 0 1.4 1.4h12.2a1.4 1.4 0 0 0 1.4-1.4v-2.6" />
+		</Icon>
+	);
+}
+
 function SourceAssetUploader({
 	label,
 	description,
-	buttonLabel,
+	uploadLabel,
+	replaceLabel,
 	emptyText,
 	image,
 	onUpload,
 }: {
 	label: string;
 	description: string;
-	buttonLabel: string;
+	uploadLabel: string;
+	replaceLabel: string;
 	emptyText: string;
 	image: PreprocessProject["sourceAssets"]["images"]["eosin"] | null;
-	onUpload: (fileList: FileList | null) => void;
+	onUpload: (fileList: FileList | null) => void | Promise<void>;
 }) {
+	const [isUploading, setIsUploading] = useState(false);
+	const [isDraggingOver, setIsDraggingOver] = useState(false);
+	const dragDepthRef = useRef(0);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const thumbnailUrl = image
+		? (image.thumbnailObjectUrl ??
+			image.thumbnailDataUrl ??
+			image.objectUrl ??
+			image.dataUrl ??
+			null)
+		: null;
+	const fileFormatLabel = image
+		? (/\.([A-Za-z0-9]+)$/.exec(image.fileName)?.[1]?.toUpperCase() ?? null)
+		: null;
+
+	const startUpload = (fileList: FileList | null) => {
+		const result = onUpload(fileList);
+		if (result instanceof Promise) {
+			setIsUploading(true);
+			void result
+				.catch(() => {})
+				.finally(() => {
+					setIsUploading(false);
+				});
+		}
+	};
+
+	const openFilePicker = () => {
+		fileInputRef.current?.click();
+	};
+
 	return (
 		<Box
 			border="1px solid"
-			borderColor="gray.200"
+			borderColor={isDraggingOver ? "brand.400" : "gray.200"}
 			borderRadius="xl"
-			bg="white"
-			px={4}
-			py={4}
+			bg={isDraggingOver ? "brand.50" : "white"}
+			px={5}
+			py={5}
 			h="full"
+			transition="border-color 150ms ease, background-color 150ms ease"
+			onDragEnter={(event) => {
+				event.preventDefault();
+				dragDepthRef.current += 1;
+				setIsDraggingOver(true);
+			}}
+			onDragOver={(event) => {
+				event.preventDefault();
+			}}
+			onDragLeave={(event) => {
+				event.preventDefault();
+				dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+				if (dragDepthRef.current === 0) {
+					setIsDraggingOver(false);
+				}
+			}}
+			onDrop={(event) => {
+				event.preventDefault();
+				dragDepthRef.current = 0;
+				setIsDraggingOver(false);
+				if (event.dataTransfer.files.length > 0) {
+					startUpload(event.dataTransfer.files);
+				}
+			}}
 		>
-			<Stack spacing={3}>
-				<Flex justify="space-between" align="flex-start" gap={3} wrap="wrap">
-					<Stack spacing={1}>
-						<Heading size="sm">{label}</Heading>
+			<Flex direction="column" h="full" gap={4}>
+				<Flex align="flex-start" gap={4}>
+					<Box
+						flexShrink={0}
+						display="flex"
+						alignItems="center"
+						justifyContent="center"
+						w={16}
+						h={16}
+						borderRadius="md"
+						overflow="hidden"
+						borderWidth={1}
+						borderStyle={image ? "solid" : "dashed"}
+						borderColor={image ? "gray.200" : "gray.300"}
+						bg="gray.50"
+					>
+						{thumbnailUrl ? (
+							<Image
+								src={thumbnailUrl}
+								alt={`${label} preview`}
+								w="full"
+								h="full"
+								objectFit="cover"
+							/>
+						) : (
+							<ImagePlaceholderIcon boxSize={6} color="gray.300" />
+						)}
+					</Box>
+					<Stack spacing={1} flex="1" minW={0}>
+						<Flex justify="space-between" align="center" gap={3}>
+							<Heading size="sm">{label}</Heading>
+							<Badge
+								colorScheme={isUploading ? "orange" : image ? "green" : "orange"}
+								flexShrink={0}
+								borderRadius="full"
+							>
+								{isUploading ? "Uploading" : image ? "Ready" : "Missing"}
+							</Badge>
+						</Flex>
 						<Text fontSize="sm" color="gray.500">
 							{description}
 						</Text>
 					</Stack>
-					<Badge
-						colorScheme={image ? "green" : "orange"}
-						alignSelf="flex-start"
-						borderRadius="full"
-					>
-						{image ? "Ready" : "Missing"}
-					</Badge>
 				</Flex>
-				<Text fontSize="sm" color="gray.600">
-					{image
-						? `${image.fileName} • ${image.width ?? "?"}×${image.height ?? "?"} px`
-						: emptyText}
-				</Text>
-				<Box>
+				{image ? (
+					<Box bg="gray.50" borderRadius="md" px={3} py={2.5}>
+						<Stack spacing={0.5}>
+							<Text
+								fontSize="sm"
+								fontWeight="medium"
+								color="gray.800"
+								isTruncated
+								title={image.fileName}
+							>
+								{image.fileName}
+							</Text>
+							<Text fontSize="xs" color="gray.500">
+								{[
+									`${image.width ?? "?"} × ${image.height ?? "?"} px`,
+									fileFormatLabel,
+									formatBytes(image.sizeBytes),
+								]
+									.filter((part): part is string => Boolean(part))
+									.join(" • ")}
+							</Text>
+						</Stack>
+					</Box>
+				) : (
+					<Box
+						onClick={openFilePicker}
+						border="1px dashed"
+						borderColor="gray.300"
+						borderRadius="md"
+						px={4}
+						py={5}
+						textAlign="center"
+						cursor="pointer"
+						_hover={{ borderColor: "brand.400", bg: "brand.50" }}
+						transition="border-color 150ms ease, background-color 150ms ease"
+					>
+						<Stack spacing={1} align="center">
+							<UploadTrayIcon boxSize={5} color="gray.400" />
+							<Text fontSize="sm" color="gray.600">
+								{emptyText}
+							</Text>
+							<Text fontSize="xs" color="gray.400">
+								Drag &amp; drop an image here, or click to browse
+							</Text>
+						</Stack>
+					</Box>
+				)}
+				<Flex mt="auto">
 					<Button
 						colorScheme="brand"
 						variant={image ? "outline" : "solid"}
 						size="sm"
-						onClick={(event) => {
-							const input = event.currentTarget.nextElementSibling;
-							if (input instanceof HTMLInputElement) {
-								input.click();
-							}
-						}}
+						isLoading={isUploading}
+						onClick={openFilePicker}
 					>
-						{buttonLabel}
+						{image ? replaceLabel : uploadLabel}
 					</Button>
 					<Input
+						ref={fileInputRef}
 						type="file"
 						accept="image/*,.tif,.tiff"
 						display="none"
+						aria-label={`Select ${label} file`}
 						onChange={(event) => {
-							onUpload(event.target.files);
+							startUpload(event.target.files);
 							event.target.value = "";
 						}}
 					/>
-				</Box>
-			</Stack>
+				</Flex>
+			</Flex>
 		</Box>
 	);
 }
@@ -1770,13 +1944,17 @@ export function PreprocessWorkspace({
 		[applyLocalizationUpdate, localizationMetadataPersistOptions],
 	);
 
-	const tissueSupport = project
-		? resolveTissueSelectionSupport({
-				chipType: project.chipConfig.chipType,
-				rows: project.chipConfig.rows,
-				columns: project.chipConfig.columns,
-			})
-		: { supportState: "unsupported" as const, unsupportedReason: null };
+	const tissueSupport = useMemo(
+		() =>
+			project
+				? resolveTissueSelectionSupport({
+						chipType: project.chipConfig.chipType,
+						rows: project.chipConfig.rows,
+						columns: project.chipConfig.columns,
+					})
+				: { supportState: "unsupported" as const, unsupportedReason: null },
+		[project],
+	);
 
 	const runTissueAutoDetection = useCallback(async () => {
 		if (!project) {
@@ -1969,9 +2147,199 @@ export function PreprocessWorkspace({
 
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+	const effectiveSpotStyle =
+		project?.tissueSelection.spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE;
+	const exportRoiSummary =
+		project?.cropQc.cropWidth && project?.cropQc.cropHeight
+			? `${project.cropQc.cropWidth} × ${project.cropQc.cropHeight} px`
+			: null;
+	const exportChipGrid =
+		project?.chipConfig.rows && project?.chipConfig.columns
+			? `${project.chipConfig.rows} × ${project.chipConfig.columns}`
+			: null;
+	const exportChipSummary = exportChipGrid
+		? project?.chipConfig.chipType
+			? `${project.chipConfig.chipType} · ${exportChipGrid} spots`
+			: `${exportChipGrid} spots`
+		: null;
+	const exportProjectedSpotCount =
+		project?.chipConfig.projectedSpots?.length ?? 0;
+	const exportTissueSummary =
+		exportProjectedSpotCount > 0
+			? `${tissueSelectedSpotIds.length.toLocaleString("en-US")} of ${exportProjectedSpotCount.toLocaleString("en-US")} spots in tissue`
+			: null;
+	const exportOutputFileName = project
+		? `${project.name || "preprocess-project"}-preprocess.zip`
+		: null;
 	const isTissueInteractionDisabled =
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
+	const chipSelectionBlockedReason =
+		!project?.cropQc.cropWidth || !project?.cropQc.cropHeight
+			? "Registered ROI size is unavailable. Generate and approve the registered crop in Registration Review before choosing a chip."
+			: null;
+	const handleChipTypeChange = (chipId: string) => {
+		if (!project) return;
+		if (chipId !== "15um" && chipId !== "50um") {
+			return;
+		}
+		// Re-selecting the already-materialized chip must stay a no-op: the
+		// switch below clears the tissue selection and export state, which would
+		// throw away manual tissue edits on an accidental repeat click.
+		if (
+			chipId === project.chipConfig.chipType &&
+			project.chipConfig.status === "complete" &&
+			project.chipConfig.projectedSpots !== null
+		) {
+			return;
+		}
+		if (!project.cropQc.cropWidth || !project.cropQc.cropHeight) {
+			toast({
+				title: "Chip selection unavailable",
+				description:
+					"Generate and approve the registered crop in Registration Review first — the spot grid needs the registered ROI size.",
+				status: "warning",
+			});
+			return;
+		}
+		const cropWidth = project.cropQc.cropWidth;
+		const cropHeight = project.cropQc.cropHeight;
+		const chipRequestToken = ++chipConfigRequestTokenRef.current;
+		void (async () => {
+			try {
+				setChipConfigError(null);
+				const config = await loadChipConfigData(chipId);
+				if (chipConfigRequestTokenRef.current !== chipRequestToken) {
+					return;
+				}
+				const {
+					projectedSpots,
+					spotDiameterFullres,
+					tissueSupport: nextSupport,
+				} = deriveChipProjectionForCrop({
+					config,
+					cropWidth,
+					cropHeight,
+				});
+				const timestamp = new Date().toISOString();
+
+				onProjectMutate((current) => {
+					if (
+						chipConfigRequestTokenRef.current !== chipRequestToken ||
+						current.cropQc.cropWidth !== cropWidth ||
+						current.cropQc.cropHeight !== cropHeight
+					) {
+						return current;
+					}
+					return {
+						...current,
+						cropQc: {
+							...current.cropQc,
+							spot_diameter_fullres: spotDiameterFullres,
+							updatedAt: timestamp,
+						},
+						chipConfig: {
+							...current.chipConfig,
+							chipType: config.manifest.id,
+							rows: config.manifest.gridRows,
+							columns: config.manifest.gridCols,
+							pitchX: config.manifest.spotGap,
+							pitchY: config.manifest.spotGap,
+							origin: { x: 0, y: 0 },
+							rotationDegrees: 0,
+							projectedSpots,
+							status: "complete",
+							isStale: false,
+							updatedAt: timestamp,
+							error: null,
+						},
+						tissueSelection: {
+							...current.tissueSelection,
+							supportState: nextSupport.supportState,
+							unsupportedReason: nextSupport.unsupportedReason,
+							matrix: null,
+							autoSelectedSpotIds: [],
+							selectedSpotIds: null,
+							paritySummary: null,
+							warning: null,
+							status: "stale",
+							isStale: true,
+							updatedAt: timestamp,
+							error: null,
+						},
+						exportState: {
+							...current.exportState,
+							status: "stale",
+							isStale: true,
+							updatedAt: timestamp,
+							lastExportedAt: null,
+							artifacts: [],
+							error: null,
+						},
+					};
+				});
+			} catch (error) {
+				if (chipConfigRequestTokenRef.current !== chipRequestToken) {
+					return;
+				}
+				const message =
+					error instanceof Error
+						? error.message
+						: "Failed to load chip config";
+				const nextSupport = resolveTissueSelectionSupport({
+					chipType: chipId,
+					rows: null,
+					columns: null,
+				});
+				setChipConfigError(message);
+				onProjectMutate((current) => {
+					if (
+						chipConfigRequestTokenRef.current !== chipRequestToken ||
+						current.cropQc.cropWidth !== cropWidth ||
+						current.cropQc.cropHeight !== cropHeight
+					) {
+						return current;
+					}
+					return {
+						...current,
+						chipConfig: {
+							...current.chipConfig,
+							chipType: chipId,
+							projectedSpots: null,
+							status: "error",
+							isStale: false,
+							updatedAt: new Date().toISOString(),
+							error: message,
+						},
+						tissueSelection: {
+							...current.tissueSelection,
+							supportState: nextSupport.supportState,
+							unsupportedReason: nextSupport.unsupportedReason,
+							matrix: null,
+							autoSelectedSpotIds: [],
+							selectedSpotIds: null,
+							paritySummary: null,
+							warning: null,
+							status: "error",
+							isStale: false,
+							updatedAt: new Date().toISOString(),
+							error: message,
+						},
+						exportState: {
+							...current.exportState,
+							status: "stale",
+							isStale: true,
+							updatedAt: new Date().toISOString(),
+							lastExportedAt: null,
+							artifacts: [],
+							error: null,
+						},
+					};
+				});
+			}
+		})();
+	};
+
 	const [showTissueSpots, setShowTissueSpots] = useState(true);
 	const commitManualTissueSelection = useCallback(
 		(edit: { readonly editArea: PreprocessPoint[] } | { readonly spotId: string }) => {
@@ -2016,6 +2384,28 @@ export function PreprocessWorkspace({
 			);
 		},
 		[onProjectMutate, tissueTool],
+	);
+
+	const handleSpotStyleChange = useCallback(
+		(style: TissueSpotStyle) => {
+			// The style is global: persisting it re-renders the palette and every
+			// tissue-selected spot with the new color/opacity immediately.
+			onProjectMutate(
+				(current) => {
+					const updatedAt = new Date().toISOString();
+					return {
+						...current,
+						tissueSelection: {
+							...current.tissueSelection,
+							spotStyle: style,
+							updatedAt,
+						},
+					};
+				},
+				{ mode: "tissue", strategy: "debounced" },
+			);
+		},
+		[onProjectMutate],
 	);
 
 	useEffect(() => {
@@ -2187,33 +2577,23 @@ export function PreprocessWorkspace({
 									<Box flex={1} minW={0}>
 										<SourceAssetUploader
 											label="NATA Align image"
-											description="The NATA Align image uploaded here should be exported from the NATA Align Spatial Instrument and will be used for downstream chip capture area localization and image analysis."
-											buttonLabel={
-												project.sourceAssets.images.eosin
-													? "Replace reference"
-													: "Replace reference"
-											}
+											description="Exported from the NATA Align Spatial Instrument. Used to localize the chip capture area and anchor downstream image analysis."
+											uploadLabel="Upload reference"
+											replaceLabel="Replace reference"
 											emptyText="No eosin reference image uploaded yet."
 											image={project.sourceAssets.images.eosin}
-											onUpload={(fileList) => {
-												void handleUploadEosin(fileList);
-											}}
+											onUpload={handleUploadEosin}
 										/>
 									</Box>
 									<Box flex={1} minW={0}>
 										<SourceAssetUploader
 											label="H&E stained tissue image"
 											description="Moving image for HE focus, landmark registration, and registered crop generation."
-											buttonLabel={
-												project.sourceAssets.images.he
-													? "Replace image"
-													: "Upload HE image"
-											}
+											uploadLabel="Upload HE image"
+											replaceLabel="Replace image"
 											emptyText="No HE source image uploaded yet."
 											image={project.sourceAssets.images.he}
-											onUpload={(fileList) => {
-												void handleUploadHe(fileList);
-											}}
+											onUpload={handleUploadHe}
 										/>
 									</Box>
 								</Flex>
@@ -2602,6 +2982,10 @@ export function PreprocessWorkspace({
 										null
 									}
 									overlayOpacity={project.cropQc.overlayOpacity}
+									qcAccepted={project.cropQc.qcAccepted}
+									alignmentRmse={project.alignment.reprojectionRmse}
+									alignmentInlierRatio={project.alignment.inlierRatio}
+									alignmentQualityFlags={project.alignment.qualityFlags}
 									onOverlayOpacityCommit={(value: number) => {
 										applyCropQcUpdate(
 											(current) => ({
@@ -2663,6 +3047,7 @@ export function PreprocessWorkspace({
 												}
 												projectedSpots={tissueProjectedSpots}
 												selectedSpotIds={tissueSelectedSpotIds}
+												spotStyle={effectiveSpotStyle}
 												showSpots={showTissueSpots}
 												showControls={false}
 												tool={tissueTool}
@@ -2681,217 +3066,21 @@ export function PreprocessWorkspace({
 											spacing={4}
 											flexShrink={0}
 										>
-											<Card
-												border="1px solid"
-												borderColor="gray.200"
-												borderRadius="2xl"
-												boxShadow="sm"
-												bg="white"
-											>
-												<CardBody p={4}>
-													<Stack spacing={3}>
-														<Text fontSize="sm" fontWeight="semibold">
-															Chip Information
-														</Text>
-														<FormControl isDisabled={isChipSelectorDisabled}>
-															<FormLabel
-																fontSize="xs"
-																color="gray.500"
-																mb={1.5}
-															>
-																Spot Size
-															</FormLabel>
-															<Select
-																value={project.chipConfig.chipType ?? ""}
-																placeholder="Select capture pitch"
-																data-testid="tissue-chip-size-select"
-																onChange={(event) => {
-																	const chipId = event.target.value;
-																	if (chipId !== "15um" && chipId !== "50um")
-																		return;
-																	if (
-																		!project.cropQc.cropWidth ||
-																		!project.cropQc.cropHeight
-																	)
-																		return;
-																	const cropWidth = project.cropQc.cropWidth;
-																	const cropHeight = project.cropQc.cropHeight;
-																	const chipRequestToken =
-																		++chipConfigRequestTokenRef.current;
-																	void (async () => {
-																		try {
-																			setChipConfigError(null);
-																			const config =
-																				await loadChipConfigData(chipId);
-																			if (
-																				chipConfigRequestTokenRef.current !==
-																				chipRequestToken
-																			) {
-																				return;
-																			}
-																			const {
-																				projectedSpots,
-																				spotDiameterFullres,
-																				tissueSupport: nextSupport,
-																			} = deriveChipProjectionForCrop({
-																				config,
-																				cropWidth,
-																				cropHeight,
-																			});
-																			const timestamp =
-																				new Date().toISOString();
-
-																			onProjectMutate((current) => {
-																				if (
-																					chipConfigRequestTokenRef.current !==
-																						chipRequestToken ||
-																					current.cropQc.cropWidth !==
-																						cropWidth ||
-																					current.cropQc.cropHeight !==
-																						cropHeight
-																				) {
-																					return current;
-																				}
-																				return {
-																					...current,
-																					cropQc: {
-																						...current.cropQc,
-																						spot_diameter_fullres:
-																							spotDiameterFullres,
-																						updatedAt: timestamp,
-																					},
-																					chipConfig: {
-																						...current.chipConfig,
-																						chipType: config.manifest.id,
-																						rows: config.manifest.gridRows,
-																						columns: config.manifest.gridCols,
-																						pitchX: config.manifest.spotGap,
-																						pitchY: config.manifest.spotGap,
-																						origin: { x: 0, y: 0 },
-																						rotationDegrees: 0,
-																						projectedSpots,
-																						status: "complete",
-																						isStale: false,
-																						updatedAt: timestamp,
-																						error: null,
-																					},
-																					tissueSelection: {
-																						...current.tissueSelection,
-																						supportState:
-																							nextSupport.supportState,
-																						unsupportedReason:
-																							nextSupport.unsupportedReason,
-																						matrix: null,
-																						autoSelectedSpotIds: [],
-																						selectedSpotIds: null,
-																						paritySummary: null,
-																						warning: null,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: timestamp,
-																						error: null,
-																					},
-																					exportState: {
-																						...current.exportState,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: timestamp,
-																						lastExportedAt: null,
-																						artifacts: [],
-																						error: null,
-																					},
-																				};
-																			});
-																		} catch (error) {
-																			if (
-																				chipConfigRequestTokenRef.current !==
-																				chipRequestToken
-																			) {
-																				return;
-																			}
-																			const message =
-																				error instanceof Error
-																					? error.message
-																					: "Failed to load chip config";
-																			const nextSupport =
-																				resolveTissueSelectionSupport({
-																					chipType: chipId,
-																					rows: null,
-																					columns: null,
-																				});
-																			setChipConfigError(message);
-																			onProjectMutate((current) => {
-																				if (
-																					chipConfigRequestTokenRef.current !==
-																						chipRequestToken ||
-																					current.cropQc.cropWidth !==
-																						cropWidth ||
-																					current.cropQc.cropHeight !==
-																						cropHeight
-																				) {
-																					return current;
-																				}
-																				return {
-																					...current,
-																					chipConfig: {
-																						...current.chipConfig,
-																						chipType: chipId,
-																						projectedSpots: null,
-																						status: "error",
-																						isStale: false,
-																						updatedAt: new Date().toISOString(),
-																						error: message,
-																					},
-																					tissueSelection: {
-																						...current.tissueSelection,
-																						supportState:
-																							nextSupport.supportState,
-																						unsupportedReason:
-																							nextSupport.unsupportedReason,
-																						matrix: null,
-																						autoSelectedSpotIds: [],
-																						selectedSpotIds: null,
-																						paritySummary: null,
-																						warning: null,
-																						status: "error",
-																						isStale: false,
-																						updatedAt: new Date().toISOString(),
-																						error: message,
-																					},
-																					exportState: {
-																						...current.exportState,
-																						status: "stale",
-																						isStale: true,
-																						updatedAt: new Date().toISOString(),
-																						lastExportedAt: null,
-																						artifacts: [],
-																						error: null,
-																					},
-																				};
-																			});
-																		}
-																	})();
-																}}
-															>
-																<option value="15um">15um</option>
-																<option value="50um">50um</option>
-															</Select>
-														</FormControl>
-														<Text fontSize="xs" color="gray.500">
-															Changing the capture resolution will clear previous tissue edits,
-															regenerate the projected spot grid, and require tissue auto-selection
-															to be performed again.
-														</Text>
-														{(chipConfigError ?? project.chipConfig.error) ? (
-															<Text fontSize="sm" color="red.600">
-																{chipConfigError ?? project.chipConfig.error}
-															</Text>
-														) : null}
-													</Stack>
-												</CardBody>
-											</Card>
-
-											<TissueSelectionControls
+											<TissueControlPanel
+												spotStyle={effectiveSpotStyle}
+												onSpotStyleChange={handleSpotStyleChange}
+												detectionWarning={
+													project.tissueSelection.warning
+												}
+												detectionStatus={tissueDetectionStatusMessage}
+												chipType={project.chipConfig.chipType}
+												chipOptions={CHIP_SIZE_OPTIONS}
+												isChipSelectorDisabled={isChipSelectorDisabled}
+												onChipTypeChange={handleChipTypeChange}
+												chipBlockedReason={chipSelectionBlockedReason}
+												chipError={
+													chipConfigError ?? project.chipConfig.error
+												}
 												thresholdMode={project.tissueSelection.thresholdMode}
 												activationThreshold={
 													project.tissueSelection.activationThreshold
@@ -3061,43 +3250,6 @@ export function PreprocessWorkspace({
 												}}
 												onShowSpotsChange={setShowTissueSpots}
 											/>
-
-											<Card
-												border="1px solid"
-												borderColor="gray.200"
-												borderRadius="2xl"
-												boxShadow="sm"
-												bg="white"
-											>
-												<CardBody p={4}>
-													<Stack spacing={1}>
-														<Text
-															fontSize="sm"
-															color="gray.600"
-															data-testid="tissue-selected-count"
-														>
-															Number of Tissue Spots: {tissueSelectedSpotIds.length}
-														</Text>
-														{project.tissueSelection.warning ? (
-															<Text
-																fontSize="sm"
-																color="orange.700"
-																data-testid="tissue-detection-warning"
-															>
-																{project.tissueSelection.warning}
-															</Text>
-														) : (
-															<Text
-																fontSize="sm"
-																color="gray.500"
-																data-testid="tissue-detection-status"
-															>
-																{tissueDetectionStatusMessage}
-															</Text>
-														)}
-													</Stack>
-												</CardBody>
-											</Card>
 										</Stack>
 									</Flex>
 									{isDetectingTissue ? (
@@ -3134,6 +3286,16 @@ export function PreprocessWorkspace({
 									onToggleIncludeProject={setIncludeProjectJson}
 									isExporting={isExporting}
 									canExport={exportReadiness.canExport}
+									blockedReason={
+										exportReadiness.canExport ? null : exportReadiness.reason
+									}
+									isStale={project.exportState.isStale}
+									lastExportedAt={project.exportState.lastExportedAt}
+									includeAlignedImage={includeAlignedImage}
+									roiSummary={exportRoiSummary}
+									chipSummary={exportChipSummary}
+									tissueSummary={exportTissueSummary}
+									outputFileName={exportOutputFileName}
 									onDownload={() => {
 										const currentExportReadiness =
 											getPreprocessZipExportReadiness(project, {

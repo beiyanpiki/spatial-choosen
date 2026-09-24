@@ -5,6 +5,7 @@ import {
 	Box,
 	Button,
 	Flex,
+	Grid,
 	Heading,
 	HStack,
 	SimpleGrid,
@@ -76,8 +77,9 @@ type LandmarkCanvasProps = {
 	points: readonly EditorPoint[];
 	pendingPoint: PreprocessPoint | null;
 	title: string;
+	roleLabel: string;
 	interactionMode: InteractionMode;
-	selectedPairId: string | null;
+	isActive: boolean;
 	imageTransform: LocalizationImageTransform;
 	showImageBoundary?: boolean;
 	panelContent?: ReactNode;
@@ -116,6 +118,7 @@ const formatMetric = (value: number | null, digits = 3) =>
 	value === null ? "—" : value.toFixed(digits);
 const ZOOM_MIN = 0.75;
 const ZOOM_MAX = 50;
+const ZOOM_WHEEL_FACTOR = 1.2;
 
 const clampZoom = (value: number) => clamp(value, ZOOM_MIN, ZOOM_MAX);
 
@@ -125,7 +128,9 @@ function LandmarkCanvas({
 	points,
 	pendingPoint,
 	title,
+	roleLabel,
 	interactionMode,
+	isActive,
 	imageTransform,
 	showImageBoundary = false,
 	panelContent,
@@ -194,7 +199,23 @@ function LandmarkCanvas({
 	);
 
 	const [dragPointId, setDragPointId] = useState<string | null>(null);
+	const [isPanning, setIsPanning] = useState(false);
 	const panSessionRef = useRef<PanSession | null>(null);
+
+	const zoomByFactor = useCallback(
+		(factor: number) => {
+			const next = computeZoomTransform(baseView, effectiveZoom * factor);
+			if (!next) return;
+			setZoom(clampZoom(next.zoom / Math.max(imageTransform.scale, Number.EPSILON)));
+			setPanOffset(next.pan);
+		},
+		[baseView, effectiveZoom, imageTransform.scale],
+	);
+
+	const resetView = useCallback(() => {
+		setZoom(1);
+		setPanOffset({ x: 0, y: 0 });
+	}, []);
 
 	useEffect(() => {
 		if (
@@ -288,9 +309,17 @@ function LandmarkCanvas({
 		if (!host) return;
 
 		const handlePointerDown = (event: PointerEvent) => {
-			if (event.target instanceof SVGCircleElement) return;
+			const target = event.target;
+			if (
+				target instanceof Element &&
+				target.namespaceURI === "http://www.w3.org/2000/svg" &&
+				target.tagName === "circle"
+			) {
+				return;
+			}
 			event.preventDefault();
 			host.setPointerCapture(event.pointerId);
+			setIsPanning(true);
 			beginPan(event.clientX, event.clientY, event.pointerId);
 		};
 
@@ -302,6 +331,7 @@ function LandmarkCanvas({
 			if (host.hasPointerCapture(event.pointerId)) {
 				host.releasePointerCapture(event.pointerId);
 			}
+			setIsPanning(false);
 			endPan(event.clientX, event.clientY, event.pointerId);
 		};
 
@@ -309,6 +339,7 @@ function LandmarkCanvas({
 			if (host.hasPointerCapture(event.pointerId)) {
 				host.releasePointerCapture(event.pointerId);
 			}
+			setIsPanning(false);
 			panSessionRef.current = null;
 		};
 
@@ -337,12 +368,31 @@ function LandmarkCanvas({
 				x: event.clientX - rect.left,
 				y: event.clientY - rect.top,
 			};
-			const anchorNorm = relativeToImage(anchorScreen, viewportTransform);
+			const rawAnchor = relativeToImage(anchorScreen, viewportTransform);
+			const anchorNorm = rawAnchor
+				? rawAnchor
+				: viewportTransform
+					? {
+							x: clamp(
+								(anchorScreen.x - viewportTransform.originX) /
+									viewportTransform.width,
+								0,
+								1,
+							),
+							y: clamp(
+								(anchorScreen.y - viewportTransform.originY) /
+									viewportTransform.height,
+								0,
+								1,
+							),
+						}
+					: null;
+			const factor = event.deltaY > 0 ? 1 / ZOOM_WHEEL_FACTOR : ZOOM_WHEEL_FACTOR;
 			const next = computeZoomTransform(
 				baseView,
-				zoom + (event.deltaY > 0 ? -0.2 : 0.2),
+				effectiveZoom * factor,
 				anchorNorm ?? undefined,
-				anchorNorm ? anchorScreen : undefined,
+				anchorScreen,
 			);
 			if (!next) return;
 
@@ -353,7 +403,13 @@ function LandmarkCanvas({
 
 		host.addEventListener("wheel", handleWheel, { passive: false });
 		return () => host.removeEventListener("wheel", handleWheel);
-	}, [baseView, hostElement, imageTransform.scale, viewportTransform, zoom]);
+	}, [
+		baseView,
+		effectiveZoom,
+		hostElement,
+		imageTransform.scale,
+		viewportTransform,
+	]);
 
 	const renderPoint = useCallback(
 		(point: PreprocessPoint) => {
@@ -369,10 +425,37 @@ function LandmarkCanvas({
 	);
 
 	return (
-		<Stack spacing={3} flex="1" minW={0}>
+		<Stack spacing={2} flex="1" minW={0}>
+			<Flex justify="space-between" align="center" gap={2} wrap="wrap">
+				<HStack spacing={2} align="center">
+					<Badge
+						colorScheme={imageKey === "source" ? "blue" : "purple"}
+						variant="subtle"
+						borderRadius="full"
+						px={2}
+						py={0.5}
+						data-testid={`${testIdPrefix}-role-badge`}
+					>
+						{roleLabel}
+					</Badge>
+					<Text fontSize="sm" fontWeight="semibold" color="gray.700">
+						{title}
+					</Text>
+				</HStack>
+				<Badge
+					colorScheme="brand"
+					borderRadius="full"
+					px={2}
+					py={0.5}
+					visibility={isActive ? "visible" : "hidden"}
+					data-testid={`${testIdPrefix}-active-badge`}
+				>
+					Place point here
+				</Badge>
+			</Flex>
 			<Box
 				border="1px solid"
-				borderColor="gray.200"
+				borderColor={isActive ? "brand.400" : "gray.200"}
 				borderRadius="lg"
 				overflow="hidden"
 				bg="white"
@@ -380,14 +463,77 @@ function LandmarkCanvas({
 				h={{ base: "52vh", xl: "58vh" }}
 				maxH="680px"
 				position="relative"
-				boxShadow="sm"
+				boxShadow={
+					isActive
+						? "0 0 0 2px rgba(47, 150, 249, 0.55), 0 0 0 6px rgba(47, 150, 249, 0.14)"
+						: "sm"
+				}
+				transition="box-shadow 150ms ease, border-color 150ms ease"
 				data-testid={`${testIdPrefix}-canvas-container`}
 			>
-				{panelContent ? (
-					<Box position="absolute" top={4} right={4} zIndex={2}>
-						{panelContent}
-					</Box>
-				) : null}
+				<Stack
+					position="absolute"
+					top={3}
+					right={3}
+					zIndex={2}
+					spacing={2}
+					align="flex-end"
+				>
+					<HStack
+						spacing={1}
+						bg="blackAlpha.700"
+						borderRadius="lg"
+						px={1.5}
+						py={1}
+						backdropFilter="blur(8px)"
+						data-testid={`${testIdPrefix}-zoom-controls`}
+					>
+						<Button
+							size="xs"
+							variant="ghost"
+							color="white"
+							_hover={{ bg: "whiteAlpha.300" }}
+							aria-label={`Zoom out ${title}`}
+							onClick={() => zoomByFactor(1 / ZOOM_WHEEL_FACTOR)}
+							data-testid={`${testIdPrefix}-zoom-out`}
+						>
+							−
+						</Button>
+						<Text
+							fontSize="xs"
+							color="whiteAlpha.950"
+							fontWeight="semibold"
+							minW="44px"
+							textAlign="center"
+							data-testid={`${testIdPrefix}-zoom-value`}
+						>
+							{Math.round(effectiveZoom * 100)}%
+						</Text>
+						<Button
+							size="xs"
+							variant="ghost"
+							color="white"
+							_hover={{ bg: "whiteAlpha.300" }}
+							aria-label={`Zoom in ${title}`}
+							onClick={() => zoomByFactor(ZOOM_WHEEL_FACTOR)}
+							data-testid={`${testIdPrefix}-zoom-in`}
+						>
+							+
+						</Button>
+						<Button
+							size="xs"
+							variant="ghost"
+							color="white"
+							_hover={{ bg: "whiteAlpha.300" }}
+							aria-label={`Reset view ${title}`}
+							onClick={resetView}
+							data-testid={`${testIdPrefix}-zoom-reset`}
+						>
+							Fit
+						</Button>
+					</HStack>
+					{panelContent}
+				</Stack>
 				<Box
 					ref={(node) => {
 						hostRef.current = node;
@@ -395,6 +541,13 @@ function LandmarkCanvas({
 					}}
 					position="absolute"
 					inset={0}
+					style={{
+						cursor: isPanning
+							? "grabbing"
+							: isActive
+								? "crosshair"
+								: "grab",
+					}}
 					data-testid={
 						testIdPrefix === "alignment-source"
 							? "alignment-add-point-eosin"
@@ -502,7 +655,11 @@ function LandmarkCanvas({
 												x={rendered.x + 11}
 												y={rendered.y - 11}
 												fontSize="12"
+												fontWeight="700"
 												fill="white"
+												stroke="rgba(0, 0, 0, 0.65)"
+												strokeWidth={3}
+												paintOrder="stroke"
 											>
 												{index + 1}
 											</text>
@@ -837,6 +994,24 @@ export function AlignmentPanel({
 			? "Selected pair ready. Move either landmark, delete the pair, or solve registration."
 			: "Start on the eosin reference, then place the matching landmark on the HE image.";
 	}, [alignment.solveAccepted, interactionMode, selectedPair]);
+	// Exposed for assistive tech and tests without rendering shifting copy on the card.
+	const workflowInstructionAriaLabel = `Workflow status: ${workflowInstruction}`;
+
+	const activeCanvas: "source" | "target" | null = useMemo(() => {
+		if (
+			interactionMode === "awaiting-source" ||
+			interactionMode === "reposition-source"
+		) {
+			return "source";
+		}
+		if (
+			interactionMode === "awaiting-target" ||
+			interactionMode === "reposition-target"
+		) {
+			return "target";
+		}
+		return null;
+	}, [interactionMode]);
 
 	const sourcePoints = useMemo<EditorPoint[]>(
 		() =>
@@ -1002,6 +1177,15 @@ export function AlignmentPanel({
 		!alignment.solveAccepted &&
 		!alignment.forceAccepted;
 
+	// The pair-editing toolbar is contextual: it swaps in for the status badges
+	// only while a pair is selected or a placement is in progress. Both stay
+	// mounted in the same grid cell so the swap never reflows the card.
+	const pairActionsActive =
+		Boolean(selectedPair) ||
+		interactionMode === "reposition-source" ||
+		interactionMode === "reposition-target" ||
+		(interactionMode === "awaiting-target" && Boolean(pendingSourcePoint));
+
 	if (!referenceImage?.dataUrl || !movingImage?.dataUrl) {
 		return (
 			<Box
@@ -1047,7 +1231,7 @@ export function AlignmentPanel({
 					gap={3}
 					wrap="wrap"
 				>
-					<Stack spacing={2} flex="1" minW="240px">
+					<Stack spacing={2} flex="1" minW="240px" aria-label={workflowInstructionAriaLabel}>
 						<Flex align="center" gap={2} wrap="wrap">
 							<Text
 								fontSize="xs"
@@ -1069,174 +1253,238 @@ export function AlignmentPanel({
 								data-testid="alignment-pair-count-badge"
 								data-pair-count={alignment.controlPoints.length}
 							>
-								Landmark Pairs: {alignment.controlPoints.length} /{" "}
-								{ALIGNMENT_TARGET_PAIRS}
-							</Badge>
+							Landmark Pairs: {alignment.controlPoints.length} /{" "}
+							{ALIGNMENT_TARGET_PAIRS}
+						</Badge>
 						</Flex>
+						{/* Visible instruction in a min-height slot sized for the longest
+							two-line copy, so swapping instructions never shifts the card. */}
 						<Text
 							fontSize={{ base: "sm", md: "md" }}
 							fontWeight="semibold"
 							lineHeight="1.45"
+							minH="2.9em"
 							data-testid="alignment-workflow-instruction"
 						>
 							{workflowInstruction}
 						</Text>
 					</Stack>
-					<Flex
-						gap={2}
-						wrap="wrap"
-						align="center"
-						justify={{ base: "flex-start", lg: "flex-end" }}
-					>
-						<Badge
-							colorScheme={
-								runtimeStatus === "ready"
-									? "green"
-									: runtimeStatus === "error"
-										? "red"
-										: "orange"
-							}
-							borderRadius="full"
-							px={2.5}
-							py={1}
-							data-testid="alignment-runtime-status-badge"
-							data-runtime-status={runtimeStatus}
+					{/* Status badges and the pair-editing toolbar share one grid cell so
+						swapping between them never changes the card height. */}
+					<Grid templateColumns="1fr" flexShrink={0}>
+						<Flex
+							gridColumn="1"
+							gridRow="1"
+							gap={2}
+							wrap="wrap"
+							align="center"
+							justify={{ base: "flex-start", lg: "flex-end" }}
+							visibility={pairActionsActive ? "hidden" : "visible"}
 						>
-							OpenCV {runtimeStatus}
-						</Badge>
-						<Badge
-							colorScheme={
-								alignment.solveAccepted
+							<Badge
+								colorScheme={
+									runtimeStatus === "ready"
+										? "green"
+										: runtimeStatus === "error"
+											? "red"
+											: "orange"
+								}
+								borderRadius="full"
+								px={2.5}
+								py={1}
+								data-testid="alignment-runtime-status-badge"
+								data-runtime-status={runtimeStatus}
+							>
+								OpenCV {runtimeStatus}
+							</Badge>
+							<Badge
+								colorScheme={
+									alignment.solveAccepted
+										? alignment.forceAccepted && !alignment.qualityFlags.accepted
+											? "orange"
+											: "green"
+										: alignment.failureReason
+											? "red"
+											: "gray"
+								}
+								borderRadius="full"
+								px={2.5}
+								py={1}
+								data-testid="alignment-status"
+								data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
+								data-force-accepted={alignment.forceAccepted ? "true" : "false"}
+								data-failure-reason={alignment.failureReason ?? ""}
+							>
+								{alignment.solveAccepted
 									? alignment.forceAccepted && !alignment.qualityFlags.accepted
-										? "orange"
-										: "green"
+										? "Force accepted"
+										: "Accepted"
 									: alignment.failureReason
-										? "red"
-										: "gray"
-							}
-							borderRadius="full"
-							px={2.5}
-							py={1}
-							data-testid="alignment-status"
-							data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
-							data-force-accepted={alignment.forceAccepted ? "true" : "false"}
-							data-failure-reason={alignment.failureReason ?? ""}
-						>
-							{alignment.solveAccepted
-								? alignment.forceAccepted && !alignment.qualityFlags.accepted
-									? "Force accepted"
-									: "Accepted"
-								: alignment.failureReason
-									? "Rejected"
-									: "Not solved"}
-						</Badge>
-						{selectedPair ? (
+										? "Rejected"
+										: "Not solved"}
+							</Badge>
 							<Badge
 								colorScheme="purple"
 								borderRadius="full"
 								px={2.5}
 								py={1}
+								visibility={selectedPair ? "visible" : "hidden"}
 								data-testid="alignment-selected-pair-badge"
 							>
-								Selected pair #
-								{alignment.controlPoints.findIndex(
-									(pair) => pair.id === selectedPair.id,
-								) + 1}
+								{selectedPair
+									? `Selected pair #${
+											alignment.controlPoints.findIndex(
+												(pair) => pair.id === selectedPair.id,
+											) + 1
+										}`
+									: "Selected pair"}
 							</Badge>
-						) : null}
-					</Flex>
+						</Flex>
+						<Flex
+							gridColumn="1"
+							gridRow="1"
+							role="group"
+							aria-label="Selected landmark controls"
+							align="center"
+							gap={2}
+							px={2}
+							py={1}
+							borderRadius="xl"
+							border="1px solid"
+							borderColor="blue.200"
+							bg="rgba(235, 244, 255, 0.85)"
+							visibility={pairActionsActive ? "visible" : "hidden"}
+							data-testid="alignment-pair-actions"
+						>
+							{selectedPair ? (
+								<Badge
+									colorScheme="purple"
+									borderRadius="full"
+									px={2.5}
+									py={1}
+									data-testid="alignment-editing-pair-badge"
+								>
+									Editing pair #
+									{alignment.controlPoints.findIndex(
+										(pair) => pair.id === selectedPair.id,
+									) + 1}
+								</Badge>
+							) : (
+								<Badge
+									colorScheme="orange"
+									borderRadius="full"
+									px={2.5}
+									py={1}
+									data-testid="alignment-editing-pair-badge"
+								>
+									New pair
+								</Badge>
+							)}
+							<Button
+								size="sm"
+								variant="outline"
+								color="gray.700"
+								borderColor="gray.300"
+								bg="white"
+								_hover={{ bg: "gray.50" }}
+								onClick={() => {
+									if (!selectedPairId) return;
+									setPendingSourcePoint(null);
+									setRepositionPairId(selectedPairId);
+									setInteractionMode("reposition-source");
+								}}
+								isDisabled={!selectedPairId}
+								data-testid="alignment-select-reposition-source"
+							>
+								Move NATA Align Image Point
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								color="gray.700"
+								borderColor="gray.300"
+								bg="white"
+								_hover={{ bg: "gray.50" }}
+								onClick={() => {
+									if (!selectedPairId) return;
+									setPendingSourcePoint(null);
+									setRepositionPairId(selectedPairId);
+									setInteractionMode("reposition-target");
+								}}
+								isDisabled={!selectedPairId}
+								data-testid="alignment-select-reposition-target"
+							>
+								Move HE point
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								colorScheme="red"
+								onClick={() => {
+									if (!selectedPairId) return;
+									setPendingSourcePoint(null);
+									setRepositionPairId(null);
+									mutateControlPoints(
+										(controlPoints) =>
+											controlPoints.filter(
+												(point) => point.id !== selectedPairId,
+											),
+										{ afterApply: clearLocalInteractionState },
+									);
+								}}
+								isDisabled={!selectedPairId}
+								data-testid="alignment-select-delete-pair"
+							>
+								Delete pair
+							</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								color="gray.700"
+								_hover={{ bg: "whiteAlpha.500" }}
+								onClick={clearLocalInteractionState}
+								data-testid="alignment-select-cancel"
+							>
+								Cancel
+							</Button>
+						</Flex>
+					</Grid>
 				</Flex>
-				<Flex gap={3} wrap="wrap" align="center" justify="space-between">
-					<Flex
-						role="group"
-						aria-label="Selected landmark controls"
-						gap={2}
-						wrap="wrap"
-						data-testid="alignment-pair-actions"
-					>
-						<Button
-							size="sm"
-							variant="outline"
-							color="gray.700"
-							borderColor="gray.300"
-							bg="whiteAlpha.800"
-							_hover={{ bg: "white" }}
-							onClick={() => {
-								if (!selectedPairId) return;
-								setPendingSourcePoint(null);
-								setRepositionPairId(selectedPairId);
-								setInteractionMode("reposition-source");
-							}}
-							isDisabled={!selectedPairId}
-							data-testid="alignment-select-reposition-source"
-						>
-							Move NATA Align Image Point
-						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							color="gray.700"
-							borderColor="gray.300"
-							bg="whiteAlpha.800"
-							_hover={{ bg: "white" }}
-							onClick={() => {
-								if (!selectedPairId) return;
-								setPendingSourcePoint(null);
-								setRepositionPairId(selectedPairId);
-								setInteractionMode("reposition-target");
-							}}
-							isDisabled={!selectedPairId}
-							data-testid="alignment-select-reposition-target"
-						>
-							Move HE point
-						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							colorScheme="red"
-							onClick={() => {
-								if (!selectedPairId) return;
-								setPendingSourcePoint(null);
-								setRepositionPairId(null);
-								mutateControlPoints(
-									(controlPoints) =>
-										controlPoints.filter(
-											(point) => point.id !== selectedPairId,
-										),
-									{ afterApply: clearLocalInteractionState },
-								);
-							}}
-							isDisabled={!selectedPairId}
-							data-testid="alignment-select-delete-pair"
-						>
-							Delete pair
-						</Button>
-						<Button
-							size="sm"
-							variant="ghost"
-							color="gray.700"
-							_hover={{ bg: "gray.100" }}
-							onClick={clearLocalInteractionState}
-							isDisabled={
-								interactionMode === "awaiting-source" && !pendingSourcePoint
-							}
-							data-testid="alignment-select-cancel"
-						>
-							Cancel
-						</Button>
-					</Flex>
+				<Box
+					h="1.5"
+					w="100%"
+					bg="gray.100"
+					borderRadius="full"
+					overflow="hidden"
+					data-testid="alignment-pair-progress"
+				>
+					<Box
+						h="100%"
+						width={`${Math.min(100, (alignment.controlPoints.length / ALIGNMENT_TARGET_PAIRS) * 100)}%`}
+						bg={
+							alignment.controlPoints.length >= ALIGNMENT_MIN_PAIRS
+								? "green.400"
+								: "orange.400"
+						}
+						transition="width 200ms ease, background-color 200ms ease"
+					/>
+				</Box>
+				<Flex justify="space-between" align="center" gap={2} wrap="wrap">
 					<Flex
 						role="group"
 						aria-label="Workspace controls"
-						gap={2}
+						gap={1}
 						wrap="wrap"
+						align="center"
 						data-testid="alignment-workspace-actions"
 					>
 						<Button
 							size="sm"
-							variant="ghost"
-							color="gray.700"
-							_hover={{ bg: "gray.100" }}
+							variant={showDiagnostics ? "solid" : "ghost"}
+							colorScheme={showDiagnostics ? "brand" : "gray"}
+							color={showDiagnostics ? undefined : "gray.700"}
+							_hover={showDiagnostics ? undefined : { bg: "gray.100" }}
+							aria-pressed={showDiagnostics}
 							onClick={() => setShowDiagnostics((current) => !current)}
 							data-testid="alignment-diagnostics-toggle"
 						>
@@ -1248,14 +1496,20 @@ export function AlignmentPanel({
 							color="gray.700"
 							_hover={{ bg: "gray.100" }}
 							onClick={() => {
-								setPendingSourcePoint(null);
+								if (pendingSourcePoint) {
+									setPendingSourcePoint(null);
+									setInteractionMode("awaiting-source");
+									return;
+								}
 								setRepositionPairId(null);
 								mutateControlPoints(
 									(controlPoints) => controlPoints.slice(0, -1),
 									{ afterApply: clearLocalInteractionState },
 								);
 							}}
-							isDisabled={alignment.controlPoints.length === 0}
+							isDisabled={
+								alignment.controlPoints.length === 0 && !pendingSourcePoint
+							}
 							data-testid="alignment-undo-last-point"
 						>
 							Undo last point
@@ -1290,6 +1544,7 @@ export function AlignmentPanel({
 						gap={2}
 						wrap="wrap"
 						justify={{ base: "flex-start", lg: "flex-end" }}
+						align="center"
 						data-testid="alignment-decision-actions"
 					>
 						<Button
@@ -1323,25 +1578,83 @@ export function AlignmentPanel({
 	return (
 		<Stack spacing={4} w="100%" data-testid="alignment-layout">
 			{workflowCard}
+			<SimpleGrid
+				columns={{ base: 1, lg: 2 }}
+				gap={4}
+				w="100%"
+				minW={0}
+				data-testid="alignment-canvas-grid"
+			>
+				<LandmarkCanvas
+					image={referenceImage}
+					imageKey="source"
+					imageTransform={referenceImageTransform}
+					points={sourcePoints}
+					pendingPoint={pendingSourcePoint}
+					title="Eosin landmarks (reference)"
+					roleLabel="Reference · NATA Align"
+					interactionMode={interactionMode}
+					isActive={activeCanvas === "source"}
+					onBackgroundPoint={handleBackgroundPoint}
+					onBackgroundFallback={clearLocalInteractionState}
+					onSelectPoint={handleSelectPair}
+					onRepositionPoint={handleRepositionPoint}
+					testIdPrefix="alignment-source"
+				/>
+				<LandmarkCanvas
+					image={movingImage}
+					imageKey="target"
+					imageTransform={alignment.movingImageTransform}
+					points={targetPoints}
+					pendingPoint={null}
+					title="HE landmarks (moving)"
+					roleLabel="Moving · HE"
+					interactionMode={interactionMode}
+					isActive={activeCanvas === "target"}
+					showImageBoundary={showMovingImagePaddingBoundary}
+					onBackgroundPoint={handleBackgroundPoint}
+					onBackgroundFallback={clearLocalInteractionState}
+					onSelectPoint={handleSelectPair}
+					onRepositionPoint={handleRepositionPoint}
+					testIdPrefix="alignment-target"
+				/>
+			</SimpleGrid>
+			{/* Rendered below the canvases so toggling warnings never shifts the clicking surfaces. */}
 			{coverage.warning || runtimeError ? (
 				<Stack spacing={2} w="100%" data-testid="alignment-messages">
 					{coverage.warning ? (
-						<Stack spacing={1}>
-							<Text
-								fontSize="sm"
-								color="orange.600"
-								data-testid="alignment-distribution-warning"
-							>
-								Landmark spread is narrow. Coverage ratios are{" "}
-								{formatPercent(coverage.coverageRatioX)} width and{" "}
-								{formatPercent(coverage.coverageRatioY)} height, below the{" "}
-								{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
+						<Flex
+							gap={3}
+							align="flex-start"
+							border="1px solid"
+							borderColor="orange.200"
+							borderLeftWidth="4px"
+							borderRadius="md"
+							bg="orange.50"
+							px={3}
+							py={2.5}
+						>
+							<Text aria-hidden="true" fontSize="md" lineHeight="1.3">
+								⚠️
 							</Text>
-							<Text fontSize="sm" color="orange.700">
-								For genuinely small tissue, review the registration first. If
-								the overlay is correct, choose Force continue to proceed.
-							</Text>
-						</Stack>
+							<Stack spacing={1}>
+								<Text
+									fontSize="sm"
+									fontWeight="semibold"
+									color="orange.600"
+									data-testid="alignment-distribution-warning"
+								>
+									Landmark spread is narrow. Coverage ratios are{" "}
+									{formatPercent(coverage.coverageRatioX)} width and{" "}
+									{formatPercent(coverage.coverageRatioY)} height, below the{" "}
+									{Math.round(ALIGNMENT_COVERAGE_THRESHOLD * 100)}% minimum.
+								</Text>
+								<Text fontSize="sm" color="orange.700">
+									For genuinely small tissue, review the registration first. If
+									the overlay is correct, choose Force continue to proceed.
+								</Text>
+							</Stack>
+						</Flex>
 					) : null}
 					{runtimeError ? (
 						<Flex gap={3} align={{ base: "flex-start", sm: "center" }} wrap="wrap">
@@ -1361,45 +1674,6 @@ export function AlignmentPanel({
 					) : null}
 				</Stack>
 			) : null}
-			<SimpleGrid
-				columns={{ base: 1, lg: 2 }}
-				gap={4}
-				w="100%"
-				minW={0}
-				data-testid="alignment-canvas-grid"
-			>
-				<LandmarkCanvas
-					image={referenceImage}
-					imageKey="source"
-					imageTransform={referenceImageTransform}
-					points={sourcePoints}
-					pendingPoint={pendingSourcePoint}
-					title="Eosin landmarks (reference)"
-					interactionMode={interactionMode}
-					selectedPairId={selectedPairId}
-					onBackgroundPoint={handleBackgroundPoint}
-					onBackgroundFallback={clearLocalInteractionState}
-					onSelectPoint={handleSelectPair}
-					onRepositionPoint={handleRepositionPoint}
-					testIdPrefix="alignment-source"
-				/>
-				<LandmarkCanvas
-					image={movingImage}
-					imageKey="target"
-					imageTransform={alignment.movingImageTransform}
-					points={targetPoints}
-					pendingPoint={null}
-					title="HE landmarks (moving)"
-					interactionMode={interactionMode}
-					selectedPairId={selectedPairId}
-					showImageBoundary={showMovingImagePaddingBoundary}
-					onBackgroundPoint={handleBackgroundPoint}
-					onBackgroundFallback={clearLocalInteractionState}
-					onSelectPoint={handleSelectPair}
-					onRepositionPoint={handleRepositionPoint}
-					testIdPrefix="alignment-target"
-				/>
-			</SimpleGrid>
 			{showDiagnostics ? (
 				<Stack spacing={2} fontSize="sm">
 					<HStack justify="space-between">

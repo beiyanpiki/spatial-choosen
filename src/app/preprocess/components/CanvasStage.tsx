@@ -1,8 +1,9 @@
 'use client';
 
-import { Badge, Box, Button, ButtonGroup, Flex, Heading, HStack, Stack, Text } from '@chakra-ui/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { computeBaseView, getTransform } from '@/lib/canvasViewport';
+import { Badge, Box, Button, ButtonGroup, Flex, Heading, HStack, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Stack, Text } from '@chakra-ui/react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { computeBaseView, computeZoomTransform, getTransform } from '@/lib/canvasViewport';
+import type { Pan } from '@/lib/canvasViewport';
 import {
   clampNormalizedSquareRect,
   LOCALIZATION_BOX_COLOR_SWATCHS,
@@ -78,6 +79,11 @@ type DragState =
     }
   | {
       kind: 'rotate';
+    }
+  | {
+      kind: 'pan';
+      startScreen: ScreenPoint;
+      startPan: Pan;
     };
 
 type RotationOverlay = {
@@ -103,6 +109,33 @@ const clampScale = (scale: number) => Math.min(4, Math.max(0.5, scale));
 const normalizeDegrees = (value: number) => {
   const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
   return Object.is(wrapped, -0) ? 0 : wrapped;
+};
+
+const ZOOM_BUTTON_STEP = 0.1;
+const ZOOM_WHEEL_FACTOR = 1.1;
+const PAN_KEEP_VISIBLE_MARGIN = 48;
+const KEYBOARD_NUDGE_STEP = 0.0025;
+const KEYBOARD_NUDGE_LARGE_STEP = 0.01;
+const KEYBOARD_COMMIT_DELAY_MS = 350;
+const BOX_OUTLINE_HALO_COLOR = 'rgba(0, 0, 0, 0.55)';
+
+const clampPanToKeepImageVisible = (pan: Pan, base: ReturnType<typeof computeBaseView>, scale: number): Pan => {
+  if (!base) return pan;
+
+  const scaledWidth = base.viewWidth * scale;
+  const scaledHeight = base.viewHeight * scale;
+  const margin = Math.min(PAN_KEEP_VISIBLE_MARGIN, scaledWidth / 2, scaledHeight / 2);
+  const freeX = (base.viewWidth - scaledWidth) / 2;
+  const freeY = (base.viewHeight - scaledHeight) / 2;
+  const minPanX = margin - scaledWidth - base.viewX - freeX;
+  const maxPanX = base.rect.width - margin - base.viewX - freeX;
+  const minPanY = margin - scaledHeight - base.viewY - freeY;
+  const maxPanY = base.rect.height - margin - base.viewY - freeY;
+
+  return {
+    x: Math.min(maxPanX, Math.max(minPanX, pan.x)),
+    y: Math.min(maxPanY, Math.max(minPanY, pan.y)),
+  };
 };
 
 const DEFAULT_CANVAS_STAGE_LABELS: CanvasStageLabels = {
@@ -215,7 +248,51 @@ export function CanvasStage({
   const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
   const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize | null>(null);
+  const keyboardCommitTimeoutRef = useRef<number | null>(null);
+  const pendingKeyboardBoundsRef = useRef<PreprocessRect | null>(null);
+  // Latest-ref so the unmount-only cleanup below can flush pending nudges
+  // through the current callback even though its identity changes per render.
+  const onChipBoundsCommitRef = useRef(onChipBoundsCommit);
+  useEffect(() => {
+    onChipBoundsCommitRef.current = onChipBoundsCommit;
+  }, [onChipBoundsCommit]);
   const imageDataUrl = image?.workingDataUrl ?? image?.thumbnailDataUrl ?? image?.dataUrl ?? null;
+
+  // Pan is keyed to the displayed image and reset during render when the image
+  // changes (no effect needed); a stale pan from the previous image would
+  // offset the freshly fitted view.
+  const [panState, setPanState] = useState<{ imageUrl: string | null; value: Pan }>(() => ({
+    imageUrl: imageDataUrl,
+    value: { x: 0, y: 0 },
+  }));
+  const pan = useMemo(
+    () => (panState.imageUrl === imageDataUrl ? panState.value : { x: 0, y: 0 }),
+    [imageDataUrl, panState],
+  );
+  const setPan = useCallback(
+    (next: Pan | ((current: Pan) => Pan)) => {
+      setPanState((current) => {
+        const base = current.imageUrl === imageDataUrl ? current.value : { x: 0, y: 0 };
+        return {
+          imageUrl: imageDataUrl,
+          value: typeof next === 'function' ? next(base) : next,
+        };
+      });
+    },
+    [imageDataUrl],
+  );
+
+  useEffect(() => () => {
+    if (keyboardCommitTimeoutRef.current !== null) {
+      window.clearTimeout(keyboardCommitTimeoutRef.current);
+      keyboardCommitTimeoutRef.current = null;
+    }
+    const pendingBounds = pendingKeyboardBoundsRef.current;
+    pendingKeyboardBoundsRef.current = null;
+    if (pendingBounds) {
+      onChipBoundsCommitRef.current?.(pendingBounds);
+    }
+  }, []);
 
   useEffect(() => {
     if (!imageDataUrl) return;
@@ -272,9 +349,17 @@ export function CanvasStage({
     ? image.width / image.height
     : 1;
 
+  // Clamping during render (instead of in an effect) so a shrinking viewport
+  // can never leave the panned image off-screen between interactions; the
+  // clamp is idempotent for values that are already in range.
+  const effectivePan = useMemo(
+    () => (baseView ? clampPanToKeepImageVisible(pan, baseView, imageTransform.scale) : pan),
+    [baseView, imageTransform.scale, pan],
+  );
+
   const displayTransform = useMemo(
-    () => getTransform(baseView, imageTransform.scale, { x: 0, y: 0 }),
-    [baseView, imageTransform.scale],
+    () => getTransform(baseView, imageTransform.scale, effectivePan),
+    [baseView, imageTransform.scale, effectivePan],
   );
 
   const normalizedChipBounds = useMemo(
@@ -286,6 +371,75 @@ export function CanvasStage({
     },
     [allowOutOfBoundsChipBounds, chipBounds, imageAspectRatio],
   );
+
+  const zoomStageTo = useCallback((nextScale: number, anchorNorm?: PreprocessPoint, anchorScreen?: ScreenPoint) => {
+    const result = computeZoomTransform(baseView, nextScale, anchorNorm, anchorScreen);
+    if (!result) return;
+    setPan(clampPanToKeepImageVisible(result.pan, baseView, result.zoom));
+  }, [baseView, setPan]);
+
+  const resetStageView = useCallback(() => {
+    setPan({ x: 0, y: 0 });
+    onResetTransform();
+  }, [onResetTransform, setPan]);
+
+  const scheduleKeyboardCommit = useCallback((bounds: PreprocessRect) => {
+    pendingKeyboardBoundsRef.current = bounds;
+    if (keyboardCommitTimeoutRef.current !== null) {
+      window.clearTimeout(keyboardCommitTimeoutRef.current);
+    }
+    keyboardCommitTimeoutRef.current = window.setTimeout(() => {
+      keyboardCommitTimeoutRef.current = null;
+      const pendingBounds = pendingKeyboardBoundsRef.current;
+      pendingKeyboardBoundsRef.current = null;
+      if (pendingBounds) {
+        onChipBoundsCommit?.(pendingBounds);
+      }
+    }, KEYBOARD_COMMIT_DELAY_MS);
+  }, [onChipBoundsCommit]);
+
+  const handleStageKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault();
+      const nextScale = clampScale(imageTransform.scale + ZOOM_BUTTON_STEP);
+      zoomStageTo(nextScale);
+      onScaleChange(nextScale);
+      return;
+    }
+
+    if (event.key === '-' || event.key === '_') {
+      event.preventDefault();
+      const nextScale = clampScale(imageTransform.scale - ZOOM_BUTTON_STEP);
+      zoomStageTo(nextScale);
+      onScaleChange(nextScale);
+      return;
+    }
+
+    if (event.key === '0') {
+      event.preventDefault();
+      resetStageView();
+      return;
+    }
+
+    const nudgeStep = event.shiftKey ? KEYBOARD_NUDGE_LARGE_STEP : KEYBOARD_NUDGE_STEP;
+    const nudgeDelta = {
+      ArrowUp: { x: 0, y: -nudgeStep },
+      ArrowDown: { x: 0, y: nudgeStep },
+      ArrowLeft: { x: -nudgeStep, y: 0 },
+      ArrowRight: { x: nudgeStep, y: 0 },
+    }[event.key];
+    if (!nudgeDelta || !normalizedChipBounds) return;
+
+    event.preventDefault();
+    const nextBounds = translateChipBounds(
+      normalizedChipBounds,
+      nudgeDelta,
+      imageAspectRatio,
+      { clampToImage: !allowOutOfBoundsChipBounds },
+    );
+    onChipBoundsChange(nextBounds);
+    scheduleKeyboardCommit(nextBounds);
+  };
 
   const rotationOverlay = useMemo<RotationOverlay | null>(() => {
     if (!displayTransform) return null;
@@ -370,6 +524,20 @@ export function CanvasStage({
     if (!dragState) return;
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (dragState.kind === 'pan') {
+        const relativePoint = getRelativePoint(event.clientX, event.clientY);
+        if (!relativePoint) return;
+        setPan(clampPanToKeepImageVisible(
+          {
+            x: dragState.startPan.x + (relativePoint.x - dragState.startScreen.x),
+            y: dragState.startPan.y + (relativePoint.y - dragState.startScreen.y),
+          },
+          baseView,
+          imageTransform.scale,
+        ));
+        return;
+      }
+
       if (dragState.kind === 'rotate') {
         if (!rotationOverlay) return;
         const relativePoint = getRelativePoint(event.clientX, event.clientY);
@@ -434,7 +602,7 @@ export function CanvasStage({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
     };
-  }, [allowOutOfBoundsChipBounds, dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, onChipBoundsCancel, onChipBoundsChange, onChipBoundsCommit, onRotationChange, rotationOverlay]);
+  }, [allowOutOfBoundsChipBounds, baseView, dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, imageTransform.scale, onChipBoundsCancel, onChipBoundsChange, onChipBoundsCommit, onRotationChange, rotationOverlay, setPan]);
 
   useEffect(() => {
     const host = hostElement;
@@ -442,14 +610,20 @@ export function CanvasStage({
 
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
-      onScaleChange(clampScale(imageTransform.scale + (event.deltaY > 0 ? -0.01 : 0.01)));
+      const anchorScreen = getRelativePoint(event.clientX, event.clientY);
+      if (!anchorScreen) return;
+      const anchorNorm = projectScreenPointToCanvas(anchorScreen, displayTransform) ?? undefined;
+      const factor = event.deltaY > 0 ? 1 / ZOOM_WHEEL_FACTOR : ZOOM_WHEEL_FACTOR;
+      const nextScale = clampScale(imageTransform.scale * factor);
+      zoomStageTo(nextScale, anchorNorm, anchorScreen);
+      onScaleChange(nextScale);
     };
 
     host.addEventListener('wheel', handleWheel, { passive: false });
     return () => {
       host.removeEventListener('wheel', handleWheel);
     };
-  }, [hostElement, image, imageTransform.scale, onScaleChange]);
+  }, [displayTransform, getRelativePoint, hostElement, image, imageTransform.scale, onScaleChange, zoomStageTo]);
 
   const projectOverlayPointToScreen = useCallback((point: PreprocessPoint) => (
     projectCanvasPointToScreen(point, displayTransform)
@@ -538,6 +712,11 @@ export function CanvasStage({
               }}
               position='absolute'
               inset={0}
+              tabIndex={0}
+              outline='none'
+              _focusVisible={{ boxShadow: `inset 0 0 0 2px rgba(47, 150, 249, 0.7)` }}
+              onKeyDown={handleStageKeyDown}
+              data-testid={buildTestId(controlTestIdPrefix, 'canvas-host')}
             >
               <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
               {viewportSize && overlay ? (
@@ -547,13 +726,34 @@ export function CanvasStage({
                   viewBox={`0 0 ${viewportSize.width} ${viewportSize.height}`}
                   role='img'
                   aria-label={copy.overlayAriaLabel}
-                  style={{ position: 'absolute', inset: 0, touchAction: 'none' }}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    touchAction: 'none',
+                    cursor: dragState?.kind === 'pan' ? 'grabbing' : 'grab',
+                  }}
+                  onPointerDown={(event) => {
+                    const relativePoint = getRelativePoint(event.clientX, event.clientY);
+                    if (!relativePoint) return;
+                    event.preventDefault();
+                    setDragState({ kind: 'pan', startScreen: relativePoint, startPan: effectivePan });
+                  }}
                 >
                   <polygon
                     points={overlay.polygonPoints.map((point) => `${point.x},${point.y}`).join(' ')}
                     fill='none'
+                    stroke={BOX_OUTLINE_HALO_COLOR}
+                    strokeWidth={3.5}
+                    strokeLinejoin='round'
+                    data-testid={buildTestId(controlTestIdPrefix, 'box-outline-halo')}
+                    pointerEvents='none'
+                  />
+                  <polygon
+                    points={overlay.polygonPoints.map((point) => `${point.x},${point.y}`).join(' ')}
+                    fill={swatch.fill}
                     stroke={swatch.stroke}
-                    strokeWidth={1}
+                    strokeWidth={1.5}
+                    strokeLinejoin='round'
                     data-testid={buildTestId(controlTestIdPrefix, 'box-outline')}
                     pointerEvents='none'
                   />
@@ -569,6 +769,7 @@ export function CanvasStage({
                       const point = getOverlayImagePoint(event.clientX, event.clientY);
                       if (!point) return;
                       event.preventDefault();
+                      event.stopPropagation();
                       dragDidMoveRef.current = false;
                       dragLatestBoundsRef.current = null;
                       setDragState({ kind: 'move', startPoint: point, startRect: normalizedChipBounds });
@@ -582,6 +783,7 @@ export function CanvasStage({
                     strokeLinecap='round'
                     strokeLinejoin='round'
                     data-testid={buildTestId(controlTestIdPrefix, 'box-lower-left-marker')}
+                    pointerEvents='none'
                   />
                   <text
                     x={overlay.labelPoint.x + 8}
@@ -594,6 +796,19 @@ export function CanvasStage({
                   >
                     LL
                   </text>
+                  {ALL_HANDLE_ORDER.map((handle) => (
+                    <circle
+                      key={`visual-${handle}`}
+                      cx={overlay.handlePoints[handle].x}
+                      cy={overlay.handlePoints[handle].y}
+                      r={4.5}
+                      fill='white'
+                      stroke={swatch.stroke}
+                      strokeWidth={1.5}
+                      pointerEvents='none'
+                      data-testid={buildTestId(controlTestIdPrefix, `box-handle-visual-${handle}`)}
+                    />
+                  ))}
                   {ALL_HANDLE_ORDER.map((handle) => (
                     <circle
                       key={handle}
@@ -657,6 +872,39 @@ export function CanvasStage({
                   />
                 </svg>
               ) : null}
+              {viewportSize && overlay && normalizedChipBounds && image?.width && image?.height && (dragState?.kind === 'move' || dragState?.kind === 'resize') ? (
+                <Box
+                  position='absolute'
+                  left={overlay.handlePoints.n.x}
+                  top={overlay.handlePoints.n.y}
+                  transform='translate(-50%, -150%)'
+                  bg='blackAlpha.800'
+                  color='white'
+                  px={2}
+                  py={1}
+                  borderRadius='md'
+                  fontSize='xs'
+                  fontWeight='semibold'
+                  whiteSpace='nowrap'
+                  pointerEvents='none'
+                  data-testid={buildTestId(controlTestIdPrefix, 'box-size-readout')}
+                >
+                  {`${Math.round(normalizedChipBounds.width * image.width)} × ${Math.round(normalizedChipBounds.height * image.height)} px`}
+                </Box>
+              ) : null}
+            </Box>
+            <Box
+              position='absolute'
+              top={4}
+              left={4}
+              bg='blackAlpha.700'
+              color='whiteAlpha.800'
+              px={3}
+              py={2}
+              borderRadius='lg'
+              data-testid={buildTestId(controlTestIdPrefix, 'stage-hints')}
+            >
+              <Text fontSize='xs'>Scroll to zoom · Drag canvas to pan · Drag box to move · Arrow keys to fine-tune</Text>
             </Box>
             <Box
               position='absolute'
@@ -684,7 +932,10 @@ export function CanvasStage({
                     <Button
                       aria-label='Zoom out'
                       data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-out')}
-                      onClick={() => onScaleDelta(-0.01)}
+                      onClick={() => {
+                        zoomStageTo(clampScale(imageTransform.scale - ZOOM_BUTTON_STEP));
+                        onScaleDelta(-ZOOM_BUTTON_STEP);
+                      }}
                       flex={1}
                       color='white'
                       borderColor='whiteAlpha.400'
@@ -695,7 +946,10 @@ export function CanvasStage({
                     <Button
                       aria-label='Zoom in'
                       data-testid={buildTestId(controlTestIdPrefix, 'stage-zoom-in')}
-                      onClick={() => onScaleDelta(0.01)}
+                      onClick={() => {
+                        zoomStageTo(clampScale(imageTransform.scale + ZOOM_BUTTON_STEP));
+                        onScaleDelta(ZOOM_BUTTON_STEP);
+                      }}
                       flex={1}
                       color='white'
                       borderColor='whiteAlpha.400'
@@ -770,6 +1024,22 @@ export function CanvasStage({
                       </HStack>
                     </Button>
                   </ButtonGroup>
+                  <Slider
+                    aria-label='Fine rotation'
+                    data-testid={buildTestId(controlTestIdPrefix, 'stage-rotation-slider')}
+                    min={-180}
+                    max={180}
+                    step={0.1}
+                    value={imageTransform.rotationDegrees}
+                    onChange={(value) => onRotationChange(value)}
+                    focusThumbOnChange={false}
+                    colorScheme='brand'
+                  >
+                    <SliderTrack bg='whiteAlpha.300'>
+                      <SliderFilledTrack bg='brand.400' />
+                    </SliderTrack>
+                    <SliderThumb bg='white' boxSize={3.5} />
+                  </Slider>
                 </Stack>
                 <Stack spacing={2} data-testid={buildTestId(controlTestIdPrefix, 'stage-section-flip')}>
                   <Text fontSize='xs' textTransform='uppercase' letterSpacing='0.12em' color='whiteAlpha.700'>Flip</Text>
@@ -812,7 +1082,7 @@ export function CanvasStage({
                     variant='outline'
                     w='100%'
                     data-testid={buildTestId(controlTestIdPrefix, 'stage-reset')}
-                    onClick={onResetTransform}
+                    onClick={resetStageView}
                     color='white'
                     borderColor='whiteAlpha.400'
                     _hover={{ bg: 'whiteAlpha.200' }}

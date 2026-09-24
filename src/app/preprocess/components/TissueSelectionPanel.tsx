@@ -13,7 +13,6 @@ import {
 } from '@chakra-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { colorForLabel } from '../../../lib/colors';
 import {
   computeBaseView,
   computeZoomTransform,
@@ -21,16 +20,22 @@ import {
   relativeToImage,
 } from '../../../lib/canvasViewport';
 import type { Point } from '@/types/project';
-import type { PreprocessPoint, ProjectedSpot } from '@/types/preprocess';
+import type { PreprocessPoint, ProjectedSpot, TissueSpotStyle } from '@/types/preprocess';
+import { DEFAULT_TISSUE_SPOT_STYLE } from '../../../lib/preprocess/tissueSpotStyle';
 
 export type ToolMode = 'activate' | 'deactivate';
 
 const CLICK_MOVEMENT_THRESHOLD_PX = 4;
+const ZOOM_WHEEL_FACTOR = 1.1;
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
 
 type TissueSelectionPanelProps = {
   eosinCropDataUrl: string | null;
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
+  spotStyle?: TissueSpotStyle;
   showSpots?: boolean;
   disabled?: boolean;
   showControls?: boolean;
@@ -44,6 +49,7 @@ export function TissueSelectionPanel({
   eosinCropDataUrl,
   projectedSpots,
   selectedSpotIds,
+  spotStyle,
   showSpots = true,
   disabled = false,
   showControls = true,
@@ -56,7 +62,8 @@ export function TissueSelectionPanel({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDrawing, setIsDrawing] = useState(false);
-  const [, setIsPanning] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [canvasRefresh, setCanvasRefresh] = useState(0);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
 
@@ -70,7 +77,60 @@ export function TissueSelectionPanel({
   const pointerMovedRef = useRef(false);
   const drawingActiveRef = useRef(false);
   const panningActiveRef = useRef(false);
+  const spacePressedRef = useRef(false);
   const [hostRect, setHostRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    // Hold Space and drag to pan (in addition to the middle mouse button).
+    // Listened on window so the modifier works even when the pointer is
+    // already down on the canvas, but only activated for keys that originate
+    // from the stage (or the page body): swallowing Space anywhere else would
+    // break keyboard scrolling and other page shortcuts. keyup/blur stay
+    // unscoped so the pressed state always clears.
+    const isEditableTarget = (target: EventTarget | null) =>
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT'
+        || target.isContentEditable
+        || target.tagName === 'BUTTON');
+
+    const isStageTarget = (target: EventTarget | null) =>
+      target === document.body
+      || (target instanceof Node && hostRef.current?.contains(target) === true);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || event.repeat || isEditableTarget(event.target)) {
+        return;
+      }
+      if (!isStageTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      spacePressedRef.current = true;
+      setIsSpacePressed(true);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return;
+      spacePressedRef.current = false;
+      setIsSpacePressed(false);
+    };
+
+    const handleBlur = () => {
+      spacePressedRef.current = false;
+      setIsSpacePressed(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
 
   const requestCanvasRefresh = useCallback(() => {
     if (canvasRefreshFrameRef.current !== null) {
@@ -149,7 +209,6 @@ export function TissueSelectionPanel({
   }, [eosinCropDataUrl, imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
-  const assignedSpotFillColor = useMemo(() => `${colorForLabel(1)}40`, []);
   const neutralSpotFillColor = '#e5e5e520';
 
   const computeBaseViewCb = useCallback(
@@ -224,9 +283,10 @@ export function TissueSelectionPanel({
       }
 
       const isMiddleButton = event.button === 1;
+      const isSpacePan = event.button === 0 && spacePressedRef.current;
       event.currentTarget.setPointerCapture(event.pointerId);
 
-      if (isMiddleButton) {
+      if (isMiddleButton || isSpacePan) {
         event.preventDefault();
         panStartRef.current = { x: event.clientX, y: event.clientY };
         panningActiveRef.current = true;
@@ -370,6 +430,18 @@ export function TissueSelectionPanel({
     [computeBaseViewCb],
   );
 
+  const zoomByFactor = useCallback(
+    (factor: number) => {
+      applyZoom(zoom * factor);
+    },
+    [applyZoom, zoom],
+  );
+
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
   const handleWheel = useCallback(
     (event: React.WheelEvent<HTMLCanvasElement>) => {
       if (disabled) {
@@ -387,16 +459,28 @@ export function TissueSelectionPanel({
         x: event.clientX - currentHostRect.left,
         y: event.clientY - currentHostRect.top,
       };
-      const anchorNorm = relativeToImageCb(anchorScreen);
+      const rawAnchor = relativeToImageCb(anchorScreen);
+      // A cursor slightly outside the image still zooms — clamp the anchor to
+      // the image edge instead of rejecting the gesture.
+      const anchorNorm = rawAnchor ?? (() => {
+        const transform = getTransformCb();
+        if (!transform) {
+          return null;
+        }
+        return {
+          x: clamp((anchorScreen.x - transform.originX) / transform.width, 0, 1),
+          y: clamp((anchorScreen.y - transform.originY) / transform.height, 0, 1),
+        };
+      })();
       if (!anchorNorm) {
         return;
       }
 
       event.preventDefault();
-      const delta = event.deltaY > 0 ? 0.9 : 1.1;
+      const delta = event.deltaY > 0 ? 1 / ZOOM_WHEEL_FACTOR : ZOOM_WHEEL_FACTOR;
       applyZoom(zoom * delta, anchorNorm, anchorScreen);
     },
-    [applyZoom, disabled, getLiveHostRect, relativeToImageCb, resetInteractionState, zoom],
+    [applyZoom, disabled, getLiveHostRect, getTransformCb, relativeToImageCb, resetInteractionState, zoom],
   );
 
   useEffect(() => {
@@ -440,8 +524,15 @@ export function TissueSelectionPanel({
         const spotX = transform.originX + spot.x * transform.width - spotWidth / 2;
         const spotY = transform.originY + spot.y * transform.height - spotHeight / 2;
         const selected = selectedSpotIdSet.has(spot.id);
-        ctx.fillStyle = selected ? assignedSpotFillColor : neutralSpotFillColor;
+        if (selected) {
+          const style = spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE;
+          ctx.globalAlpha = clamp(style.opacity, 0, 1);
+          ctx.fillStyle = style.color;
+        } else {
+          ctx.fillStyle = neutralSpotFillColor;
+        }
         ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -466,7 +557,6 @@ export function TissueSelectionPanel({
     }
   }, [
     activeTool,
-    assignedSpotFillColor,
     canvasRefresh,
     getTransformCb,
     hostRect,
@@ -474,6 +564,7 @@ export function TissueSelectionPanel({
     projectedSpots,
     selectedSpotIdSet,
     showSpots,
+    spotStyle,
   ]);
 
   return (
@@ -512,9 +603,78 @@ export function TissueSelectionPanel({
             opacity={disabled ? 0.8 : 1}
             data-testid='tissue-stage-canvas'
           >
+            <HStack
+              position='absolute'
+              top={3}
+              right={3}
+              zIndex={1}
+              spacing={1}
+              bg='blackAlpha.700'
+              borderRadius='lg'
+              px={1.5}
+              py={1}
+              backdropFilter='blur(8px)'
+              data-testid='tissue-zoom-controls'
+            >
+              <Button
+                size='xs'
+                variant='ghost'
+                color='white'
+                _hover={{ bg: 'whiteAlpha.300' }}
+                aria-label='Zoom out tissue canvas'
+                isDisabled={disabled}
+                onClick={() => zoomByFactor(1 / ZOOM_WHEEL_FACTOR)}
+                data-testid='tissue-zoom-out'
+              >
+                −
+              </Button>
+              <Text
+                fontSize='xs'
+                color='whiteAlpha.950'
+                fontWeight='semibold'
+                minW='44px'
+                textAlign='center'
+                data-testid='tissue-zoom-value'
+              >
+                {Math.round(zoom * 100)}%
+              </Text>
+              <Button
+                size='xs'
+                variant='ghost'
+                color='white'
+                _hover={{ bg: 'whiteAlpha.300' }}
+                aria-label='Zoom in tissue canvas'
+                isDisabled={disabled}
+                onClick={() => zoomByFactor(ZOOM_WHEEL_FACTOR)}
+                data-testid='tissue-zoom-in'
+              >
+                +
+              </Button>
+              <Button
+                size='xs'
+                variant='ghost'
+                color='white'
+                _hover={{ bg: 'whiteAlpha.300' }}
+                aria-label='Reset tissue canvas view'
+                isDisabled={disabled}
+                onClick={resetView}
+                data-testid='tissue-zoom-reset'
+              >
+                Fit
+              </Button>
+            </HStack>
             <canvas
               ref={canvasRef}
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', touchAction: 'none', pointerEvents: 'auto' }}
+              style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', touchAction: 'none', pointerEvents: 'auto',
+                cursor: disabled
+                  ? 'default'
+                  : isPanning
+                    ? 'grabbing'
+                    : isSpacePressed
+                      ? 'grab'
+                      : 'crosshair',
+              }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}

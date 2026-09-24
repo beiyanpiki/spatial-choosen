@@ -100,8 +100,8 @@ vi.mock('./StepSidebar', () => ({
   StepSidebar: () => null,
 }));
 
-vi.mock('./TissueSelectionControls', () => ({
-  TissueSelectionControls: () => null,
+vi.mock('./TissueControlPanel', () => ({
+  TissueControlPanel: () => null,
 }));
 
 vi.mock('./TissueSelectionPanel', () => ({
