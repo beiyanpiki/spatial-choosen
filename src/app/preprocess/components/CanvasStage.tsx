@@ -248,14 +248,39 @@ export function CanvasStage({
   const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
   const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize | null>(null);
-  const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const keyboardCommitTimeoutRef = useRef<number | null>(null);
   const pendingKeyboardBoundsRef = useRef<PreprocessRect | null>(null);
   // Latest-ref so the unmount-only cleanup below can flush pending nudges
   // through the current callback even though its identity changes per render.
   const onChipBoundsCommitRef = useRef(onChipBoundsCommit);
-  onChipBoundsCommitRef.current = onChipBoundsCommit;
+  useEffect(() => {
+    onChipBoundsCommitRef.current = onChipBoundsCommit;
+  }, [onChipBoundsCommit]);
   const imageDataUrl = image?.workingDataUrl ?? image?.thumbnailDataUrl ?? image?.dataUrl ?? null;
+
+  // Pan is keyed to the displayed image and reset during render when the image
+  // changes (no effect needed); a stale pan from the previous image would
+  // offset the freshly fitted view.
+  const [panState, setPanState] = useState<{ imageUrl: string | null; value: Pan }>(() => ({
+    imageUrl: imageDataUrl,
+    value: { x: 0, y: 0 },
+  }));
+  const pan = useMemo(
+    () => (panState.imageUrl === imageDataUrl ? panState.value : { x: 0, y: 0 }),
+    [imageDataUrl, panState],
+  );
+  const setPan = useCallback(
+    (next: Pan | ((current: Pan) => Pan)) => {
+      setPanState((current) => {
+        const base = current.imageUrl === imageDataUrl ? current.value : { x: 0, y: 0 };
+        return {
+          imageUrl: imageDataUrl,
+          value: typeof next === 'function' ? next(base) : next,
+        };
+      });
+    },
+    [imageDataUrl],
+  );
 
   useEffect(() => () => {
     if (keyboardCommitTimeoutRef.current !== null) {
@@ -324,9 +349,17 @@ export function CanvasStage({
     ? image.width / image.height
     : 1;
 
-  const displayTransform = useMemo(
-    () => getTransform(baseView, imageTransform.scale, pan),
+  // Clamping during render (instead of in an effect) so a shrinking viewport
+  // can never leave the panned image off-screen between interactions; the
+  // clamp is idempotent for values that are already in range.
+  const effectivePan = useMemo(
+    () => (baseView ? clampPanToKeepImageVisible(pan, baseView, imageTransform.scale) : pan),
     [baseView, imageTransform.scale, pan],
+  );
+
+  const displayTransform = useMemo(
+    () => getTransform(baseView, imageTransform.scale, effectivePan),
+    [baseView, imageTransform.scale, effectivePan],
   );
 
   const normalizedChipBounds = useMemo(
@@ -343,12 +376,12 @@ export function CanvasStage({
     const result = computeZoomTransform(baseView, nextScale, anchorNorm, anchorScreen);
     if (!result) return;
     setPan(clampPanToKeepImageVisible(result.pan, baseView, result.zoom));
-  }, [baseView]);
+  }, [baseView, setPan]);
 
   const resetStageView = useCallback(() => {
     setPan({ x: 0, y: 0 });
     onResetTransform();
-  }, [onResetTransform]);
+  }, [onResetTransform, setPan]);
 
   const scheduleKeyboardCommit = useCallback((bounds: PreprocessRect) => {
     pendingKeyboardBoundsRef.current = bounds;
@@ -569,7 +602,7 @@ export function CanvasStage({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
     };
-  }, [allowOutOfBoundsChipBounds, baseView, dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, imageTransform.scale, onChipBoundsCancel, onChipBoundsChange, onChipBoundsCommit, onRotationChange, rotationOverlay]);
+  }, [allowOutOfBoundsChipBounds, baseView, dragState, getInteractionImagePoint, getRelativePoint, imageAspectRatio, imageTransform.scale, onChipBoundsCancel, onChipBoundsChange, onChipBoundsCommit, onRotationChange, rotationOverlay, setPan]);
 
   useEffect(() => {
     const host = hostElement;
@@ -703,7 +736,7 @@ export function CanvasStage({
                     const relativePoint = getRelativePoint(event.clientX, event.clientY);
                     if (!relativePoint) return;
                     event.preventDefault();
-                    setDragState({ kind: 'pan', startScreen: relativePoint, startPan: pan });
+                    setDragState({ kind: 'pan', startScreen: relativePoint, startPan: effectivePan });
                   }}
                 >
                   <polygon
