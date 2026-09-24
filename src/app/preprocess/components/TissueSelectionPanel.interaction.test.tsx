@@ -1,5 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { theme } from '../../../theme';
@@ -196,5 +196,73 @@ describe('TissueSelectionPanel pointer interaction', () => {
 
 		expect(onEditCommit).toHaveBeenCalledTimes(1);
 		expect(onSpotToggle).not.toHaveBeenCalled();
+	});
+
+	it('exposes zoom controls that update the visible zoom value', () => {
+		const onEditCommit = vi.fn();
+		const onSpotToggle = vi.fn();
+		renderPanel({ onEditCommit, onSpotToggle });
+
+		const zoomValue = screen.getByTestId('tissue-zoom-value');
+		expect(zoomValue).toHaveTextContent('100%');
+
+		fireEvent.click(screen.getByTestId('tissue-zoom-in'));
+		expect(zoomValue).toHaveTextContent('110%');
+
+		fireEvent.click(screen.getByTestId('tissue-zoom-reset'));
+		expect(zoomValue).toHaveTextContent('100%');
+	});
+
+	it('lets space+drag pan without toggling spots or committing a lasso', () => {
+		const onEditCommit = vi.fn();
+		const onSpotToggle = vi.fn();
+		renderPanel({ onEditCommit, onSpotToggle });
+
+		const canvas = screen.getByTestId('tissue-stage-canvas').querySelector('canvas');
+		if (!(canvas instanceof HTMLCanvasElement)) return;
+
+		fireEvent.keyDown(canvas, { code: 'Space' });
+		fireEvent.pointerDown(canvas, { button: 0, clientX: 125, clientY: 75, pointerId: 1 });
+		fireEvent.pointerMove(canvas, { button: 0, clientX: 225, clientY: 75, pointerId: 1 });
+		fireEvent.pointerUp(canvas, { button: 0, clientX: 225, clientY: 75, pointerId: 1 });
+		fireEvent.keyUp(canvas, { code: 'Space' });
+
+		expect(onSpotToggle).not.toHaveBeenCalled();
+		expect(onEditCommit).not.toHaveBeenCalled();
+	});
+
+	it('activates the space shortcut from the stage but not from elsewhere on the page', () => {
+		renderPanel({});
+
+		const canvas = screen.getByTestId('tissue-stage-canvas').querySelector('canvas');
+		if (!(canvas instanceof HTMLCanvasElement)) return;
+
+		const stageEvent = createEvent.keyDown(canvas, { code: 'Space' });
+		fireEvent(canvas, stageEvent);
+		expect(stageEvent.defaultPrevented).toBe(true);
+
+		const outside = document.createElement('div');
+		document.body.appendChild(outside);
+		try {
+			const outsideEvent = createEvent.keyDown(outside, { code: 'Space' });
+			fireEvent(outside, outsideEvent);
+			expect(outsideEvent.defaultPrevented).toBe(false);
+		} finally {
+			outside.remove();
+		}
+	});
+
+	it('zooms with the wheel even when the cursor is outside the image', () => {
+		const onEditCommit = vi.fn();
+		const onSpotToggle = vi.fn();
+		renderPanel({ onEditCommit, onSpotToggle });
+
+		const canvas = screen.getByTestId('tissue-stage-canvas').querySelector('canvas');
+		if (!(canvas instanceof HTMLCanvasElement)) return;
+
+		// Host is 400x300 and the fitted image spans x 50..350 — x=20 is off-image.
+		fireEvent.wheel(canvas, { clientX: 20, clientY: 150, deltaY: -100 });
+
+		expect(screen.getByTestId('tissue-zoom-value')).toHaveTextContent('110%');
 	});
 });

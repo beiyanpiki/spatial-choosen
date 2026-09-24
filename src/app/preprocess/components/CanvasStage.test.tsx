@@ -805,4 +805,225 @@ describe('CanvasStage', () => {
 		expect(onChipBoundsCancelSpy).toHaveBeenCalledTimes(1);
 		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
 	});
+
+	it('renders visible resize handles and a contrast halo for the capture box', async () => {
+		render(<StageHarness />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		for (const handle of ['nw', 'ne', 'se', 'sw', 'n', 'e', 's', 'w']) {
+			expect(screen.getByTestId(`localize-box-handle-visual-${handle}`)).toBeInTheDocument();
+		}
+		expect(screen.getByTestId('localize-box-outline-halo')).toBeInTheDocument();
+		expect(screen.getByTestId('localize-box-outline')).toHaveAttribute('fill', 'rgba(0, 255, 0, 0.14)');
+	});
+
+	it('anchors wheel zoom at the cursor position and reports the new scale', async () => {
+		render(<StageHarness />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const host = screen.getByTestId('localize-canvas-host');
+		await act(async () => {
+			dispatchPointerEvent(host, 'wheel', {
+				clientX: 0,
+				clientY: 0,
+				deltaY: -120,
+			} as unknown as { buttons?: number; clientX: number; clientY: number; pointerId?: number });
+		});
+
+		expect(readTransform().scale).toBeCloseTo(1.1, 6);
+		expectPointPairsCloseTo(readOutlinePoints(), [
+			[176, 132],
+			[352, 132],
+			[352, 308],
+			[176, 308],
+		]);
+	});
+
+	it('pans the canvas when dragging the background without moving the capture box', async () => {
+		render(<StageHarness />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const overlay = screen.getByRole('img', { name: 'Chip capture area overlay' });
+		await act(async () => {
+			dispatchPointerEvent(overlay, 'pointerdown', {
+				buttons: 1,
+				clientX: 100,
+				clientY: 100,
+				pointerId: 1,
+			});
+		});
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: 150,
+				clientY: 120,
+				pointerId: 1,
+			});
+			dispatchPointerEvent(window, 'pointerup', {
+				clientX: 150,
+				clientY: 120,
+				pointerId: 1,
+			});
+		});
+
+		expect(readChipBounds()).toEqual(createChipBounds());
+		expectPointPairsCloseTo(readOutlinePoints(), [
+			[210, 140],
+			[370, 140],
+			[370, 300],
+			[210, 300],
+		]);
+	});
+
+	it('returns the canvas to the resting view when the reset control is used after panning', async () => {
+		render(<StageHarness />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const overlay = screen.getByRole('img', { name: 'Chip capture area overlay' });
+		await act(async () => {
+			dispatchPointerEvent(overlay, 'pointerdown', {
+				buttons: 1,
+				clientX: 100,
+				clientY: 100,
+				pointerId: 1,
+			});
+		});
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointermove', {
+				buttons: 1,
+				clientX: 150,
+				clientY: 120,
+				pointerId: 1,
+			});
+			dispatchPointerEvent(window, 'pointerup', {
+				clientX: 150,
+				clientY: 120,
+				pointerId: 1,
+			});
+		});
+
+		await act(async () => {
+			fireEvent.click(screen.getByTestId('localize-stage-reset'));
+		});
+
+		expectPointPairsCloseTo(readOutlinePoints(), [
+			[160, 120],
+			[320, 120],
+			[320, 280],
+			[160, 280],
+		]);
+	});
+
+	it('shows a live source-pixel size readout while dragging the capture box', async () => {
+		render(<StageHarness />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		expect(screen.queryByTestId('localize-box-size-readout')).not.toBeInTheDocument();
+
+		const body = screen.getByTestId('localize-box-body');
+		await act(async () => {
+			dispatchPointerEvent(body, 'pointerdown', {
+				buttons: 1,
+				clientX: 240,
+				clientY: 266,
+				pointerId: 1,
+			});
+		});
+
+		expect(screen.getByTestId('localize-box-size-readout')).toHaveTextContent('80 × 80 px');
+
+		await act(async () => {
+			dispatchPointerEvent(window, 'pointerup', {
+				clientX: 240,
+				clientY: 266,
+				pointerId: 1,
+			});
+		});
+
+		expect(screen.queryByTestId('localize-box-size-readout')).not.toBeInTheDocument();
+	});
+
+	it('nudges the capture box with arrow keys and commits after the debounce window', async () => {
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
+
+		render(
+			<StageCommitHarness
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const host = screen.getByTestId('localize-canvas-host');
+		await act(async () => {
+			fireEvent.keyDown(host, { key: 'ArrowRight' });
+		});
+
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const expectedNudge = translateChipBounds(
+			initialRect,
+			{ x: 0.0025, y: 0 },
+			IMAGE_ASPECT_RATIO,
+		);
+		expectRectCallCloseTo(onChipBoundsChangeSpy.mock.calls, 0, expectedNudge);
+		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
+
+		await waitFor(() => {
+			expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
+		});
+		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedNudge);
+	});
+
+	it('flushes a pending keyboard nudge on unmount instead of dropping it', async () => {
+		const onChipBoundsChangeSpy = vi.fn<(bounds: PreprocessRect) => void>();
+		const onChipBoundsCommitSpy = vi.fn<(bounds: PreprocessRect) => void>();
+
+		const { unmount } = render(
+			<StageCommitHarness
+				onChipBoundsChangeSpy={onChipBoundsChangeSpy}
+				onChipBoundsCommitSpy={onChipBoundsCommitSpy}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('localize-box-outline')).toBeInTheDocument();
+		});
+
+		const host = screen.getByTestId('localize-canvas-host');
+		await act(async () => {
+			fireEvent.keyDown(host, { key: 'ArrowRight' });
+		});
+
+		const initialRect = clampNormalizedSquareRect(createChipBounds(), IMAGE_ASPECT_RATIO);
+		const expectedNudge = translateChipBounds(
+			initialRect,
+			{ x: 0.0025, y: 0 },
+			IMAGE_ASPECT_RATIO,
+		);
+		expect(onChipBoundsCommitSpy).not.toHaveBeenCalled();
+
+		unmount();
+
+		expect(onChipBoundsCommitSpy).toHaveBeenCalledTimes(1);
+		expectRectCallCloseTo(onChipBoundsCommitSpy.mock.calls, 0, expectedNudge);
+	});
 });
