@@ -28,9 +28,9 @@ type TissueControlPanelProps = {
   // Detection feedback (rendered inside the automatic detection section)
   detectionWarning: string | null;
   detectionStatus: string;
-	// Chip configuration
-	chipType: string | null;
-	chipOptions: readonly string[];
+  // Chip configuration
+  chipType: string | null;
+  chipOptions: readonly string[];
   isChipSelectorDisabled: boolean;
   onChipTypeChange: (chipId: string) => void;
   chipBlockedReason: string | null;

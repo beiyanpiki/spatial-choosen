@@ -443,15 +443,15 @@ function LandmarkCanvas({
 					</Text>
 				</HStack>
 				<Badge
-						colorScheme="brand"
-						borderRadius="full"
-						px={2}
-						py={0.5}
-						visibility={isActive ? "visible" : "hidden"}
-						data-testid={`${testIdPrefix}-active-badge`}
-					>
-						Place point here
-					</Badge>
+					colorScheme="brand"
+					borderRadius="full"
+					px={2}
+					py={0.5}
+					visibility={isActive ? "visible" : "hidden"}
+					data-testid={`${testIdPrefix}-active-badge`}
+				>
+					Place point here
+				</Badge>
 			</Flex>
 			<Box
 				border="1px solid"
@@ -1256,7 +1256,7 @@ export function AlignmentPanel({
 							Landmark Pairs: {alignment.controlPoints.length} /{" "}
 							{ALIGNMENT_TARGET_PAIRS}
 						</Badge>
-					</Flex>
+						</Flex>
 						{/* Visible instruction in a min-height slot sized for the longest
 							two-line copy, so swapping instructions never shifts the card. */}
 						<Text
@@ -1269,61 +1269,61 @@ export function AlignmentPanel({
 							{workflowInstruction}
 						</Text>
 					</Stack>
-						{/* Status badges and the pair-editing toolbar share one grid cell so
-							swapping between them never changes the card height. */}
-						<Grid templateColumns="1fr" flexShrink={0}>
-							<Flex
-								gridColumn="1"
-								gridRow="1"
-								gap={2}
-								wrap="wrap"
-								align="center"
-								justify={{ base: "flex-start", lg: "flex-end" }}
-								visibility={pairActionsActive ? "hidden" : "visible"}
-							>
+					{/* Status badges and the pair-editing toolbar share one grid cell so
+						swapping between them never changes the card height. */}
+					<Grid templateColumns="1fr" flexShrink={0}>
+						<Flex
+							gridColumn="1"
+							gridRow="1"
+							gap={2}
+							wrap="wrap"
+							align="center"
+							justify={{ base: "flex-start", lg: "flex-end" }}
+							visibility={pairActionsActive ? "hidden" : "visible"}
+						>
 							<Badge
 								colorScheme={
 									runtimeStatus === "ready"
-									? "green"
-									: runtimeStatus === "error"
-										? "red"
-										: "orange"
-							}
-							borderRadius="full"
-							px={2.5}
-							py={1}
-							data-testid="alignment-runtime-status-badge"
-							data-runtime-status={runtimeStatus}
-						>
-							OpenCV {runtimeStatus}
-						</Badge>
-						<Badge
-							colorScheme={
-								alignment.solveAccepted
+										? "green"
+										: runtimeStatus === "error"
+											? "red"
+											: "orange"
+								}
+								borderRadius="full"
+								px={2.5}
+								py={1}
+								data-testid="alignment-runtime-status-badge"
+								data-runtime-status={runtimeStatus}
+							>
+								OpenCV {runtimeStatus}
+							</Badge>
+							<Badge
+								colorScheme={
+									alignment.solveAccepted
+										? alignment.forceAccepted && !alignment.qualityFlags.accepted
+											? "orange"
+											: "green"
+										: alignment.failureReason
+											? "red"
+											: "gray"
+								}
+								borderRadius="full"
+								px={2.5}
+								py={1}
+								data-testid="alignment-status"
+								data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
+								data-force-accepted={alignment.forceAccepted ? "true" : "false"}
+								data-failure-reason={alignment.failureReason ?? ""}
+							>
+								{alignment.solveAccepted
 									? alignment.forceAccepted && !alignment.qualityFlags.accepted
-										? "orange"
-										: "green"
+										? "Force accepted"
+										: "Accepted"
 									: alignment.failureReason
-										? "red"
-										: "gray"
-							}
-							borderRadius="full"
-							px={2.5}
-							py={1}
-							data-testid="alignment-status"
-							data-solve-accepted={alignment.solveAccepted ? "true" : "false"}
-							data-force-accepted={alignment.forceAccepted ? "true" : "false"}
-							data-failure-reason={alignment.failureReason ?? ""}
-						>
-							{alignment.solveAccepted
-								? alignment.forceAccepted && !alignment.qualityFlags.accepted
-									? "Force accepted"
-									: "Accepted"
-								: alignment.failureReason
-									? "Rejected"
-									: "Not solved"}
-						</Badge>
-						<Badge
+										? "Rejected"
+										: "Not solved"}
+							</Badge>
+							<Badge
 								colorScheme="purple"
 								borderRadius="full"
 								px={2.5}
@@ -1332,124 +1332,124 @@ export function AlignmentPanel({
 								data-testid="alignment-selected-pair-badge"
 							>
 								{selectedPair
-										? `Selected pair #${
-												alignment.controlPoints.findIndex(
-													(pair) => pair.id === selectedPair.id,
-												) + 1
-											}`
-										: "Selected pair"}
+									? `Selected pair #${
+											alignment.controlPoints.findIndex(
+												(pair) => pair.id === selectedPair.id,
+											) + 1
+										}`
+									: "Selected pair"}
 							</Badge>
 						</Flex>
-							<Flex
-								gridColumn="1"
-								gridRow="1"
-								role="group"
-								aria-label="Selected landmark controls"
-								align="center"
-								gap={2}
-								px={2}
-								py={1}
-								borderRadius="xl"
-								border="1px solid"
-								borderColor="blue.200"
-								bg="rgba(235, 244, 255, 0.85)"
-								visibility={pairActionsActive ? "visible" : "hidden"}
-								data-testid="alignment-pair-actions"
+						<Flex
+							gridColumn="1"
+							gridRow="1"
+							role="group"
+							aria-label="Selected landmark controls"
+							align="center"
+							gap={2}
+							px={2}
+							py={1}
+							borderRadius="xl"
+							border="1px solid"
+							borderColor="blue.200"
+							bg="rgba(235, 244, 255, 0.85)"
+							visibility={pairActionsActive ? "visible" : "hidden"}
+							data-testid="alignment-pair-actions"
+						>
+							{selectedPair ? (
+								<Badge
+									colorScheme="purple"
+									borderRadius="full"
+									px={2.5}
+									py={1}
+									data-testid="alignment-editing-pair-badge"
+								>
+									Editing pair #
+									{alignment.controlPoints.findIndex(
+										(pair) => pair.id === selectedPair.id,
+									) + 1}
+								</Badge>
+							) : (
+								<Badge
+									colorScheme="orange"
+									borderRadius="full"
+									px={2.5}
+									py={1}
+									data-testid="alignment-editing-pair-badge"
+								>
+									New pair
+								</Badge>
+							)}
+							<Button
+								size="sm"
+								variant="outline"
+								color="gray.700"
+								borderColor="gray.300"
+								bg="white"
+								_hover={{ bg: "gray.50" }}
+								onClick={() => {
+									if (!selectedPairId) return;
+									setPendingSourcePoint(null);
+									setRepositionPairId(selectedPairId);
+									setInteractionMode("reposition-source");
+								}}
+								isDisabled={!selectedPairId}
+								data-testid="alignment-select-reposition-source"
 							>
-								{selectedPair ? (
-									<Badge
-										colorScheme="purple"
-										borderRadius="full"
-										px={2.5}
-										py={1}
-										data-testid="alignment-editing-pair-badge"
-									>
-										Editing pair #
-										{alignment.controlPoints.findIndex(
-											(pair) => pair.id === selectedPair.id,
-										) + 1}
-									</Badge>
-								) : (
-									<Badge
-										colorScheme="orange"
-										borderRadius="full"
-										px={2.5}
-										py={1}
-										data-testid="alignment-editing-pair-badge"
-									>
-										New pair
-									</Badge>
-								)}
-								<Button
-									size="sm"
-									variant="outline"
-									color="gray.700"
-									borderColor="gray.300"
-									bg="white"
-									_hover={{ bg: "gray.50" }}
-									onClick={() => {
-										if (!selectedPairId) return;
-										setPendingSourcePoint(null);
-										setRepositionPairId(selectedPairId);
-										setInteractionMode("reposition-source");
-									}}
-									isDisabled={!selectedPairId}
-									data-testid="alignment-select-reposition-source"
-								>
-									Move NATA Align Image Point
-								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									color="gray.700"
-									borderColor="gray.300"
-									bg="white"
-									_hover={{ bg: "gray.50" }}
-									onClick={() => {
-										if (!selectedPairId) return;
-										setPendingSourcePoint(null);
-										setRepositionPairId(selectedPairId);
-										setInteractionMode("reposition-target");
-									}}
-									isDisabled={!selectedPairId}
-									data-testid="alignment-select-reposition-target"
-								>
-									Move HE point
-								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									colorScheme="red"
-									onClick={() => {
-										if (!selectedPairId) return;
-										setPendingSourcePoint(null);
-										setRepositionPairId(null);
-										mutateControlPoints(
-											(controlPoints) =>
-												controlPoints.filter(
-													(point) => point.id !== selectedPairId,
-												),
-											{ afterApply: clearLocalInteractionState },
-										);
-									}}
-									isDisabled={!selectedPairId}
-									data-testid="alignment-select-delete-pair"
-								>
-									Delete pair
-								</Button>
-								<Button
-									size="sm"
-									variant="ghost"
-									color="gray.700"
-									_hover={{ bg: "whiteAlpha.500" }}
-									onClick={clearLocalInteractionState}
-									data-testid="alignment-select-cancel"
-								>
-									Cancel
-								</Button>
-							</Flex>
-						</Grid>
-					</Flex>
+								Move NATA Align Image Point
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								color="gray.700"
+								borderColor="gray.300"
+								bg="white"
+								_hover={{ bg: "gray.50" }}
+								onClick={() => {
+									if (!selectedPairId) return;
+									setPendingSourcePoint(null);
+									setRepositionPairId(selectedPairId);
+									setInteractionMode("reposition-target");
+								}}
+								isDisabled={!selectedPairId}
+								data-testid="alignment-select-reposition-target"
+							>
+								Move HE point
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								colorScheme="red"
+								onClick={() => {
+									if (!selectedPairId) return;
+									setPendingSourcePoint(null);
+									setRepositionPairId(null);
+									mutateControlPoints(
+										(controlPoints) =>
+											controlPoints.filter(
+												(point) => point.id !== selectedPairId,
+											),
+										{ afterApply: clearLocalInteractionState },
+									);
+								}}
+								isDisabled={!selectedPairId}
+								data-testid="alignment-select-delete-pair"
+							>
+								Delete pair
+							</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								color="gray.700"
+								_hover={{ bg: "whiteAlpha.500" }}
+								onClick={clearLocalInteractionState}
+								data-testid="alignment-select-cancel"
+							>
+								Cancel
+							</Button>
+						</Flex>
+					</Grid>
+				</Flex>
 				<Box
 					h="1.5"
 					w="100%"
