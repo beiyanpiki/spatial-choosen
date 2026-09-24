@@ -667,6 +667,9 @@ describe('AlignmentPanel', () => {
 
 		render(<StatefulHarness />);
 
+		expect(screen.getByTestId('alignment-workflow-instruction')).toHaveTextContent(
+			'Use wheel zoom and drag pan on the eosin reference, then click to place the next reference landmark.',
+		);
 		expect(screen.getByTestId('alignment-source-active-badge')).toBeInTheDocument();
 		expect(screen.getByTestId('alignment-target-active-badge')).toHaveStyle({
 			visibility: 'hidden',

@@ -1253,11 +1253,22 @@ export function AlignmentPanel({
 								data-testid="alignment-pair-count-badge"
 								data-pair-count={alignment.controlPoints.length}
 							>
-								Landmark Pairs: {alignment.controlPoints.length} /{" "}
-								{ALIGNMENT_TARGET_PAIRS}
+							Landmark Pairs: {alignment.controlPoints.length} /{" "}
+							{ALIGNMENT_TARGET_PAIRS}
 						</Badge>
 					</Flex>
-				</Stack>
+						{/* Visible instruction in a min-height slot sized for the longest
+							two-line copy, so swapping instructions never shifts the card. */}
+						<Text
+							fontSize={{ base: "sm", md: "md" }}
+							fontWeight="semibold"
+							lineHeight="1.45"
+							minH="2.9em"
+							data-testid="alignment-workflow-instruction"
+						>
+							{workflowInstruction}
+						</Text>
+					</Stack>
 						{/* Status badges and the pair-editing toolbar share one grid cell so
 							swapping between them never changes the card height. */}
 						<Grid templateColumns="1fr" flexShrink={0}>
