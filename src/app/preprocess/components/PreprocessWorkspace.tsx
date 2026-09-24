@@ -2151,6 +2151,28 @@ export function PreprocessWorkspace({
 
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+	const exportRoiSummary =
+		project?.cropQc.cropWidth && project?.cropQc.cropHeight
+			? `${project.cropQc.cropWidth} × ${project.cropQc.cropHeight} px`
+			: null;
+	const exportChipGrid =
+		project?.chipConfig.rows && project?.chipConfig.columns
+			? `${project.chipConfig.rows} × ${project.chipConfig.columns}`
+			: null;
+	const exportChipSummary = exportChipGrid
+		? project?.chipConfig.chipType
+			? `${project.chipConfig.chipType} · ${exportChipGrid} spots`
+			: `${exportChipGrid} spots`
+		: null;
+	const exportProjectedSpotCount =
+		project?.chipConfig.projectedSpots?.length ?? 0;
+	const exportTissueSummary =
+		exportProjectedSpotCount > 0
+			? `${tissueSelectedSpotIds.length.toLocaleString("en-US")} of ${exportProjectedSpotCount.toLocaleString("en-US")} spots in tissue`
+			: null;
+	const exportOutputFileName = project
+		? `${project.name || "preprocess-project"}-preprocess.zip`
+		: null;
 	const isTissueInteractionDisabled =
 		isDetectingTissue || tissueSupport.supportState === "unsupported";
 	const isChipSelectorDisabled = isDetectingTissue;
@@ -3286,6 +3308,16 @@ export function PreprocessWorkspace({
 									onToggleIncludeProject={setIncludeProjectJson}
 									isExporting={isExporting}
 									canExport={exportReadiness.canExport}
+									blockedReason={
+										exportReadiness.canExport ? null : exportReadiness.reason
+									}
+									isStale={project.exportState.isStale}
+									lastExportedAt={project.exportState.lastExportedAt}
+									includeAlignedImage={includeAlignedImage}
+									roiSummary={exportRoiSummary}
+									chipSummary={exportChipSummary}
+									tissueSummary={exportTissueSummary}
+									outputFileName={exportOutputFileName}
 									onDownload={() => {
 										const currentExportReadiness =
 											getPreprocessZipExportReadiness(project, {

@@ -13,6 +13,11 @@ type MockExportReadinessArgs = {
 type CapturedExportPanelProps = {
   canExport: boolean;
   onDownload: () => void;
+  includeAlignedImage?: boolean;
+  roiSummary?: string | null;
+  chipSummary?: string | null;
+  tissueSummary?: string | null;
+  outputFileName?: string | null;
 };
 
 type CapturedPersistOptions = {
