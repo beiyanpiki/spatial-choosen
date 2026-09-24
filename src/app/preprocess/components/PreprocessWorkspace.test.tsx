@@ -1030,6 +1030,46 @@ describe('PreprocessWorkspace tissue selection stale request protection', () => 
     expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 0');
   });
 
+  it('treats re-selecting the already-active chip as a no-op that preserves the tissue selection', async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceHarness />);
+
+    mockRunTissueAutoSelection.mockResolvedValueOnce({
+      selectedIds: ['spot-a'],
+      matrix: {
+        rows: 96,
+        columns: 96,
+        values: [1, 0, ...Array.from({ length: 96 * 96 - 2 }, () => 0 as 0 | 1)],
+      },
+      summary: {
+        selectedCount: 1,
+        selectedPercent: 50,
+        maskCoverage: 50,
+      },
+      params: {
+        thresholdMode: 'raw',
+        activationThreshold: 0.1,
+        blockThreshold: 120,
+        dbscanEps: 0.2,
+        dbscanMinSamples: 2,
+        minConnectedSpotCount: 2,
+      },
+      warning: null,
+    });
+
+    await user.click(screen.getByTestId('tissue-run-auto'));
+    await waitFor(() => {
+      expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
+    });
+
+    await user.click(screen.getByTestId('tissue-chip-size-option-15um'));
+
+    expect(mockLoadChipConfigData).not.toHaveBeenCalled();
+    expect(screen.getByTestId('tissue-panel-selected-count')).toHaveTextContent('Number of Tissue Spots: 1');
+    expect(screen.getByTestId('tissue-chip-size-option-15um')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('tissue-run-auto')).toBeEnabled();
+  });
+
   it('keeps only the latest auto-detection result when an older request resolves last', async () => {
     const requestA = createDeferred<{
       selectedIds: string[];

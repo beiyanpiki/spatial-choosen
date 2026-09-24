@@ -2183,6 +2183,16 @@ export function PreprocessWorkspace({
 		if (chipId !== "15um" && chipId !== "50um") {
 			return;
 		}
+		// Re-selecting the already-materialized chip must stay a no-op: the
+		// switch below clears the tissue selection and export state, which would
+		// throw away manual tissue edits on an accidental repeat click.
+		if (
+			chipId === project.chipConfig.chipType &&
+			project.chipConfig.status === "complete" &&
+			project.chipConfig.projectedSpots !== null
+		) {
+			return;
+		}
 		if (!project.cropQc.cropWidth || !project.cropQc.cropHeight) {
 			toast({
 				title: "Chip selection unavailable",
