@@ -101,4 +101,22 @@ describe('ExportPanel copy policy', () => {
     expect(screen.getByText('NATAScope project file')).toBeInTheDocument();
     expect(screen.getByText(/Adds project.json with the source images/)).toBeInTheDocument();
   });
+
+  it('renders neutral bullets for unconditional items and reserves checks for options', () => {
+    renderExportPanel();
+
+    // Four always-bundled artifacts use the neutral bullet; the two
+    // user-controllable options (aligned image, project file) get the
+    // checkmark so a green check always means "user opted in".
+    expect(screen.getAllByText('•')).toHaveLength(4);
+    expect(screen.getAllByText('✓')).toHaveLength(2);
+  });
+
+  it('keeps all content rows present when the project file option is unchecked', () => {
+    renderExportPanel({ includeProject: false });
+
+    // Opting out keeps the row (with a dimmed check) rather than removing it.
+    expect(screen.getAllByText('•')).toHaveLength(4);
+    expect(screen.getAllByText('✓')).toHaveLength(2);
+  });
 });

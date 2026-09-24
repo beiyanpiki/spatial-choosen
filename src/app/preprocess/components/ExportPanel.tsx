@@ -40,16 +40,20 @@ function SectionLabel({ children }: { children: string }) {
 }
 
 function IncludedItem({ label, included }: { label: string; included?: boolean }) {
+  // The checkmark is reserved for user-controllable options (included prop):
+  // green when in the package, gray when opted out. Unconditional items render
+  // a neutral bullet so the list never shows a green check for missing assets.
+  const isOptional = included !== undefined;
   return (
     <HStack spacing={2} align="flex-start">
       <Text
         as="span"
-        color={included === false ? 'gray.300' : 'green.500'}
+        color={included === false ? 'gray.300' : isOptional ? 'green.500' : 'gray.400'}
         fontSize="sm"
         lineHeight={1.4}
         aria-hidden="true"
       >
-        ✓
+        {isOptional ? '✓' : '•'}
       </Text>
       <Text fontSize="sm" color={included === false ? 'gray.400' : 'gray.700'}>
         {label}
