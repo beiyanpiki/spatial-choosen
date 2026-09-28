@@ -111,6 +111,8 @@ export type BatchPackageResume = {
   classByBarcode: Map<string, number> | null;
   /** Colour per class, when the export recorded `selected_color`. */
   colorByClass: Map<number, string> | null;
+  /** Region name per class, when the export recorded the `Colours` column. */
+  nameByClass: Map<number, string> | null;
 };
 
 export type BatchPackage = {

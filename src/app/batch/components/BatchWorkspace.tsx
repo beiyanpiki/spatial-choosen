@@ -72,6 +72,40 @@ import {
 } from '@/lib/batch/regionColors';
 import { clearStoredRegionColors } from '@/lib/batch/regionColorStore';
 import { createRegionHistory, type RegionHistorySnapshot } from '@/lib/batch/regionHistory';
+import {
+  BATCH_SESSION_FILE_NAME,
+  BATCH_SESSION_VERSION,
+  BATCH_WORK_FOLDER_SUFFIX,
+  batchSnapshotFileName,
+  createBatchSessionId,
+  parseBatchSession,
+  serializeBatchSession,
+  type BatchSession,
+  type BatchSessionSummary,
+} from '@/lib/batch/session';
+import {
+  deleteBatchSessionRecord,
+  readBatchSessionSummaries,
+  readStoredBatchSession,
+  saveBatchSessionRecord,
+} from '@/lib/batch/sessionStore';
+import {
+  directoryToSourceFiles,
+  describePickerError,
+  ensurePermission,
+  findWorkFolder,
+  listDirectoryNames,
+  openWorkFolder,
+  pickDataDirectory,
+  readPackageFilesByName,
+  readSessionFile,
+  resolveRestoreFolder,
+  supportsWorkFolder,
+  WORK_FOLDER_UNSUPPORTED_MESSAGE,
+  writeTextFile,
+  type BatchDirectoryHandleLike,
+  type BatchWorkFolder,
+} from '@/lib/batch/workFolder';
 import type {
   BatchBounds,
   BatchMatrixConvention,
@@ -129,6 +163,21 @@ const toAlignTarget = (entry: BatchPackage | null | undefined): BatchAlignTarget
       }
     : EMPTY_TARGET);
 type Notice = { tone: 'info' | 'success' | 'error'; text: string };
+
+/** Auto-save badge copy, mirroring the preprocessing workspace's status chip. */
+const AUTO_SAVE_LABEL: Record<'off' | 'saving' | 'saved' | 'error', string> = {
+  off: '仅浏览器内',
+  saving: '保存中…',
+  saved: '已自动保存',
+  error: '保存失败',
+};
+
+const AUTO_SAVE_TONE: Record<'off' | 'saving' | 'saved' | 'error', string> = {
+  off: 'gray',
+  saving: 'blue',
+  saved: 'green',
+  error: 'red',
+};
 
 /** History key for the reference image's own regions.
  */
@@ -229,10 +278,20 @@ export function BatchWorkspace() {
    */
   const [referenceView, setReferenceView] = useState({ zoom: 1, pan: { x: 0, y: 0 } });
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  /** Folder the session is auto-saved into; null when the batch only lives in the browser. */
+  const [workFolder, setWorkFolder] = useState<BatchWorkFolder | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  /** Name the work folder is derived from (the imported folder or archive). */
+  const [sessionName, setSessionName] = useState('batch');
+  const [recentSessions, setRecentSessions] = useState<BatchSessionSummary[]>([]);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'off' | 'saving' | 'saved' | 'error'>('off');
+  const [autoSaveDetail, setAutoSaveDetail] = useState<string | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const packagesRef = useRef<BatchPackage[]>([]);
   packagesRef.current = packages;
+  const sessionFileInputRef = useRef<HTMLInputElement | null>(null);
   /**
    * Region edits (merge / cut / overwrite / clear) are not reversible by just
    * dropping the last region, so every mutation snapshots the previous lists.
@@ -282,7 +341,10 @@ export function BatchWorkspace() {
       if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
     });
   }, []);
-  const importPackages = useCallback(async (selectedFiles: BatchSelectedFile[]) => {
+  const importPackages = useCallback(async (
+    selectedFiles: BatchSelectedFile[],
+    options: { parentHandle?: BatchDirectoryHandleLike | null; sessionName?: string } = {},
+  ) => {
     if (selectedFiles.length === 0) return;
     setNotice(null);
     setBusyLabel('Reading selection…');
@@ -356,6 +418,14 @@ export function BatchWorkspace() {
             .map(([classId, hex]) => createRegionColor(classId, hex)),
         );
       }
+      // The `Colours` column brings the region names back with the colours.
+      const exportedNames = new Map<number, string>();
+      for (const entry of built) {
+        for (const [classId, name] of entry.resume?.nameByClass ?? []) {
+          if (!exportedNames.has(classId)) exportedNames.set(classId, name);
+        }
+      }
+      setColorNames(Object.fromEntries(exportedNames));
       setAlignments(restoredAlignments);
       // A resumed export carries absolute matrices, so nothing is chained yet.
       setAlignLinks({});
@@ -376,6 +446,35 @@ export function BatchWorkspace() {
         setRegionMode('perImage');
       }
       setStep(resumed ? 'imageRegions' : 'align');
+      // The session lives in a `<folder>-natatoolkit` folder next to the data
+      // whenever the browser handed us a writable folder handle; otherwise it is
+      // kept in this browser only, and the UI says so.
+      const nextSessionName = options.sessionName
+        ?? archives[0]?.replace(/\.zip$/i, '')
+        ?? reference?.name
+        ?? 'batch';
+      setSessionId(createBatchSessionId());
+      setSessionName(nextSessionName);
+      if (options.parentHandle) {
+        try {
+          const folder = await openWorkFolder(options.parentHandle, nextSessionName);
+          setWorkFolder(folder);
+          setAutoSaveStatus('saved');
+          setAutoSaveDetail(`自动保存到 ${folder.name}/`);
+        } catch (error) {
+          setWorkFolder(null);
+          setAutoSaveStatus('error');
+          setAutoSaveDetail(error instanceof Error ? error.message : '无法写入文件夹');
+        }
+      } else {
+        setWorkFolder(null);
+        setAutoSaveStatus(supportsWorkFolder() ? 'saved' : 'off');
+        setAutoSaveDetail(
+          supportsWorkFolder()
+            ? '未连接文件夹，会话保存在浏览器内'
+            : '当前浏览器不支持写入文件夹，会话保存在浏览器内',
+        );
+      }
       const failed = built.filter((entry) => entry.status === 'error');
       setNotice({
         tone: failed.length > 0 ? 'info' : 'success',
@@ -394,6 +493,432 @@ export function BatchWorkspace() {
       setBusyLabel(null);
     }
   }, [clearRegionHistory, releasePackages]);
+  /* ---------------------------------------------------------------- *
+   * Session persistence
+   *
+   * Every change produces a snapshot: it is written to `<data folder>/
+   * <name>-natatoolkit/session.json` when the browser gave us a writable folder
+   * handle, and always kept in IndexedDB so the landing can offer "继续上次分析"
+   * after a reload. Manual save, snapshot, download and import sit on top of the
+   * same snapshot format.
+   * ---------------------------------------------------------------- */
+  const buildSession = useCallback((): BatchSession => ({
+    version: BATCH_SESSION_VERSION,
+    id: sessionId ?? createBatchSessionId(),
+    name: sessionName,
+    savedAt: new Date().toISOString(),
+    step,
+    packages: packages.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      files: entry.files.map((file) => ({ relativePath: file.relativePath, name: file.name })),
+      fullresFileName: entry.fullresFileName,
+      positionsFileName: entry.positionsFileName,
+      scalefactorsFileName: entry.scalefactorsFileName,
+      fullresSize: entry.fullresSize,
+      previewSize: entry.previewSize,
+      contentBounds: entry.contentBounds,
+      spotDiameterFullres: entry.spotDiameterFullres,
+      spots: entry.spots,
+      positions: entry.positions,
+    })),
+    referencePackageId,
+    referenceRegions,
+    customRegions,
+    alignments,
+    alignLinks,
+    alignBaseId,
+    customColors,
+    colorNames: Object.fromEntries(
+      Object.entries(colorNames).map(([key, value]) => [String(key), value]),
+    ),
+    activeColorId,
+    regionTool,
+    regionMode,
+    referenceConfirmed,
+    activePackageId,
+    walkthroughPackageId,
+    projectDrawPackageId,
+    walkthroughScope,
+    regionScope,
+  }), [
+    activeColorId,
+    activePackageId,
+    alignBaseId,
+    alignLinks,
+    alignments,
+    colorNames,
+    customColors,
+    customRegions,
+    packages,
+    projectDrawPackageId,
+    referenceConfirmed,
+    referencePackageId,
+    referenceRegions,
+    regionMode,
+    regionScope,
+    regionTool,
+    sessionId,
+    sessionName,
+    step,
+    walkthroughPackageId,
+    walkthroughScope,
+  ]);
+  /** Kept in refs so the debounced flush never runs against stale state. */
+  const buildSessionRef = useRef(buildSession);
+  buildSessionRef.current = buildSession;
+  const workFolderRef = useRef<BatchWorkFolder | null>(workFolder);
+  workFolderRef.current = workFolder;
+  const sessionSaveAttemptRef = useRef(0);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  /**
+   * Session read from a file, waiting for its data folder.
+   *
+   * The folder dialog cannot follow the file dialog in the same click — the
+   * second picker would have no user gesture left — so the import parks the
+   * session here and the next "连接数据文件夹…" click finishes the restore.
+   */
+  const pendingSessionRef = useRef<BatchSession | null>(null);
+
+  const persistSession = useCallback(async (
+    options: { snapshot?: boolean; announce?: boolean } = {},
+  ) => {
+    if (packagesRef.current.length === 0) return;
+
+    const attempt = sessionSaveAttemptRef.current + 1;
+    sessionSaveAttemptRef.current = attempt;
+    setAutoSaveStatus('saving');
+
+    try {
+      const session = buildSessionRef.current();
+      const text = serializeBatchSession(session);
+      const folder = workFolderRef.current;
+
+      // The browser copy always happens: it is what makes "继续上次分析" work
+      // even before the folder is reachable again.
+      await saveBatchSessionRecord(session, { rootHandle: folder?.parent ?? null });
+      if (folder) {
+        await writeTextFile(folder.dir, BATCH_SESSION_FILE_NAME, text);
+        if (options.snapshot) {
+          await writeTextFile(folder.dir, batchSnapshotFileName(new Date()), text);
+        }
+      }
+
+      if (attempt === sessionSaveAttemptRef.current) {
+        const time = new Date().toLocaleTimeString();
+        setAutoSaveStatus('saved');
+        setAutoSaveDetail(
+          folder
+            ? `已自动保存 · ${time} · ${folder.name}/session.json`
+            : `已保存在浏览器内 · ${time}（未连接文件夹）`,
+        );
+      }
+      if (options.announce) {
+        setNotice({
+          tone: 'success',
+          text: folder
+            ? `已保存到 ${folder.name}/session.json`
+            : '会话已保存在浏览器内；连接数据文件夹后会同步写入本地。',
+        });
+      }
+      setRecentSessions(await readBatchSessionSummaries());
+    } catch (error) {
+      if (attempt === sessionSaveAttemptRef.current) {
+        setAutoSaveStatus('error');
+        setAutoSaveDetail(error instanceof Error ? error.message : '保存失败');
+      }
+    }
+  }, []);
+
+  /**
+   * Auto-save: one write per burst of edits.
+   *
+   * The dependencies are the state the session is made of, so any edit to an
+   * alignment, region, colour or step schedules a snapshot; the timer collapses
+   * a stroke's follow-up updates into a single write.
+   */
+  useEffect(() => {
+    if (packages.length === 0) return undefined;
+
+    if (autoSaveTimerRef.current !== null) window.clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      void persistSession();
+    }, 1200);
+
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    activeColorId,
+    activePackageId,
+    alignBaseId,
+    alignLinks,
+    alignments,
+    colorNames,
+    customColors,
+    customRegions,
+    packages,
+    persistSession,
+    projectDrawPackageId,
+    referenceConfirmed,
+    referencePackageId,
+    referenceRegions,
+    regionMode,
+    regionScope,
+    regionTool,
+    step,
+    walkthroughPackageId,
+    walkthroughScope,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readBatchSessionSummaries().then((list) => {
+      if (!cancelled) setRecentSessions(list);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  /** A cancelled picker is not an error; anything else deserves an explanation. */
+  const reportPickerFailure = useCallback((error: unknown) => {
+    if (error instanceof DOMException && error.name === 'AbortError') return;
+    setNotice({ tone: 'error', text: describePickerError(error) });
+  }, []);
+
+  const handleSaveNow = useCallback(() => {
+    void persistSession({ announce: true });
+  }, [persistSession]);
+
+  const handleSaveSnapshot = useCallback(() => {
+    void persistSession({ snapshot: true, announce: true });
+  }, [persistSession]);
+
+  const handleDownloadSession = useCallback(() => {
+    if (packagesRef.current.length === 0) return;
+
+    downloadBlob(
+      new Blob([serializeBatchSession(buildSessionRef.current())], { type: 'application/json' }),
+      batchSnapshotFileName(new Date()),
+    );
+    setNotice({ tone: 'success', text: '已下载会话文件；在另一台机器上导入它并选择数据文件夹即可继续。' });
+  }, []);
+
+  /** Imports a batch straight from a granted folder, which enables auto-save. */
+  const handlePickDataFolder = useCallback(async () => {
+    try {
+      const parent = await pickDataDirectory('readwrite');
+      setBusyLabel('读取文件夹…');
+      const files = await directoryToSourceFiles(parent);
+      if (files.length === 0) {
+        setNotice({
+          tone: 'error',
+          text: '这个文件夹里没有找到 <样本>/spatial 结构，请选择包含样本文件夹的父目录。',
+        });
+        return;
+      }
+      await importPackages(files, { parentHandle: parent, sessionName: parent.name });
+    } catch (error) {
+      reportPickerFailure(error);
+    } finally {
+      setBusyLabel(null);
+    }
+  }, [importPackages, reportPickerFailure]);
+
+  /** A dropped folder keeps its handle, so the drop gets the same auto-save. */
+  const handleDroppedFolder = useCallback(async (handle: BatchDirectoryHandleLike) => {
+    try {
+      const granted = await ensurePermission(handle, 'readwrite');
+      setBusyLabel('读取文件夹…');
+      const files = await directoryToSourceFiles(handle);
+      if (files.length === 0) {
+        setNotice({ tone: 'error', text: '拖入的文件夹里没有找到 <样本>/spatial 结构。' });
+        return;
+      }
+      await importPackages(files, {
+        parentHandle: granted ? handle : null,
+        sessionName: handle.name,
+      });
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : '读取文件夹失败' });
+    } finally {
+      setBusyLabel(null);
+    }
+  }, [importPackages]);
+
+  /**
+   * Rebuilds a batch from a session snapshot.
+   *
+   * The images are re-read from the source folder instead of being copied into
+   * the snapshot, so the restored batch can be drawn on and exported exactly like
+   * a freshly imported one; the package ids come from the session, which is what
+   * keeps every alignment and region keyed to the right image.
+   */
+  const restoreSession = useCallback(async (
+    session: BatchSession,
+    parent: BatchDirectoryHandleLike,
+  ) => {
+    setIsRestoring(true);
+    setNotice(null);
+    try {
+      const available = new Set(await listDirectoryNames(parent));
+      const missing = session.packages
+        .filter((entry) => !available.has(entry.name))
+        .map((entry) => entry.name);
+      if (missing.length > 0) {
+        throw new Error(`选中的文件夹里找不到这些样本目录：${missing.join('、')}`);
+      }
+
+      const built: BatchPackage[] = [];
+      for (const [index, entry] of session.packages.entries()) {
+        setBusyLabel(`恢复 ${entry.name}（${index + 1}/${session.packages.length}）…`);
+        const files = await readPackageFilesByName(parent, entry.name);
+        built.push(await buildBatchPackage({ name: entry.name, rootPath: '', files }, entry.id));
+      }
+
+      releasePackages(packagesRef.current);
+      setPackages(built);
+      setSessionId(session.id);
+      setSessionName(session.name);
+      setReferencePackageId(session.referencePackageId);
+      setReferenceRegions(session.referenceRegions);
+      setCustomRegions(session.customRegions);
+      setAlignments(session.alignments);
+      setAlignLinks(session.alignLinks);
+      setAlignBaseId(session.alignBaseId);
+      setCustomColors(session.customColors);
+      setColorNames(
+        Object.fromEntries(
+          Object.entries(session.colorNames ?? {}).map(([key, value]) => [Number(key), value]),
+        ),
+      );
+      setActiveColorId(session.activeColorId);
+      setRegionTool(session.regionTool);
+      setRegionMode(session.regionMode);
+      setReferenceConfirmed(session.referenceConfirmed);
+      setActivePackageId(session.activePackageId);
+      setWalkthroughPackageId(session.walkthroughPackageId);
+      setProjectDrawPackageId(session.projectDrawPackageId);
+      setWalkthroughScope(session.walkthroughScope);
+      setRegionScope(session.regionScope);
+      clearRegionHistory();
+      setStep(session.step);
+
+      const folder = await openWorkFolder(parent, session.name);
+      setWorkFolder(folder);
+      setAutoSaveStatus('saved');
+      setAutoSaveDetail(`已恢复会话 · 自动保存到 ${folder.name}/session.json`);
+      setRecentSessions(await readBatchSessionSummaries());
+      setNotice({
+        tone: 'success',
+        text: `已恢复会话「${session.name}」：${built.length} 个包，保存于 ${new Date(session.savedAt).toLocaleString()}。继续修改会自动保存。`,
+      });
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : '恢复会话失败' });
+    } finally {
+      setIsRestoring(false);
+      setBusyLabel(null);
+    }
+  }, [clearRegionHistory, releasePackages]);
+
+  /**
+   * "继续上次分析".
+   *
+   * The directory dialog has to be opened while the click that asked for it is
+   * still current, so the granted handle is reused when it already works and the
+   * picker runs before anything that could consume that user gesture.
+   */
+  const handleContinueSession = useCallback(async (summary: BatchSessionSummary) => {
+    setBusyLabel('读取会话…');
+    try {
+      const stored = await readStoredBatchSession(summary.id);
+      if (!stored) throw new Error('这条会话记录已经不存在了');
+
+      const parent = await resolveRestoreFolder({
+        storedHandle: stored.rootHandle,
+        pick: () => pickDataDirectory('readwrite'),
+      });
+      await restoreSession(stored.session, parent);
+    } catch (error) {
+      reportPickerFailure(error);
+    } finally {
+      setBusyLabel(null);
+    }
+  }, [reportPickerFailure, restoreSession]);
+
+  /**
+   * Connects a folder to the current batch (or finishes a session-file import).
+   *
+   * Declared after `restoreSession` because a parked session file is completed
+   * from this click: the folder dialog has to be the first thing it does.
+   */
+  const handleConnectWorkFolder = useCallback(async () => {
+    try {
+      const parent = await pickDataDirectory('readwrite');
+
+      const pending = pendingSessionRef.current;
+      if (pending) {
+        pendingSessionRef.current = null;
+        await restoreSession(pending, parent);
+        return;
+      }
+
+      const folder = await openWorkFolder(parent, sessionName);
+      setWorkFolder(folder);
+      setAutoSaveStatus('saved');
+      setAutoSaveDetail(`自动保存到 ${folder.name}/session.json`);
+      await persistSession({ announce: true });
+    } catch (error) {
+      reportPickerFailure(error);
+    }
+  }, [persistSession, reportPickerFailure, restoreSession, sessionName]);
+
+  /**
+   * Session file from disk.
+   *
+   * Parsed here, then parked until the operator clicks the folder button: two
+   * pickers cannot run from one click (the second has no user gesture left).
+   */
+  const handleImportSessionFile = useCallback(async (file: File) => {
+    setBusyLabel('读取会话文件…');
+    try {
+      const session = parseBatchSession(await file.text());
+      pendingSessionRef.current = session;
+      setNotice({
+        tone: 'info',
+        text: `已读取会话「${session.name}」（${session.packages.length} 个包）。请再点「连接数据文件夹…」选择样本所在目录，随后会自动恢复。`,
+      });
+    } catch (error) {
+      reportPickerFailure(error);
+    } finally {
+      setBusyLabel(null);
+    }
+  }, [reportPickerFailure]);
+
+  /** Picks the data folder and continues from the session stored inside it. */
+  const handleOpenSavedFolder = useCallback(async () => {
+    try {
+      const parent = await pickDataDirectory('readwrite');
+      const folder = await findWorkFolder(parent);
+      if (!folder) {
+        throw new Error(`这个文件夹里没有找到 *${BATCH_WORK_FOLDER_SUFFIX} 目录，请选择包含样本的父目录。`);
+      }
+      const text = await readSessionFile(folder);
+      if (!text) throw new Error(`目录 ${folder.name} 里没有 ${BATCH_SESSION_FILE_NAME}`);
+      await restoreSession(parseBatchSession(text), parent);
+    } catch (error) {
+      reportPickerFailure(error);
+    }
+  }, [reportPickerFailure, restoreSession]);
+
+  const handleDeleteSession = useCallback(async (summary: BatchSessionSummary) => {
+    await deleteBatchSessionRecord(summary.id);
+    setRecentSessions(await readBatchSessionSummaries());
+    setNotice({ tone: 'info', text: `已删除会话记录「${summary.name}」（磁盘上的文件夹不受影响）。` });
+  }, []);
   const clearAll = useCallback(() => {
     releasePackages(packagesRef.current);
     setPackages([]);
@@ -411,6 +936,12 @@ export function BatchWorkspace() {
     setWalkthroughPackageId(null);
     setNotice(null);
     setStep('import');
+    // The session on disk/browser stays where it is, so "继续上次分析" can still
+    // bring it back; only the live workspace is emptied.
+    setWorkFolder(null);
+    setSessionId(null);
+    setAutoSaveStatus('off');
+    setAutoSaveDetail(null);
     clearRegionHistory();
   }, [clearRegionHistory, releasePackages]);
   const referencePackage = useMemo(
@@ -1193,6 +1724,118 @@ export function BatchWorkspace() {
           <AlertDescription>{notice.text}</AlertDescription>
         </Alert>
       ) : null}
+      {/*
+        Session bar: present in every step, because saving has to be possible at
+        every stage and the operator needs to see where the auto-save lands.
+      */}
+      <Card
+        border='1px solid'
+        borderColor='gray.200'
+        borderRadius='2xl'
+        boxShadow='sm'
+        bg='white'
+        data-testid='batch-session-bar'
+      >
+        <CardBody p={{ base: 3, xl: 4 }}>
+          <Flex justify='space-between' align={{ base: 'flex-start', xl: 'center' }} gap={3} wrap='wrap'>
+            <HStack spacing={3} align='flex-start'>
+              <Badge
+                colorScheme={AUTO_SAVE_TONE[autoSaveStatus]}
+                borderRadius='full'
+                px={2}
+                py={0.5}
+                mt={0.5}
+                data-testid='batch-autosave-status'
+              >
+                {AUTO_SAVE_LABEL[autoSaveStatus]}
+              </Badge>
+              <Stack spacing={0}>
+                <Text fontSize='sm' fontWeight='medium'>
+                  分阶段保存 · 会话
+                  {workFolder ? ` · ${workFolder.name}` : ''}
+                </Text>
+                <Text fontSize='xs' color='gray.500' data-testid='batch-autosave-detail'>
+                  {autoSaveDetail
+                    ?? (packages.length === 0
+                      ? '导入数据后，每次改动都会自动保存，可随时手动另存'
+                      : '准备中…')}
+                </Text>
+              </Stack>
+            </HStack>
+            <HStack spacing={2} wrap='wrap'>
+              <Button
+                size='xs'
+                colorScheme='brand'
+                variant='outline'
+                isDisabled={packages.length === 0 || isRestoring}
+                onClick={handleSaveNow}
+                data-testid='batch-save-now'
+              >
+                立即保存
+              </Button>
+              <Button
+                size='xs'
+                variant='outline'
+                isDisabled={packages.length === 0 || !workFolder}
+                title={workFolder ? `在 ${workFolder.name}/ 里留一份带时间戳的快照` : '先连接数据文件夹'}
+                onClick={handleSaveSnapshot}
+                data-testid='batch-save-snapshot'
+              >
+                另存快照
+              </Button>
+              <Button
+                size='xs'
+                variant='outline'
+                isDisabled={packages.length === 0}
+                onClick={handleDownloadSession}
+                data-testid='batch-download-session'
+              >
+                下载会话文件
+              </Button>
+              <Button
+                size='xs'
+                variant='ghost'
+                isLoading={isRestoring}
+                onClick={handleOpenSavedFolder}
+                data-testid='batch-open-saved-folder'
+              >
+                打开会话文件夹…
+              </Button>
+              <Button
+                size='xs'
+                variant='ghost'
+                isDisabled={!supportsWorkFolder()}
+                title={supportsWorkFolder() ? undefined : WORK_FOLDER_UNSUPPORTED_MESSAGE}
+                onClick={handleConnectWorkFolder}
+                data-testid='batch-connect-folder'
+              >
+                {workFolder ? '更换数据文件夹…' : '连接数据文件夹…'}
+              </Button>
+              <input
+                ref={sessionFileInputRef}
+                type='file'
+                accept='.json,application/json'
+                hidden
+                data-testid='batch-session-file-input'
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void handleImportSessionFile(file);
+                  event.target.value = '';
+                }}
+              />
+              <Button
+                size='xs'
+                variant='ghost'
+                isLoading={isRestoring}
+                onClick={() => sessionFileInputRef.current?.click()}
+                data-testid='batch-import-session'
+              >
+                导入会话文件…
+              </Button>
+            </HStack>
+          </Flex>
+        </CardBody>
+      </Card>
       <Flex gap={6} align='flex-start' direction={{ base: 'column', lg: 'row' }}>
         <BatchStepRail currentStep={step} items={stepItems} onSelect={setStep} />
         <Stack spacing={4} flex='1' minW={0}>
@@ -1205,6 +1848,12 @@ export function BatchWorkspace() {
               onSelectedFiles={importPackages}
               onClear={clearAll}
               onReorder={movePackage}
+              recentSessions={recentSessions}
+              workFolderName={workFolder?.name ?? null}
+              onPickDataFolder={handlePickDataFolder}
+              onDroppedFolder={handleDroppedFolder}
+              onContinueSession={handleContinueSession}
+              onDeleteSession={handleDeleteSession}
             />
           ) : null}
           {step === 'align' ? (
@@ -1839,7 +2488,10 @@ export function BatchWorkspace() {
                           <code> in_selected</code> (0/1) plus <code>selected_class</code> — 0 when the barcode is
                           not selected, otherwise the number of the colour it was drawn with: 1–5 are the built-in
                           colours, 6 and above are the ones you added — and <code>selected_color</code>, the hex of
-                          that colour, so a re-import brings the palette back. transform-matrix.csv is added on top.
+                          that colour, so a re-import brings the palette back. The last column,
+                          <code> Colours</code>, carries the region name from steps 3/4 — <code>Group 1</code> or
+                          whatever you renamed it to — and a re-import restores those names too.
+                          transform-matrix.csv is added on top.
                           A barcode counts as selected as soon as its spot square — anchored at the
                           <code> pxl_*</code> top-left corner — touches the drawn region, and the matrix is
                           written in each package&apos;s own frame as 2×3 rows.

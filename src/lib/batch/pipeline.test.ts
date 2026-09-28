@@ -5,6 +5,7 @@ import type { BatchPackage, BatchRegion, BatchSimilarityParams } from '@/types/b
 import { normalizeSimilarityParams } from './affine';
 import { parsePositionsTable, readSpotsFromPositions } from './positions';
 import { buildExportInputs, buildTransformMatrixCsv, computeSelection } from './pipeline';
+import { BATCH_REGION_COLORS } from './regionColors';
 
 const POSITIONS_CSV = [
   'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres',
@@ -171,12 +172,41 @@ describe('buildExportInputs', () => {
     expect(inputs[0].positionsFileName).toBe('spatial/tissue_positions.csv');
     expect(inputs[0].positionsCsv.split('\n')[0]).toContain('in_selected');
     expect(inputs[0].positionsCsv.split('\n')[0]).toContain('selected_color');
+    // The region name closes the row so a spreadsheet shows it at the far right.
+    expect(inputs[0].positionsCsv.split('\n')[0].trim().endsWith(',Colours')).toBe(true);
     // Class 1 is the built-in red, so its hex travels with the barcode.
-    expect(inputs[0].positionsCsv).toContain('INSIDE,1,1,1,100,100,1,1,#E53E3E');
-    expect(inputs[0].positionsCsv).toContain('OUTSIDE,1,1,2,900,900,0,0,');
+    expect(inputs[0].positionsCsv).toContain('INSIDE,1,1,1,100,100,1,1,#E53E3E,Group 1');
+    expect(inputs[0].positionsCsv).toContain('OUTSIDE,1,1,2,900,900,0,0,,');
     expect(inputs[0].transformMatrixCsv).toBe('1,0,0\n0,1,0\n');
     // The 500px package is upscaled into the 1000px reference frame.
     expect(inputs[1].transformMatrixCsv).toBe('2,0,0\n0,2,0\n');
+  });
+
+  it('writes the renamed colour group into the Colours column', () => {
+    const reference = packageFixture({ id: 'ref', name: 'ref' });
+    const regions: BatchRegion[] = [square(0.05, 0.05, 0.2, 0.2)];
+    const selectionByPackage = {
+      ref: computeSelection({
+        spots: reference.spots!,
+        regions,
+        size: reference.fullresSize!,
+        settings: { anchorMode: 'center', hitMode: 'center' },
+        spotDiameterFullres: reference.spotDiameterFullres,
+      }),
+    };
+
+    const [input] = buildExportInputs({
+      packages: [reference],
+      referencePackageId: 'ref',
+      alignments: { ref: identity },
+      selectionByPackage,
+      matrixLayout: '2x3',
+      matrixConvention: 'reference-frame',
+      colors: [{ ...BATCH_REGION_COLORS[0], name: '肿瘤' }],
+    });
+
+    expect(input.positionsCsv.split('\n')[0].trim().endsWith(',Colours')).toBe(true);
+    expect(input.positionsCsv).toContain(',1,#E53E3E,肿瘤');
   });
 
   it('writes an empty matrix when the reference geometry is unknown', () => {

@@ -17,6 +17,8 @@ export const TRANSFORM_MATRIX_FILE_PATTERN = /^transform-matrix\.csv$/i;
 export const IN_SELECTED_VALUE = '1';
 export const SELECTED_CLASS_FILE_COLUMN = 'selected_class';
 export const SELECTED_COLOR_FILE_COLUMN = 'selected_color';
+/** Last column of an exported table: the region name the operator drew with. */
+export const SELECTED_COLOURS_FILE_COLUMN = 'Colours';
 
 /**
  * Reads the two affine rows written by step 5 (`a,b,c` / `d,e,f`).

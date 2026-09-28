@@ -150,6 +150,13 @@ src/app/batch/
 - Colour classes are named `Group 1`… and the operator can rename them
   (`onRenameColor` → the `colorNames` map in `BatchWorkspace`). The id is the
   exported `selected_class` value, so a rename never renumbers a class.
+- The export writes three extra columns per barcode — `in_selected`,
+  `selected_class`, `selected_color` — and closes the row with **`Colours`**, the
+  region name from steps 3/4 (`Group N` or the operator's own label). It is
+  appended last on purpose: that is the column people read in the spreadsheet.
+  `SELECTED_COLOURS_COLUMN` in `positions.ts` owns the header, and
+  `nameByClass` in `BatchPackageResume` reads it back so a re-import restores the
+  renamed groups instead of falling back to `Group N`.
 - Undo is **one global stack**, not one stack per image (`@/lib/batch/regionHistory`),
   with one step per operation however many lists it touched. Switching samples
   must not disable it: the operator has to be able to revert the stroke they just
@@ -164,6 +171,27 @@ src/app/batch/
   only by the table, blue only by the region.
 - No operator-facing string says "batch"; the page is the multi-slide alignment
   workspace (`BatchWorkspace.test.tsx` fails the build if the word comes back).
+- Saving is **per stage and automatic**: every edit schedules one snapshot
+  (1.2 s debounce, `persistSession`), and the manual buttons (`立即保存`,
+  `另存快照`, `下载会话文件`, `导入会话文件`, `打开会话文件夹`) sit on the same
+  snapshot format. The snapshot carries the state and the file *description*
+  (`spatial/...` paths), never the image bytes, so it stays small enough to keep
+  in IndexedDB on every change.
+- `@/lib/batch/session` owns the format (`BATCH_SESSION_VERSION`); bump the
+  version instead of tolerating a changed field, and keep `parseBatchSession`
+  strict — a half-restored batch would silently drop regions or alignments.
+- When the browser gives us a writable folder handle (folder picker or a dropped
+  folder), the snapshot is also written to `<data folder>/<name>-natatoolkit/
+  session.json`; without a handle the batch is browser-only and the status badge
+  says so. Restoring always ends with real files on disk: the session is matched
+  back to the sample folders by name and re-read through
+  `readPackageFilesByName`, and the **package ids come from the session** so every
+  alignment/region key stays attached to the right image.
+- The folder handle has to survive a reload to make "继续上次分析" work; it is
+  stored in IndexedDB (structured clone) next to the session, and every read/write
+  re-checks permission first (`ensurePermission`) because a restored handle loses
+  its grant. Never assume `showDirectoryPicker` exists — gate the UI on
+  `supportsWorkFolder()` and keep the browser-only path working.
 - Drawing has two stroke modes: `merge` (default) unions a stroke into the regions
   of the active class **and subtracts it from every other class**, so a new colour
   paints over what was underneath instead of blending; `cut` carves the stroke out

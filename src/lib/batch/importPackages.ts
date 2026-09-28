@@ -15,6 +15,7 @@ import {
   IN_SELECTED_VALUE,
   SELECTED_CLASS_FILE_COLUMN,
   SELECTED_COLOR_FILE_COLUMN,
+  SELECTED_COLOURS_FILE_COLUMN,
   TRANSFORM_MATRIX_FILE_PATTERN,
   parseTransformMatrixCsv,
   similarityParamsFromOwnFrameMatrix,
@@ -381,6 +382,19 @@ export async function buildBatchPackage(
             ])
             .filter(([classId, hex]) => Number.isFinite(classId) && classId > 0 && hex !== ''),
         );
+    // The `Colours` column carries the region name, so a re-import can bring the
+    // renamed groups back instead of falling back to `Group N`.
+    const coloursColumn = positions.columnIndex[SELECTED_COLOURS_FILE_COLUMN];
+    const nameByClass = coloursColumn === undefined || classByBarcode === null
+      ? null
+      : new Map(
+          selectedRows
+            .map((row): [number, string] => [
+              Number((row[classColumn ?? -1] ?? '').trim()),
+              (row[coloursColumn] ?? '').trim(),
+            ])
+            .filter(([classId, name]) => Number.isFinite(classId) && classId > 0 && name !== ''),
+        );
     const preview = await createPreviewDerivative(fullresFile.blob);
 
     return {
@@ -393,7 +407,7 @@ export async function buildBatchPackage(
       spots: readSpotsFromPositions(positions),
       positions,
       resume: selectedBarcodes || alignment
-        ? { alignment, selectedBarcodes, classByBarcode, colorByClass }
+        ? { alignment, selectedBarcodes, classByBarcode, colorByClass, nameByClass }
         : null,
       status: 'ready',
       error: null,

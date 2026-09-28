@@ -47,4 +47,35 @@ describe('BatchWorkspace', () => {
 
     expect(container.textContent ?? '').not.toMatch(/batch/i);
   });
+
+  it('shows the per-stage session bar before anything is imported', () => {
+    renderWorkspace();
+
+    // Saving has to be reachable from every step, so the bar is part of the page
+    // chrome rather than one of the step panels.
+    expect(screen.getByTestId('batch-autosave-status')).toHaveTextContent('仅浏览器内');
+    expect(screen.getByTestId('batch-autosave-detail'))
+      .toHaveTextContent('导入数据后，每次改动都会自动保存，可随时手动另存');
+    expect(screen.getByTestId('batch-save-now')).toBeDisabled();
+    expect(screen.getByTestId('batch-download-session')).toBeDisabled();
+    expect(screen.getByTestId('batch-import-session')).toBeInTheDocument();
+  });
+
+  it('lets the operator continue a session saved by this browser', async () => {
+    window.localStorage.setItem('spatial-batch-sessions-meta', JSON.stringify([{
+      id: 'session-1',
+      name: '睾丸空转 - 副本',
+      savedAt: '2026-09-28T06:00:00.000Z',
+      step: 'imageRegions',
+      packageCount: 5,
+      referenceName: '260206-SPA-K507',
+      regionCount: 2,
+      packageNames: ['260206-SPA-K507'],
+    }]));
+
+    renderWorkspace();
+
+    expect(await screen.findByTestId('batch-recent-sessions')).toBeInTheDocument();
+    expect(screen.getByText('睾丸空转 - 副本')).toBeInTheDocument();
+  });
 });

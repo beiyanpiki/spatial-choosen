@@ -6,6 +6,11 @@ export const POSITIONS_FILE_PATTERN = /^tissue_positions?\.csv$/i;
 export const IN_SELECTED_COLUMN = 'in_selected';
 export const SELECTED_CLASS_COLUMN = 'selected_class';
 export const SELECTED_COLOR_COLUMN = 'selected_color';
+/**
+ * Operator-facing name of the colour group a barcode was drawn with, e.g.
+ * `Group 1` or whatever the group was renamed to.
+ */
+export const SELECTED_COLOURS_COLUMN = 'Colours';
 export const FULLRES_IMAGE_FILE_PATTERN = /^tissue_fullres_image\.(png|tif|tiff|jpe?g)$/i;
 export const SCALEFACTORS_FILE_PATTERN = /^scalefactors_json\.json$/i;
 
@@ -93,19 +98,26 @@ export function writePositionsWithSelection(
   selectedBarcodes: ReadonlySet<string>,
   classByBarcode?: ReadonlyMap<string, number>,
   colorByBarcode?: ReadonlyMap<string, string>,
+  /** Group name per barcode, written as the last column (`Colours`). */
+  coloursByBarcode?: ReadonlyMap<string, string>,
 ): string {
   const selectedIndex = table.columnIndex[IN_SELECTED_COLUMN];
   const classIndex = table.columnIndex[SELECTED_CLASS_COLUMN];
   const colorIndex = table.columnIndex[SELECTED_COLOR_COLUMN];
+  const coloursIndex = table.columnIndex[SELECTED_COLOURS_COLUMN];
   const header = [...table.header];
 
   if (selectedIndex === undefined) header.push(IN_SELECTED_COLUMN);
   if (classIndex === undefined) header.push(SELECTED_CLASS_COLUMN);
   if (colorIndex === undefined) header.push(SELECTED_COLOR_COLUMN);
+  // Appended last on purpose: the region information is the column people read
+  // in the spreadsheet, so it sits at the far right of the file.
+  if (coloursIndex === undefined) header.push(SELECTED_COLOURS_COLUMN);
 
   const effectiveSelectedIndex = selectedIndex ?? header.indexOf(IN_SELECTED_COLUMN);
   const effectiveClassIndex = classIndex ?? header.indexOf(SELECTED_CLASS_COLUMN);
   const effectiveColorIndex = colorIndex ?? header.indexOf(SELECTED_COLOR_COLUMN);
+  const effectiveColoursIndex = coloursIndex ?? header.indexOf(SELECTED_COLOURS_COLUMN);
   const barcodeIndex = table.columnIndex.barcode ?? 0;
 
   const rows = table.rows.map((row) => {
@@ -122,6 +134,10 @@ export function writePositionsWithSelection(
     // The colour itself, so a re-import can bring the palette back.
     cells[effectiveColorIndex] = selected
       ? colorByBarcode?.get(barcode) ?? ''
+      : '';
+    // Group 1 / Group 2 … or the name the operator gave the group.
+    cells[effectiveColoursIndex] = selected
+      ? coloursByBarcode?.get(barcode) ?? ''
       : '';
     return cells;
   });

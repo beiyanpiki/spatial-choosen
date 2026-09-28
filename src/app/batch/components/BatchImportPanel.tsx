@@ -20,13 +20,20 @@ import {
   Thead,
   Tr,
 } from '@chakra-ui/react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import {
   readDroppedBatchFiles,
   selectedFilesFromFileList,
   type BatchSelectedFile,
 } from '@/lib/batch/importPackages';
+import type { BatchSessionSummary } from '@/lib/batch/session';
+import {
+  directoryHandleFromDataTransfer,
+  supportsWorkFolder,
+  WORK_FOLDER_UNSUPPORTED_MESSAGE,
+  type BatchDirectoryHandleLike,
+} from '@/lib/batch/workFolder';
 import type { BatchPackage } from '@/types/batch';
 
 type BatchImportPanelProps = {
@@ -38,12 +45,30 @@ type BatchImportPanelProps = {
   onClear: () => void;
   /** Moves a package to a new position in the sample order. */
   onReorder: (packageId: string, toIndex: number) => void;
+  /** Sessions this browser remembers, newest first. */
+  recentSessions?: readonly BatchSessionSummary[];
+  /** Folder the current session is being written to, when one is connected. */
+  workFolderName?: string | null;
+  /** Imports straight from a granted folder so every change can be auto-saved. */
+  onPickDataFolder?: () => void;
+  /** A dropped folder that came with a writable handle. */
+  onDroppedFolder?: (handle: BatchDirectoryHandleLike) => void;
+  onContinueSession?: (summary: BatchSessionSummary) => void;
+  onDeleteSession?: (summary: BatchSessionSummary) => void;
 };
 
 const statusTone: Record<BatchPackage['status'], string> = {
   loading: 'blue',
   ready: 'green',
   error: 'red',
+};
+
+const STEP_LABEL: Record<BatchSessionSummary['step'], string> = {
+  import: '导入',
+  align: '对齐',
+  referenceRegion: '圈选',
+  imageRegions: '逐张核对',
+  review: '导出',
 };
 
 const formatCount = (value: number | null | undefined) => (
@@ -58,6 +83,12 @@ export function BatchImportPanel({
   onSelectedFiles,
   onClear,
   onReorder,
+  recentSessions = [],
+  workFolderName = null,
+  onPickDataFolder,
+  onDroppedFolder,
+  onContinueSession,
+  onDeleteSession,
 }: BatchImportPanelProps) {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const zipInputRef = useRef<HTMLInputElement | null>(null);
@@ -65,15 +96,40 @@ export function BatchImportPanel({
   const [draggingPackageId, setDraggingPackageId] = useState<string | null>(null);
   const [dropPackageIndex, setDropPackageIndex] = useState<number | null>(null);
 
-  useEffect(() => {
-    const input = folderInputRef.current;
-    if (!input) return;
+  /**
+   * `webkitdirectory` is what makes the picker a *folder* dialog; without it the
+   * same input opens a plain file dialog with a file-name box, which cannot select
+   * a package folder at all.
+   *
+   * It is set through a callback ref (instead of a mount effect) so the attribute
+   * is re-applied whenever React creates the node again, and the click handler
+   * re-checks it — a picker that silently degrades is impossible to notice until
+   * someone tries to import.
+   */
+  const bindFolderInput = useCallback((node: HTMLInputElement | null) => {
+    folderInputRef.current = node;
+    if (!node) return;
 
-    // `webkitdirectory` keeps the folder layout in `webkitRelativePath`, which
-    // is what lets one drop cover every `<sample>/spatial/...` package.
-    input.setAttribute('webkitdirectory', '');
-    input.setAttribute('directory', '');
+    node.setAttribute('webkitdirectory', '');
+    node.setAttribute('directory', '');
   }, []);
+
+  const openFolderPicker = useCallback(() => {
+    const input = folderInputRef.current;
+    if (input?.hasAttribute('webkitdirectory')) {
+      input.click();
+      return;
+    }
+
+    // No directory flag (an unusual browser or an extension stripped it): the
+    // modern directory picker is the only way left to choose a folder.
+    if (onPickDataFolder && supportsWorkFolder()) {
+      void onPickDataFolder();
+      return;
+    }
+
+    input?.click();
+  }, [onPickDataFolder]);
 
   const readyCount = packages.filter((entry) => entry.status === 'ready').length;
   const errorCount = packages.filter((entry) => entry.status === 'error').length;
@@ -91,10 +147,75 @@ export function BatchImportPanel({
             </Text>
           </Stack>
 
+          {recentSessions.length > 0 ? (
+            <Box
+              border='1px dashed'
+              borderColor='brand.200'
+              bg='brand.50'
+              borderRadius='xl'
+              px={4}
+              py={3}
+              data-testid='batch-recent-sessions'
+            >
+              <Stack spacing={2}>
+                <Text fontWeight='semibold' fontSize='sm'>继续上次分析</Text>
+                <Text fontSize='xs' color='gray.600'>
+                  会话在每次改动后自动保存于浏览器
+                  {workFolderName ? `，并写入 ${workFolderName}/session.json` : ''}
+                  ；点「继续」会重新读取原始数据文件夹，恢复到上次的步骤、对齐与圈选结果。
+                </Text>
+                {recentSessions.slice(0, 3).map((summary) => (
+                  <Flex key={summary.id} justify='space-between' align='center' gap={3} wrap='wrap'>
+                    <Stack spacing={0}>
+                      <Text fontSize='sm' fontWeight='medium'>{summary.name}</Text>
+                      <Text fontSize='xs' color='gray.500'>
+                        {new Date(summary.savedAt).toLocaleString()} · {summary.packageCount} 个包 ·
+                        {' '}{summary.regionCount} 个区域 · {STEP_LABEL[summary.step] ?? summary.step}
+                      </Text>
+                    </Stack>
+                    <HStack spacing={2}>
+                      <Button
+                        size='xs'
+                        colorScheme='brand'
+                        isDisabled={!onContinueSession || Boolean(busyLabel)}
+                        data-testid={`batch-continue-${summary.id}`}
+                        onClick={() => onContinueSession?.(summary)}
+                      >
+                        继续
+                      </Button>
+                      <Button
+                        size='xs'
+                        variant='ghost'
+                        isDisabled={!onDeleteSession || Boolean(busyLabel)}
+                        onClick={() => onDeleteSession?.(summary)}
+                      >
+                        删除记录
+                      </Button>
+                    </HStack>
+                  </Flex>
+                ))}
+              </Stack>
+            </Box>
+          ) : null}
+
           <HStack spacing={3} wrap='wrap'>
-            <Button colorScheme='brand' onClick={() => folderInputRef.current?.click()}>
+            <Button colorScheme='brand' data-testid='batch-select-folder' onClick={openFolderPicker}>
               Select package folder(s)
             </Button>
+            {onPickDataFolder ? (
+              <Button
+                colorScheme='brand'
+                variant='outline'
+                isDisabled={!supportsWorkFolder()}
+                title={supportsWorkFolder()
+                  ? '授予写入权限后，每次改动都会自动保存到该目录下的 *-natatoolkit 文件夹'
+                  : WORK_FOLDER_UNSUPPORTED_MESSAGE}
+                data-testid='batch-data-folder-button'
+                onClick={onPickDataFolder}
+              >
+                选择数据文件夹（自动保存到本地）
+              </Button>
+            ) : null}
             <Button variant='outline' onClick={() => zipInputRef.current?.click()}>
               Select .zip package(s)
             </Button>
@@ -102,7 +223,7 @@ export function BatchImportPanel({
               <Button variant='ghost' colorScheme='red' onClick={onClear}>Clear all</Button>
             ) : null}
             <input
-              ref={folderInputRef}
+              ref={bindFolderInput}
               type='file'
               multiple
               hidden
@@ -130,6 +251,13 @@ export function BatchImportPanel({
             />
           </HStack>
 
+          {!supportsWorkFolder() ? (
+            <Text fontSize='xs' color='orange.600'>
+              当前浏览器无法写入本地文件夹（需要 Chrome / Edge）：会话仍会按阶段自动保存在浏览器内，
+              可用「下载会话文件 / 导入会话文件」在机器之间迁移。
+            </Text>
+          ) : null}
+
           <Box
             border='2px dashed'
             borderColor={isDragging ? 'brand.400' : 'gray.300'}
@@ -147,6 +275,16 @@ export function BatchImportPanel({
             onDrop={async (event) => {
               event.preventDefault();
               setIsDragging(false);
+              // A dropped folder arrives with a handle in Chromium, which is what
+              // lets the session be written next to the data; fall back to the
+              // plain file list everywhere else.
+              if (onDroppedFolder) {
+                const handle = await directoryHandleFromDataTransfer(event.dataTransfer);
+                if (handle) {
+                  onDroppedFolder(handle);
+                  return;
+                }
+              }
               const dropped = await readDroppedBatchFiles(event.dataTransfer);
               if (dropped.length > 0) {
                 onSelectedFiles(dropped);

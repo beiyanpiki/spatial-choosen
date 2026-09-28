@@ -98,12 +98,24 @@ export function buildExportInputs({
           ]),
         )
       : undefined;
+    // The operator-facing group name (`Group 1`, or the renamed label) travels in
+    // the same row as the class and the hex, so a spreadsheet shows the region
+    // with the wording the operator used.
+    const coloursByBarcode = selection
+      ? new Map(
+          [...selection.classByBarcode].map(([barcode, classId]) => [
+            barcode,
+            regionColor(classId, colors).name,
+          ]),
+        )
+      : undefined;
     const positionsCsv = entry.positions
       ? writePositionsWithSelection(
           entry.positions,
           selection?.selectedBarcodeSet ?? new Set<string>(),
           selection?.classByBarcode,
           colorByBarcode,
+          coloursByBarcode,
         )
       : '';
     const matrixCsv = referenceSize && entry.fullresSize

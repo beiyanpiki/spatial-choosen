@@ -1,5 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -53,6 +53,112 @@ const renderPanel = (props: Partial<React.ComponentProps<typeof BatchImportPanel
 };
 
 describe('BatchImportPanel', () => {
+  const summary = {
+    id: 'session-1',
+    name: '睾丸空转 - 副本',
+    savedAt: '2026-09-28T06:00:00.000Z',
+    step: 'imageRegions' as const,
+    packageCount: 5,
+    referenceName: '260206-SPA-K507',
+    regionCount: 2,
+    packageNames: ['260206-SPA-K507'],
+  };
+
+  it('offers to continue the last saved session', () => {
+    const onContinueSession = vi.fn();
+    const onDeleteSession = vi.fn();
+    renderPanel({ recentSessions: [summary], onContinueSession, onDeleteSession });
+
+    expect(screen.getByTestId('batch-recent-sessions')).toBeInTheDocument();
+    expect(screen.getByText('睾丸空转 - 副本')).toBeInTheDocument();
+
+    // `fireEvent`, not `userEvent`: the latter's focus tracking clashes with the
+    // zag focus-visible polyfill the radio group installs.
+    fireEvent.click(screen.getByTestId('batch-continue-session-1'));
+    expect(onContinueSession).toHaveBeenCalledWith(summary);
+
+    fireEvent.click(screen.getByText('删除记录'));
+    expect(onDeleteSession).toHaveBeenCalledWith(summary);
+  });
+
+  it('hides the continue card when this browser has no saved session', () => {
+    renderPanel();
+
+    expect(screen.queryByTestId('batch-recent-sessions')).not.toBeInTheDocument();
+  });
+
+  it('keeps the folder picker working after the saved-session card appears', () => {
+    const renderWithSessions = (recentSessions: typeof summary[]) => (
+      <ChakraProvider theme={theme}>
+        <BatchImportPanel
+          packages={[]}
+          referencePackageId={null}
+          busyLabel={null}
+          onReferenceChange={vi.fn()}
+          onSelectedFiles={vi.fn()}
+          onClear={vi.fn()}
+          onReorder={vi.fn()}
+          recentSessions={recentSessions}
+          onContinueSession={vi.fn()}
+        />
+      </ChakraProvider>
+    );
+
+    // The summaries arrive one tick after mount, which inserts the card above the
+    // inputs; `webkitdirectory` has to survive that re-render or Chrome turns the
+    // folder picker into a plain file picker.
+    const { rerender } = render(renderWithSessions([]));
+    expect(screen.getByTestId('batch-folder-input')).toHaveAttribute('webkitdirectory');
+
+    rerender(renderWithSessions([summary]));
+
+    expect(screen.getByTestId('batch-folder-input')).toHaveAttribute('webkitdirectory');
+  });
+
+  it('disables the auto-saving folder picker when the browser cannot write folders', () => {
+    renderPanel({ onPickDataFolder: vi.fn() });
+
+    // jsdom has no showDirectoryPicker, so the button explains itself instead of
+    // pretending the folder can be written to.
+    expect(screen.getByTestId('batch-data-folder-button')).toBeDisabled();
+  });
+
+  it('opens the folder input while its directory flag is intact', () => {
+    const onPickDataFolder = vi.fn();
+    renderPanel({ onPickDataFolder });
+    const input = screen.getByTestId('batch-folder-input') as HTMLInputElement;
+    const clicked = vi.fn();
+    input.addEventListener('click', clicked);
+
+    fireEvent.click(screen.getByTestId('batch-select-folder'));
+
+    expect(clicked).toHaveBeenCalledTimes(1);
+    expect(onPickDataFolder).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the directory dialog if the input lost its directory flag', () => {
+    const onPickDataFolder = vi.fn();
+    const pickerWindow = window as unknown as { showDirectoryPicker?: unknown };
+    pickerWindow.showDirectoryPicker = vi.fn();
+
+    try {
+      renderPanel({ onPickDataFolder });
+      const input = screen.getByTestId('batch-folder-input') as HTMLInputElement;
+      // Without `webkitdirectory` the same input would open a file dialog, which
+      // cannot select a package folder at all.
+      input.removeAttribute('webkitdirectory');
+      const clicked = vi.fn();
+      input.addEventListener('click', clicked);
+
+      fireEvent.click(screen.getByTestId('batch-select-folder'));
+
+      expect(onPickDataFolder).toHaveBeenCalledTimes(1);
+      expect(clicked).not.toHaveBeenCalled();
+    } finally {
+      delete pickerWindow.showDirectoryPicker;
+    }
+  });
+
   it('shows an empty state before any package is imported', () => {
     renderPanel();
 
