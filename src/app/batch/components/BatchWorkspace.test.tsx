@@ -1,5 +1,5 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { theme } from '@/theme';
@@ -77,5 +77,37 @@ describe('BatchWorkspace', () => {
 
     expect(await screen.findByTestId('batch-recent-sessions')).toBeInTheDocument();
     expect(screen.getByText('睾丸空转 - 副本')).toBeInTheDocument();
+  });
+
+  it('names the session folder after the data folder that was picked', async () => {
+    const pickerWindow = window as unknown as { showDirectoryPicker?: unknown };
+    const asked: string[] = [];
+    pickerWindow.showDirectoryPicker = vi.fn(async () => ({
+      kind: 'directory' as const,
+      name: '睾丸空转1',
+      getDirectoryHandle: async (name: string) => {
+        asked.push(name);
+        return {
+          kind: 'directory' as const,
+          name,
+          getDirectoryHandle: async () => { throw new Error('missing'); },
+          getFileHandle: async () => { throw new Error('missing'); },
+        };
+      },
+    }));
+
+    try {
+      renderWorkspace();
+      const connect = screen.getByTestId('batch-connect-folder') as HTMLButtonElement;
+      fireEvent.click(connect);
+
+      // The folder follows the data folder (睾丸空转1), not the sample folder the
+      // first package happens to live in.
+      await waitFor(() => expect(asked).toEqual(['睾丸空转1-natatoolkit']));
+      expect(screen.getByTestId('batch-autosave-detail'))
+        .toHaveTextContent('自动保存到 睾丸空转1-natatoolkit/session.json');
+    } finally {
+      delete pickerWindow.showDirectoryPicker;
+    }
   });
 });

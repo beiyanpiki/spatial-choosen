@@ -449,8 +449,16 @@ export function BatchWorkspace() {
       // The session lives in a `<folder>-natatoolkit` folder next to the data
       // whenever the browser handed us a writable folder handle; otherwise it is
       // kept in this browser only, and the UI says so.
+      // The folder is named after the *data* folder that holds the samples, so a
+      // zip named after one sample (or a legacy file-picker import) does not turn
+      // a sample folder name into the session folder name.
+      const firstRoot = groups[0]?.rootPath ?? '';
+      const parentFolderName = firstRoot.includes('/')
+        ? firstRoot.split('/').slice(0, -1).pop() ?? null
+        : null;
       const nextSessionName = options.sessionName
         ?? archives[0]?.replace(/\.zip$/i, '')
+        ?? parentFolderName
         ?? reference?.name
         ?? 'batch';
       setSessionId(createBatchSessionId());
@@ -760,6 +768,12 @@ export function BatchWorkspace() {
   const restoreSession = useCallback(async (
     session: BatchSession,
     parent: BatchDirectoryHandleLike,
+    /**
+     * Folder that was already located inside `parent` (e.g. when the operator
+     * picked the data folder of an existing session): reuse it instead of making
+     * a second `-natatoolkit` folder next to it.
+     */
+    existingWorkFolder?: BatchWorkFolder | null,
   ) => {
     setIsRestoring(true);
     setNotice(null);
@@ -807,7 +821,11 @@ export function BatchWorkspace() {
       clearRegionHistory();
       setStep(session.step);
 
-      const folder = await openWorkFolder(parent, session.name);
+      // Named after the data folder, exactly like a fresh folder import; a batch
+      // restored from an older session may carry a sample name, which must not
+      // become the folder name.
+      const folder = existingWorkFolder ?? await openWorkFolder(parent, parent.name);
+      setSessionName(parent.name);
       setWorkFolder(folder);
       setAutoSaveStatus('saved');
       setAutoSaveDetail(`已恢复会话 · 自动保存到 ${folder.name}/session.json`);
@@ -866,7 +884,11 @@ export function BatchWorkspace() {
         return;
       }
 
-      const folder = await openWorkFolder(parent, sessionName);
+      // The session folder follows the data folder the operator just picked, so
+      // "连接数据文件夹…" produces the same `<数据目录名>-natatoolkit` as importing
+      // through "选择数据文件夹（自动保存到本地）".
+      const folder = await openWorkFolder(parent, parent.name);
+      setSessionName(parent.name);
       setWorkFolder(folder);
       setAutoSaveStatus('saved');
       setAutoSaveDetail(`自动保存到 ${folder.name}/session.json`);
@@ -874,7 +896,7 @@ export function BatchWorkspace() {
     } catch (error) {
       reportPickerFailure(error);
     }
-  }, [persistSession, reportPickerFailure, restoreSession, sessionName]);
+  }, [persistSession, reportPickerFailure, restoreSession]);
 
   /**
    * Session file from disk.
@@ -908,7 +930,13 @@ export function BatchWorkspace() {
       }
       const text = await readSessionFile(folder);
       if (!text) throw new Error(`目录 ${folder.name} 里没有 ${BATCH_SESSION_FILE_NAME}`);
-      await restoreSession(parseBatchSession(text), parent);
+      // The folder was already found in this parent, so the restore keeps writing
+      // there instead of creating a second `-natatoolkit` beside it.
+      await restoreSession(parseBatchSession(text), parent, {
+        parent,
+        dir: folder,
+        name: folder.name,
+      });
     } catch (error) {
       reportPickerFailure(error);
     }
