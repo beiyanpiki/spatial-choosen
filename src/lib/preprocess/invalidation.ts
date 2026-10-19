@@ -101,6 +101,7 @@ const invalidateTissueSelectionSlice = (
   autoSelectedSpotIds: [],
   selectedSpotIds: null,
   paritySummary: null,
+  fillMatrix: null,
   supportState: options?.resetSupportMetadata ? 'unsupported' : slice.supportState,
   unsupportedReason: options?.resetSupportMetadata ? null : slice.unsupportedReason,
 });

@@ -559,6 +559,7 @@ describe('preprocess storage tissue metadata', () => {
         matrix,
         autoSelectedSpotIds: ['spot-a'],
         spotStyle: { color: '#38A169', opacity: 0.8 },
+        fillMatrix: null,
       },
     });
   });
@@ -573,11 +574,65 @@ describe('preprocess storage tissue metadata', () => {
       matrix: project.tissueSelection.matrix,
       autoSelectedSpotIds: ['spot-a'],
       spotStyle: { color: '#38A169', opacity: 0.8 },
+      fillMatrix: null,
     });
 
     project.tissueSelection.updatedAt = null;
 
     expect(toStoredTissueSelectionPayload(project.tissueSelection).tissueUpdatedAt).toBeNull();
+  });
+
+  it('round-trips a hand-edited fill matrix through the tissue selection payload', () => {
+    const project = createProject();
+    project.tissueSelection.updatedAt = '2026-04-15T00:00:00.000Z';
+    const fillMatrix = {
+      rows: 2,
+      columns: 2,
+      values: [1, 1, 0, 0],
+    };
+    project.tissueSelection.fillMatrix = fillMatrix;
+
+    const stored = toStoredTissueSelectionPayload(project.tissueSelection);
+    expect(stored.fillMatrix).toEqual(fillMatrix);
+
+    const parsed = parseTissueSelectionPayload(JSON.stringify(stored));
+    expect(parsed).toEqual({
+      canonical: {
+        version: 1,
+        tissueUpdatedAt: expect.any(String),
+        matrix: project.tissueSelection.matrix,
+        autoSelectedSpotIds: ['spot-a'],
+        spotStyle: { color: '#38A169', opacity: 0.8 },
+        fillMatrix,
+      },
+    });
+  });
+
+  it('degrades a corrupt stored fill matrix to the automatic derivation instead of rejecting the payload', () => {
+    const matrix = {
+      rows: 2,
+      columns: 2,
+      values: [1, 0, 0, 1],
+    };
+
+    const result = parseTissueSelectionPayload(JSON.stringify({
+      version: 1,
+      tissueUpdatedAt: '2026-04-14T00:00:00.000Z',
+      matrix,
+      autoSelectedSpotIds: ['spot-a'],
+      fillMatrix: { rows: 2, columns: 2, values: [1, 7, 0, 0] },
+    }));
+
+    expect(result).toEqual({
+      canonical: {
+        version: 1,
+        tissueUpdatedAt: '2026-04-14T00:00:00.000Z',
+        matrix,
+        autoSelectedSpotIds: ['spot-a'],
+        spotStyle: { color: '#38A169', opacity: 0.8 },
+        fillMatrix: null,
+      },
+    });
   });
 
   it('parses null timestamp and null matrix canonical tissue selection payloads', () => {
@@ -595,6 +650,7 @@ describe('preprocess storage tissue metadata', () => {
         matrix: null,
         autoSelectedSpotIds: [],
         spotStyle: { color: '#38A169', opacity: 0.8 },
+        fillMatrix: null,
       },
     });
   });

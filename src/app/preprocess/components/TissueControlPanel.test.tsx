@@ -24,6 +24,8 @@ type RenderOptions = {
 	showSpots?: boolean;
 	detectionWarning?: string | null;
 	chipBlockedReason?: string | null;
+	fillOutlineEnabled?: boolean;
+	fillManuallyEdited?: boolean;
 };
 
 function renderPanel({
@@ -37,6 +39,8 @@ function renderPanel({
 	showSpots = true,
 	detectionWarning = null,
 	chipBlockedReason = null,
+	fillOutlineEnabled = false,
+	fillManuallyEdited = false,
 }: RenderOptions = {}) {
 	const onThresholdModeChange = vi.fn();
 	const onActivationThresholdChange = vi.fn();
@@ -47,6 +51,7 @@ function renderPanel({
 	const onChipTypeChange = vi.fn();
 	const onSpotStyleChange = vi.fn();
 	const onFillOutlineChange = vi.fn();
+	const onResetFill = vi.fn();
 
 	function Harness() {
 		const [currentThresholdMode, setCurrentThresholdMode] =
@@ -58,7 +63,7 @@ function renderPanel({
 		const [currentTissueTool, setCurrentTissueTool] = useState(tissueTool);
 		const [currentShowSpots, setCurrentShowSpots] = useState(showSpots);
 		const [currentFillOutlineEnabled, setCurrentFillOutlineEnabled] =
-			useState(false);
+			useState(fillOutlineEnabled);
 		const [currentSpotStyle, setCurrentSpotStyle] = useState<TissueSpotStyle>({
 			color: "#38A169",
 			opacity: 0.8,
@@ -111,6 +116,8 @@ function renderPanel({
 					onFillOutlineChange(value);
 					setCurrentFillOutlineEnabled(value);
 				}}
+				fillManuallyEdited={fillManuallyEdited}
+				onResetFill={onResetFill}
 				onInvertSelection={vi.fn()}
 				onShowSpotsChange={(value) => {
 					onShowSpotsChange(value);
@@ -136,6 +143,7 @@ function renderPanel({
 		onChipTypeChange,
 		onSpotStyleChange,
 		onFillOutlineChange,
+		onResetFill,
 	};
 }
 
@@ -185,6 +193,8 @@ function renderEditingHarness({
 				onRunAutoDetection={vi.fn()}
 				fillOutlineEnabled={false}
 				onFillOutlineChange={vi.fn()}
+				fillManuallyEdited={false}
+				onResetFill={vi.fn()}
 				onInvertSelection={vi.fn()}
 				onShowSpotsChange={vi.fn()}
 			/>
@@ -237,6 +247,48 @@ describe("TissueControlPanel", () => {
 		renderPanel({ isDetecting: true });
 
 		expect(screen.getByTestId("tissue-fill-outline-toggle")).toBeDisabled();
+	});
+
+	it("hides the hand-edit fill tools until the filled contour option is enabled", () => {
+		renderPanel({ fillOutlineEnabled: false });
+
+		expect(screen.queryByTestId("tissue-tool-fill-draw")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("tissue-tool-fill-erase")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("tissue-fill-reset")).not.toBeInTheDocument();
+	});
+
+	it("selects draw and erase fill tools via the segmented control", async () => {
+		const user = userEvent.setup();
+		const { onTissueToolChange } = renderPanel({ fillOutlineEnabled: true });
+
+		const drawButton = screen.getByTestId("tissue-tool-fill-draw");
+		const eraseButton = screen.getByTestId("tissue-tool-fill-erase");
+
+		await user.click(drawButton);
+		expect(onTissueToolChange).toHaveBeenCalledWith("fill-draw");
+
+		await user.click(eraseButton);
+		expect(onTissueToolChange).toHaveBeenCalledWith("fill-erase");
+	});
+
+	it("disables the fill reset action before manual edits", () => {
+		renderPanel({
+			fillOutlineEnabled: true,
+			fillManuallyEdited: false,
+		});
+
+		expect(screen.getByTestId("tissue-fill-reset")).toBeDisabled();
+	});
+
+	it("fires the fill reset action after manual edits", async () => {
+		const user = userEvent.setup();
+		const { onResetFill } = renderPanel({
+			fillOutlineEnabled: true,
+			fillManuallyEdited: true,
+		});
+
+		await user.click(screen.getByTestId("tissue-fill-reset"));
+		expect(onResetFill).toHaveBeenCalledTimes(1);
 	});
 
 	it("renders the palette, chip, detection and refinement sections", async () => {

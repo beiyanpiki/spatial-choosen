@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { PreprocessPoint, ProjectedSpot, TissueSelectionSlice } from '@/types/preprocess';
 
 import {
+  buildManualTissueFillSelectionState,
   buildManualTissueSelectionState,
+  buildResetTissueFillSelectionState,
   buildUpdatedProjectSnapshot,
 } from './projectUpdates';
 import { createEmptyMatrix } from './tissueMatrix';
@@ -331,5 +333,159 @@ describe('projectUpdates helpers', () => {
       selectedPercent: 0,
       maskCoverage: 0,
     });
+  });
+});
+
+describe('manual tissue fill edits', () => {
+  it('materializes the fill from the derivation on the first manual edit', () => {
+    // 3x3 ring around the center: the derivation fills the enclosed center.
+    const ringMatrix = {
+      rows: 3,
+      columns: 3,
+      values: [0, 1, 0, 1, 0, 1, 0, 1, 0],
+    };
+    const current = createTissueSelection({
+      matrix: ringMatrix,
+      fillMatrix: null,
+    });
+
+    const next = buildManualTissueFillSelectionState({
+      current,
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-c',
+      nextValue: 0,
+      updatedAt: '2026-04-13T00:06:00.000Z',
+    });
+
+    // Derived base (ring + filled center) with spot-c's ring cell erased.
+    expect(next.fillMatrix).toEqual({
+      rows: 3,
+      columns: 3,
+      values: [0, 1, 0, 0, 1, 1, 0, 1, 0],
+    });
+    // The fill edit must not touch the selection pipeline state.
+    expect(next.matrix).toEqual(ringMatrix);
+    expect(next.selectedSpotIds).toEqual(current.selectedSpotIds);
+    expect(next.paritySummary).toEqual(current.paritySummary);
+    expect(next.status).toBe(current.status);
+    expect(next.isStale).toBe(current.isStale);
+  });
+
+  it('applies lasso draw edits to an empty grid when no selection exists yet', () => {
+    const current = createTissueSelection({
+      matrix: null,
+      selectedSpotIds: null,
+      paritySummary: null,
+      fillMatrix: null,
+    });
+
+    const next = buildManualTissueFillSelectionState({
+      current,
+      projectedSpots: PROJECTED_SPOTS,
+      editArea: rect(0.1, 0.1, 0.9, 0.3),
+      nextValue: 1,
+      rows: 2,
+      columns: 2,
+      updatedAt: '2026-04-13T00:07:00.000Z',
+    });
+
+    expect(next.fillMatrix).toEqual({
+      rows: 2,
+      columns: 2,
+      values: [1, 1, 0, 0],
+    });
+    expect(next.matrix).toBeNull();
+  });
+
+  it('edits an already materialized fill matrix directly', () => {
+    const fillMatrix = {
+      rows: 2,
+      columns: 2,
+      values: [1, 0, 0, 0],
+    };
+    const current = createTissueSelection({ fillMatrix });
+
+    const next = buildManualTissueFillSelectionState({
+      current,
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-b',
+      nextValue: 1,
+      updatedAt: '2026-04-13T00:08:00.000Z',
+    });
+
+    expect(next.fillMatrix).toEqual({
+      rows: 2,
+      columns: 2,
+      values: [1, 1, 0, 0],
+    });
+  });
+
+  it('returns the same slice for no-op fill edits', () => {
+    const fillMatrix = {
+      rows: 2,
+      columns: 2,
+      values: [1, 0, 0, 0],
+    };
+    const current = createTissueSelection({ fillMatrix });
+
+    const next = buildManualTissueFillSelectionState({
+      current,
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-b',
+      nextValue: 0,
+      updatedAt: '2026-04-13T00:09:00.000Z',
+    });
+
+    expect(next).toBe(current);
+  });
+
+  it('returns the same slice when no grid dimensions are available', () => {
+    const current = createTissueSelection({
+      matrix: null,
+      fillMatrix: null,
+    });
+
+    const next = buildManualTissueFillSelectionState({
+      current,
+      projectedSpots: PROJECTED_SPOTS,
+      spotId: 'spot-a',
+      nextValue: 1,
+      rows: null,
+      columns: null,
+      updatedAt: '2026-04-13T00:10:00.000Z',
+    });
+
+    expect(next).toBe(current);
+  });
+});
+
+describe('tissue fill reset', () => {
+  it('clears a materialized fill matrix back to the derived contour', () => {
+    const fillMatrix = {
+      rows: 2,
+      columns: 2,
+      values: [1, 1, 0, 0],
+    };
+    const current = createTissueSelection({ fillMatrix });
+
+    const next = buildResetTissueFillSelectionState({
+      current,
+      updatedAt: '2026-04-13T00:11:00.000Z',
+    });
+
+    expect(next.fillMatrix).toBeNull();
+    expect(next.updatedAt).toBe('2026-04-13T00:11:00.000Z');
+    expect(next.matrix).toEqual(current.matrix);
+  });
+
+  it('keeps the slice untouched when no fill is materialized', () => {
+    const current = createTissueSelection({ fillMatrix: null });
+
+    const next = buildResetTissueFillSelectionState({
+      current,
+      updatedAt: '2026-04-13T00:12:00.000Z',
+    });
+
+    expect(next).toBe(current);
   });
 });

@@ -125,11 +125,13 @@ type StoredTissueSelectionSlice = Omit<
   | 'selectedSpotIds'
   | 'matrix'
   | 'autoSelectedSpotIds'
+  | 'fillMatrix'
 > & {
   previewDataUrl: null;
   selectedSpotIds: null;
   matrix: null;
   autoSelectedSpotIds: null;
+  fillMatrix: null;
 };
 
 export type StoredTissueSelectionPayloadV1 = {
@@ -138,6 +140,8 @@ export type StoredTissueSelectionPayloadV1 = {
   matrix: TissueActivationMatrix | null;
   autoSelectedSpotIds: string[];
   spotStyle?: TissueSpotStyle;
+  /** Optional additive field: payloads written before manual fill edits lack it. */
+  fillMatrix?: TissueActivationMatrix | null;
 };
 
 type ParsedTissueSelectionPayload =
@@ -238,6 +242,9 @@ export const toStoredTissueSelectionPayload = (
   matrix: tissueSelection.matrix ? validateTissueActivationMatrix(tissueSelection.matrix) : null,
   autoSelectedSpotIds: [...tissueSelection.autoSelectedSpotIds],
   spotStyle: normalizeTissueSpotStyle(tissueSelection.spotStyle),
+  fillMatrix: tissueSelection.fillMatrix
+    ? validateTissueActivationMatrix(tissueSelection.fillMatrix)
+    : null,
 });
 
 export const parseTissueSelectionPayload = (rawValue: unknown): ParsedTissueSelectionPayload => {
@@ -285,6 +292,12 @@ export const parseTissueSelectionPayload = (rawValue: unknown): ParsedTissueSele
   // Optional additive field: payloads written before spot styling lack it.
   const spotStyle = normalizeTissueSpotStyle(parsed.spotStyle);
 
+  // Optional additive field; a corrupt hand-edited fill degrades to the
+  // automatic derivation instead of invalidating the whole payload.
+  const fillMatrix = parsed.fillMatrix === undefined
+    ? null
+    : parseTissueActivationMatrix(parsed.fillMatrix) ?? null;
+
   return {
     canonical: {
       version: 1,
@@ -292,6 +305,7 @@ export const parseTissueSelectionPayload = (rawValue: unknown): ParsedTissueSele
       matrix,
       autoSelectedSpotIds: parsed.autoSelectedSpotIds,
       spotStyle,
+      fillMatrix,
     },
   };
 };
@@ -852,6 +866,7 @@ const toProjectMeta = (
       previewDataUrl: _previewDataUrl,
       matrix: _matrix,
       autoSelectedSpotIds: _autoSelectedSpotIds,
+      fillMatrix: _fillMatrix,
       ...canonicalTissueSelection
     }) => ({
       ...canonicalTissueSelection,
@@ -861,6 +876,7 @@ const toProjectMeta = (
       selectedSpotIds: null,
       matrix: null,
       autoSelectedSpotIds: null,
+      fillMatrix: null,
     }))(project.tissueSelection),
     exportState: {
       ...project.exportState,
@@ -1024,6 +1040,7 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
   const storedTissueSelection = await readTissueSelectionStore(repairedMeta.id);
   let autoSelectedSpotIds: string[] = [];
   let matrix: TissueActivationMatrix | null = null;
+  let fillMatrix: TissueActivationMatrix | null = null;
   let storedSpotStyle: TissueSpotStyle = DEFAULT_TISSUE_SPOT_STYLE;
   let runtimeSelectedSpotIds: string[] | null = null;
   let invalidTissueSelectionPayload = false;
@@ -1031,6 +1048,7 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
   if (storedTissueSelection && 'canonical' in storedTissueSelection) {
     autoSelectedSpotIds = [...storedTissueSelection.canonical.autoSelectedSpotIds];
     matrix = storedTissueSelection.canonical.matrix;
+    fillMatrix = storedTissueSelection.canonical.fillMatrix ?? null;
     storedSpotStyle = normalizeTissueSpotStyle(storedTissueSelection.canonical.spotStyle);
     runtimeSelectedSpotIds = matrix
       ? selectedSpotIdsFromStoredIndex(matrix, repairedProjectedSpotIndex)
@@ -1124,6 +1142,7 @@ const hydrateProject = async (meta: PreprocessProjectMeta): Promise<PreprocessPr
       selectedSpotIds: runtimeSelectedSpotIds,
       autoSelectedSpotIds,
       spotStyle: storedSpotStyle,
+      fillMatrix,
     }))(project.tissueSelection),
   };
 

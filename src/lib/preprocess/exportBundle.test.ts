@@ -871,6 +871,31 @@ describe('exportBundle canonical matrix exports', () => {
     expect(disabledReadiness.data.fillSelectedSpotIds).toBeNull();
   });
 
+  it('prefers a hand-edited fill matrix over the automatic derivation on export', async () => {
+    mockLoadChipConfigData.mockResolvedValue(createFillMockChipConfigData());
+    const project = createFillProject();
+    // Hand-drawn fill covering the far corner spot, which the contour
+    // derivation leaves as background.
+    project.tissueSelection.fillMatrix = createMatrix(64, 64, [
+      [1, 2],
+      [2, 1],
+      [2, 2],
+      [2, 3],
+      [3, 2],
+      [64, 64],
+    ]);
+
+    const result = await exportProject(project);
+    const originalRows = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
+    const fillRows = indexRowsByBarcode(
+      parseTissuePositionsCsv(await readZipText(result.blob, 'tissue_positions.fill.csv')),
+    );
+
+    expect(originalRows.get('barcode-spot-d')?.in_tissue).toBe(0);
+    expect(fillRows.get('barcode-spot-d')?.in_tissue).toBe(1);
+    expect(fillRows.get('barcode-fill-center')?.in_tissue).toBe(1);
+  });
+
   it('writes tissue_positions.csv in the emitted fullres image coordinate frame when crop metadata is stale', async () => {
     const project = createBaseProject();
     const staleCropWidth = 1050;

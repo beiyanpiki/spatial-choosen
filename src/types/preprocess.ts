@@ -511,6 +511,13 @@ export type CanonicalTissueSelectionSlice = PreprocessSliceBase & {
    * tissue canvas, and is exported as `tissue_positions.fill.csv`.
    */
   fillOutlineEnabled?: boolean;
+  /**
+   * Materialized contour-filled matrix. While null the fill is derived live
+   * from `matrix` on every change; the first manual fill edit materializes
+   * it, and from then on it only changes through manual edits until tissue
+   * detection reruns or the fill is reset back to the derived contour.
+   */
+  fillMatrix?: TissueActivationMatrix | null;
 };
 
 type TissueSelectionLegacyCompatibilityFields = {

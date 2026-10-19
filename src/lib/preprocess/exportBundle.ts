@@ -323,12 +323,22 @@ export function getPreprocessZipExportReadiness(
   }
 
   const resolvedSelectedSpotIds = selectedSpotIdsFromMatrix(validatedMatrix, projectedSpots);
-  const fillSelectedSpotIds = project.tissueSelection.fillOutlineEnabled === true
-    ? new Set(selectedSpotIdsFromMatrix(
-      deriveFilledTissueMatrix(validatedMatrix),
-      projectedSpots,
-    ))
-    : null;
+  let fillSelectedSpotIds: Set<string> | null = null;
+  if (project.tissueSelection.fillOutlineEnabled === true) {
+    // A hand-edited fill takes precedence; otherwise fall back to the
+    // automatic contour derivation from the validated selection matrix.
+    const fillMatrix = project.tissueSelection.fillMatrix ?? deriveFilledTissueMatrix(validatedMatrix);
+    try {
+      fillSelectedSpotIds = new Set(selectedSpotIdsFromMatrix(fillMatrix, projectedSpots));
+    } catch (error) {
+      return {
+        canExport: false,
+        reason: error instanceof Error
+          ? error.message
+          : 'Filled tissue matrix data is invalid. Reset the filled contour before export.',
+      };
+    }
+  }
 
   return {
     canExport: true,

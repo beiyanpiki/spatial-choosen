@@ -23,7 +23,7 @@ import type { Point } from '@/types/project';
 import type { PreprocessPoint, ProjectedSpot, TissueSpotStyle } from '@/types/preprocess';
 import { DEFAULT_TISSUE_SPOT_STYLE } from '../../../lib/preprocess/tissueSpotStyle';
 
-export type ToolMode = 'activate' | 'deactivate';
+export type ToolMode = 'activate' | 'deactivate' | 'fill-draw' | 'fill-erase';
 
 const CLICK_MOVEMENT_THRESHOLD_PX = 4;
 const ZOOM_WHEEL_FACTOR = 1.1;
@@ -31,6 +31,12 @@ const ZOOM_WHEEL_FACTOR = 1.1;
 // never reads as part of the selected-spot fill palette.
 const FILL_OUTLINE_COLOR = '#00B5D8';
 const FILL_OUTLINE_WIDTH_PX = 1.5;
+const STROKE_COLORS: Record<ToolMode, string> = {
+  activate: 'rgba(0,255,0,0.8)',
+  deactivate: 'rgba(255,0,0,0.8)',
+  'fill-draw': 'rgba(0,181,216,0.9)',
+  'fill-erase': 'rgba(237,137,54,0.9)',
+};
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -567,7 +573,7 @@ export function TissueSelectionPanel({
           transform.originY + point.y * transform.height,
         );
       }
-      ctx.strokeStyle = activeTool === 'deactivate' ? 'rgba(255,0,0,0.8)' : 'rgba(0,255,0,0.8)';
+      ctx.strokeStyle = STROKE_COLORS[activeTool] ?? STROKE_COLORS.activate;
       ctx.lineWidth = 2;
       ctx.stroke();
     }

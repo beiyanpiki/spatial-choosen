@@ -76,7 +76,9 @@ import {
 import { getOrientedChipBoundsPixelRect } from "@/lib/preprocess/imageTransforms";
 import {
 	buildInvertedTissueSelectionState,
+	buildManualTissueFillSelectionState,
 	buildManualTissueSelectionState,
+	buildResetTissueFillSelectionState,
 } from "@/lib/preprocess/projectUpdates";
 import {
 	buildSourceImage,
@@ -226,7 +228,9 @@ const hasCropQcPersistentPayload = (cropQc: CropQcSlice) => Boolean(
 );
 
 const hasTissuePersistentPayload = (tissueSelection: PreprocessProject["tissueSelection"]) => (
-	tissueSelection.matrix !== null || tissueSelection.autoSelectedSpotIds.length > 0
+	tissueSelection.matrix !== null
+	|| tissueSelection.autoSelectedSpotIds.length > 0
+	|| tissueSelection.fillMatrix != null
 );
 
 const hasLocalizationDownstreamPersistentPayload = (project: PreprocessProject | null) => Boolean(
@@ -2049,6 +2053,7 @@ export function PreprocessWorkspace({
 							matrix: result.matrix,
 							autoSelectedSpotIds: result.selectedIds,
 							selectedSpotIds: result.selectedIds,
+							fillMatrix: null,
 							paritySummary: result.summary,
 							warning: result.warning,
 							status: result.warning ? "error" : "complete",
@@ -2152,17 +2157,27 @@ export function PreprocessWorkspace({
 		if (
 			!project ||
 			project.tissueSelection.fillOutlineEnabled !== true ||
-			!project.tissueSelection.matrix ||
 			tissueProjectedSpots.length === 0
 		) {
 			return [];
 		}
 
-		return selectedSpotIdsFromMatrix(
-			deriveFilledTissueMatrix(project.tissueSelection.matrix),
-			tissueProjectedSpots,
-		);
+		// A hand-edited fill matrix wins; otherwise derive live from the
+		// selection contour.
+		const fillMatrix = project.tissueSelection.fillMatrix
+			?? (project.tissueSelection.matrix
+				? deriveFilledTissueMatrix(project.tissueSelection.matrix)
+				: null);
+		if (!fillMatrix) {
+			return [];
+		}
+
+		return selectedSpotIdsFromMatrix(fillMatrix, tissueProjectedSpots);
 	}, [project, tissueProjectedSpots]);
+	const tissueFillManuallyEdited = Boolean(
+		project?.tissueSelection.fillOutlineEnabled === true
+		&& project?.tissueSelection.fillMatrix,
+	);
 	const effectiveSpotStyle =
 		project?.tissueSelection.spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE;
 	const exportRoiSummary =
@@ -2277,6 +2292,7 @@ export function PreprocessWorkspace({
 							autoSelectedSpotIds: [],
 							selectedSpotIds: null,
 							paritySummary: null,
+							fillMatrix: null,
 							warning: null,
 							status: "stale",
 							isStale: true,
@@ -2335,6 +2351,7 @@ export function PreprocessWorkspace({
 							autoSelectedSpotIds: [],
 							selectedSpotIds: null,
 							paritySummary: null,
+							fillMatrix: null,
 							warning: null,
 							status: "error",
 							isStale: false,
@@ -2363,21 +2380,38 @@ export function PreprocessWorkspace({
 				(current) => {
 					const projectedSpots = current.chipConfig.projectedSpots ?? [];
 					const updatedAt = new Date().toISOString();
-					const nextValue: TissueActivationValue = tissueTool === "activate" ? 1 : 0;
+					const isFillEdit =
+						tissueTool === "fill-draw" || tissueTool === "fill-erase";
+					const nextValue: TissueActivationValue = isFillEdit
+						? tissueTool === "fill-draw"
+							? 1
+							: 0
+						: tissueTool === "activate"
+							? 1
+							: 0;
 					const editArgs = "editArea" in edit
 						? {
 								editArea: edit.editArea,
 								nextValue,
 							}
 						: { spotId: edit.spotId };
-					const nextTissueSelection = buildManualTissueSelectionState({
-						current: current.tissueSelection,
-						projectedSpots,
-						...editArgs,
-						rows: current.chipConfig.rows,
-						columns: current.chipConfig.columns,
-						updatedAt,
-					});
+					const nextTissueSelection = isFillEdit
+						? buildManualTissueFillSelectionState({
+								current: current.tissueSelection,
+								projectedSpots,
+								...editArgs,
+								rows: current.chipConfig.rows,
+								columns: current.chipConfig.columns,
+								updatedAt,
+							})
+						: buildManualTissueSelectionState({
+								current: current.tissueSelection,
+								projectedSpots,
+								...editArgs,
+								rows: current.chipConfig.rows,
+								columns: current.chipConfig.columns,
+								updatedAt,
+							});
 					if (nextTissueSelection === current.tissueSelection) {
 						return current;
 					}
@@ -2426,6 +2460,11 @@ export function PreprocessWorkspace({
 
 	const handleFillOutlineChange = useCallback(
 		(enabled: boolean) => {
+			// The fill tools only exist while the option is on, so leaving the
+			// fill tools must fall back to a selection tool.
+			if (!enabled && (tissueTool === "fill-draw" || tissueTool === "fill-erase")) {
+				setTissueTool("activate");
+			}
 			// The filled matrix is derived from `matrix` on demand, so the toggle
 			// only persists the preference; the fill follows every selection edit.
 			onProjectMutate(
@@ -2440,8 +2479,38 @@ export function PreprocessWorkspace({
 				{ mode: "metadata", strategy: "debounced" },
 			);
 		},
-		[onProjectMutate],
+		[onProjectMutate, tissueTool],
 	);
+
+	const handleResetFill = useCallback(() => {
+		onProjectMutate(
+			(current) => {
+				const updatedAt = new Date().toISOString();
+				const nextTissueSelection = buildResetTissueFillSelectionState({
+					current: current.tissueSelection,
+					updatedAt,
+				});
+				if (nextTissueSelection === current.tissueSelection) {
+					return current;
+				}
+
+				return {
+					...current,
+					tissueSelection: nextTissueSelection,
+					exportState: {
+						...current.exportState,
+						status: "stale",
+						isStale: true,
+						updatedAt,
+						lastExportedAt: null,
+						artifacts: [],
+						error: null,
+					},
+				};
+			},
+			{ mode: "tissue", strategy: "debounced" },
+		);
+	}, [onProjectMutate]);
 
 	useEffect(() => {
 		if (!project || isEditingProjectName) return;
@@ -3130,6 +3199,8 @@ export function PreprocessWorkspace({
 													true
 												}
 												onFillOutlineChange={handleFillOutlineChange}
+												fillManuallyEdited={tissueFillManuallyEdited}
+												onResetFill={handleResetFill}
 												tissueTool={tissueTool}
 												showSpots={showTissueSpots}
 												onThresholdModeChange={(thresholdMode) => {

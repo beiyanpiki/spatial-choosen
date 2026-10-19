@@ -5,6 +5,7 @@ import type {
   TissueSelectionSlice,
 } from '@/types/preprocess';
 
+import { deriveFilledTissueMatrix } from './tissueFill';
 import {
   createEmptyMatrix,
   invertTissueActivationMatrix,
@@ -41,6 +42,40 @@ type InvertManualTissueSelectionArgs = {
   rows?: number | null;
   columns?: number | null;
   updatedAt: string;
+};
+
+type ManualTissueFillEditArgs = {
+  current: TissueSelectionSlice;
+  projectedSpots: ProjectedSpot[];
+  editArea?: PreprocessPoint[];
+  nextValue?: TissueActivationValue;
+  spotId?: string;
+  rows?: number | null;
+  columns?: number | null;
+  updatedAt: string;
+};
+
+const resolveManualFillBaseMatrix = (args: {
+  current: TissueSelectionSlice;
+  rows?: number | null;
+  columns?: number | null;
+}) => {
+  if (args.current.fillMatrix) {
+    return args.current.fillMatrix;
+  }
+
+  if (args.current.matrix) {
+    return deriveFilledTissueMatrix(args.current.matrix);
+  }
+
+  return typeof args.rows === 'number'
+    && Number.isInteger(args.rows)
+    && args.rows > 0
+    && typeof args.columns === 'number'
+    && Number.isInteger(args.columns)
+    && args.columns > 0
+    ? createEmptyMatrix(args.rows, args.columns)
+    : null;
 };
 
 export function buildUpdatedProjectSnapshot<T extends { updatedAt: string }>(
@@ -177,5 +212,109 @@ export function buildInvertedTissueSelectionState(
     updatedAt: args.updatedAt,
     warning: null,
     error: null,
+  };
+}
+
+const toMatrixCellIndex = (
+  matrix: { rows: number; columns: number },
+  arrayRow: number,
+  arrayCol: number,
+) => {
+  if (
+    !Number.isInteger(arrayRow)
+    || !Number.isInteger(arrayCol)
+    || arrayRow < 1
+    || arrayRow > matrix.rows
+    || arrayCol < 1
+    || arrayCol > matrix.columns
+  ) {
+    return null;
+  }
+
+  return (arrayRow - 1) * matrix.columns + (arrayCol - 1);
+};
+
+/**
+ * Applies a manual draw/erase edit to the contour-filled matrix. The first
+ * edit materializes the fill from the current derivation (or an empty grid
+ * when no selection exists yet), freezing it against further automatic
+ * re-derivation until detection reruns or the fill is reset.
+ *
+ * Only `fillMatrix` and `updatedAt` change: the selection pipeline state
+ * (status, matrix, selectedSpotIds) belongs to the selection edits.
+ */
+export function buildManualTissueFillSelectionState(
+  args: ManualTissueFillEditArgs,
+): TissueSelectionSlice {
+  const { current } = args;
+  const hasSpotEdit = typeof args.spotId === 'string';
+  if (typeof args.nextValue === 'undefined' || (!hasSpotEdit && !args.editArea)) {
+    return current;
+  }
+
+  const baseMatrix = resolveManualFillBaseMatrix({
+    current,
+    rows: args.rows,
+    columns: args.columns,
+  });
+  if (baseMatrix === null) {
+    return current;
+  }
+
+  let nextMatrix = baseMatrix;
+
+  if (hasSpotEdit) {
+    const targetSpot = args.projectedSpots.find((spot) => spot.id === args.spotId);
+    const index = targetSpot
+      ? toMatrixCellIndex(baseMatrix, targetSpot.arrayRow, targetSpot.arrayCol)
+      : null;
+    if (index === null || baseMatrix.values[index] === args.nextValue) {
+      return current;
+    }
+
+    nextMatrix = {
+      rows: baseMatrix.rows,
+      columns: baseMatrix.columns,
+      values: baseMatrix.values.map((value, valueIndex) => (
+        valueIndex === index ? args.nextValue as TissueActivationValue : value
+      )),
+    };
+  } else {
+    const editArea = args.editArea as PreprocessPoint[];
+    nextMatrix = applyTissueMatrixEdit({
+      matrix: baseMatrix,
+      projectedSpots: args.projectedSpots,
+      editArea,
+      nextValue: args.nextValue,
+    });
+  }
+
+  if (nextMatrix === baseMatrix) {
+    return current;
+  }
+
+  return {
+    ...current,
+    fillMatrix: nextMatrix,
+    updatedAt: args.updatedAt,
+  };
+}
+
+/**
+ * Drops a materialized fill matrix so the fill goes back to tracking the
+ * detected selection contour automatically.
+ */
+export function buildResetTissueFillSelectionState(args: {
+  current: TissueSelectionSlice;
+  updatedAt: string;
+}): TissueSelectionSlice {
+  if (args.current.fillMatrix == null) {
+    return args.current;
+  }
+
+  return {
+    ...args.current,
+    fillMatrix: null,
+    updatedAt: args.updatedAt,
   };
 }

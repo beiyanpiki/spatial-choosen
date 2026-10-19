@@ -19,7 +19,7 @@ import type { TissueSpotStyle } from '@/types/preprocess';
 
 export type ThresholdMode = 'raw' | 'gray-max' | 'gray-min';
 export type TissueSelectionSupportState = 'supported' | 'unsupported';
-export type TissueTool = 'activate' | 'deactivate';
+export type TissueTool = 'activate' | 'deactivate' | 'fill-draw' | 'fill-erase';
 
 type TissueControlPanelProps = {
   // Spot style palette
@@ -49,6 +49,8 @@ type TissueControlPanelProps = {
   // Contour fill outline
   fillOutlineEnabled: boolean;
   onFillOutlineChange: (enabled: boolean) => void;
+  fillManuallyEdited: boolean;
+  onResetFill: () => void;
   // Manual refinement
   tissueTool: TissueTool;
   showSpots: boolean;
@@ -141,6 +143,8 @@ export function TissueControlPanel({
   onRunAutoDetection,
   fillOutlineEnabled,
   onFillOutlineChange,
+  fillManuallyEdited,
+  onResetFill,
   tissueTool,
   showSpots,
   onTissueToolChange,
@@ -480,6 +484,52 @@ export function TissueControlPanel({
                 matrix, outlined on the canvas and exported as
                 tissue_positions.fill.csv.
               </Text>
+              {fillOutlineEnabled ? (
+                <Box mt={2.5}>
+                  <Text fontSize="xs" color="gray.500" mb={1.5}>
+                    Hand-edit the filled contour
+                  </Text>
+                  <ButtonGroup w="100%" size="sm">
+                    <Button
+                      flex={1}
+                      variant={tissueTool === 'fill-draw' ? 'solid' : 'outline'}
+                      colorScheme={tissueTool === 'fill-draw' ? 'brand' : 'gray'}
+                      aria-pressed={tissueTool === 'fill-draw'}
+                      isDisabled={isUnsupported || isDetecting}
+                      onClick={() => onTissueToolChange('fill-draw')}
+                      data-testid="tissue-tool-fill-draw"
+                    >
+                      Draw
+                    </Button>
+                    <Button
+                      flex={1}
+                      variant={tissueTool === 'fill-erase' ? 'solid' : 'outline'}
+                      colorScheme={tissueTool === 'fill-erase' ? 'brand' : 'gray'}
+                      aria-pressed={tissueTool === 'fill-erase'}
+                      isDisabled={isUnsupported || isDetecting}
+                      onClick={() => onTissueToolChange('fill-erase')}
+                      data-testid="tissue-tool-fill-erase"
+                    >
+                      Erase
+                    </Button>
+                    <Button
+                      flex={1}
+                      variant="outline"
+                      colorScheme="gray"
+                      isDisabled={isUnsupported || isDetecting || !fillManuallyEdited}
+                      onClick={onResetFill}
+                      data-testid="tissue-fill-reset"
+                    >
+                      Reset
+                    </Button>
+                  </ButtonGroup>
+                  <Text fontSize="xs" color="gray.500" mt={1}>
+                    Draw or erase over the canvas to edit the contour by hand.
+                    Manual edits stop the automatic fill until you reset it or
+                    rerun detection.
+                  </Text>
+                </Box>
+              ) : null}
             </Box>
           </Stack>
 
