@@ -55,7 +55,6 @@ import {
   type BatchSelectedFile,
 } from '@/lib/batch/importPackages';
 import { buildExportInputs, buildTransformMatrixCsv, computeSelection } from '@/lib/batch/pipeline';
-import { regionsFromSelectedBarcodes } from '@/lib/batch/resume';
 import {
   applyRegionStroke,
   cloneRegions,
@@ -140,6 +139,7 @@ import {
   resolveAlignment,
   resolveAllPackageRegions,
   resolveRegionsForPackage,
+  resumedRegionsForPackage,
   transferReferenceRegions,
   type AlignmentLink,
 } from '../batchState';
@@ -377,17 +377,7 @@ export function BatchWorkspace() {
       const restoredRegions: Record<string, BatchRegion[]> = {};
       let restoredAlignmentCount = 0;
       let restoredSelectionCount = 0;
-      const reconstruct = (entry: BatchPackage) => (
-        entry.resume?.selectedBarcodes && entry.spots && entry.fullresSize
-          ? regionsFromSelectedBarcodes({
-              spots: entry.spots,
-              selectedBarcodes: entry.resume.selectedBarcodes,
-              size: entry.fullresSize,
-              anchorMode: DEFAULT_SELECTION_SETTINGS.anchorMode,
-              spotDiameterFullres: entry.spotDiameterFullres,
-            })
-          : null
-      );
+      const reconstruct = (entry: BatchPackage) => resumedRegionsForPackage(entry);
       for (const entry of built) {
         restoredAlignments[entry.id] = entry.resume?.alignment ?? createDefaultAlignment();
         if (entry.resume?.alignment) restoredAlignmentCount += 1;

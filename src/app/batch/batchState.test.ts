@@ -31,6 +31,7 @@ import {
   resolveAllPackageRegions,
   resolveRegionsForPackage,
   resolveAlignment,
+  resumedRegionsForPackage,
   transferReferenceRegions,
 } from './batchState';
 
@@ -38,6 +39,71 @@ describe('default selection settings', () => {
   it('counts a spot as soon as its square touches the region', () => {
     // The review step no longer exposes these, so the defaults are the contract.
     expect(DEFAULT_SELECTION_SETTINGS).toEqual({ anchorMode: 'top-left', hitMode: 'overlap' });
+  });
+});
+
+describe('resumed regions', () => {
+  const size = { width: 400, height: 400 };
+  const spots: BatchSpot[] = [];
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < 4; col += 1) {
+      spots.push({
+        barcode: `r${row}c${col}`,
+        inTissue: true,
+        arrayRow: row + 1,
+        arrayCol: col + 1,
+        pxlRowInFullres: row * 80,
+        pxlColInFullres: col * 80,
+      });
+    }
+  }
+
+  const exportedPackage = (classByBarcode: Map<string, number> | null): BatchPackage => ({
+    id: 'package-1',
+    name: 'sample-1',
+    files: [],
+    fullresFileName: 'spatial/tissue_fullres_image.png',
+    positionsFileName: 'spatial/tissue_positions.csv',
+    scalefactorsFileName: 'spatial/scalefactors_json.json',
+    fullresSize: size,
+    previewUrl: null,
+    previewSize: null,
+    contentBounds: null,
+    spotDiameterFullres: 10,
+    spots,
+    positions: null,
+    resume: {
+      alignment: null,
+      selectedBarcodes: ['r0c0', 'r0c1', 'r2c2', 'r2c3'],
+      classByBarcode,
+      colorByClass: null,
+      nameByClass: null,
+    },
+    status: 'ready',
+    error: null,
+  });
+
+  it('keeps one editable region per exported colour class', () => {
+    const entry = exportedPackage(new Map([
+      ['r0c0', 2],
+      ['r0c1', 2],
+      ['r2c2', 5],
+      ['r2c3', 5],
+    ]));
+
+    const regions = resumedRegionsForPackage(entry);
+    expect(regions).not.toBeNull();
+    // Collapsing every barcode onto class 1 is the bug where a resumed batch
+    // came back entirely red.
+    expect([...new Set((regions ?? []).map((region) => region.colorId))].sort())
+      .toEqual([2, 5]);
+  });
+
+  it('falls back to the first class for exports without a class column', () => {
+    const regions = resumedRegionsForPackage(exportedPackage(null));
+
+    expect(regions).not.toBeNull();
+    expect((regions ?? []).every((region) => region.colorId === 1)).toBe(true);
   });
 });
 

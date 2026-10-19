@@ -12,6 +12,7 @@ import {
   mapReferenceRegionsToPackage,
   transformRegions,
 } from '@/lib/batch/regions';
+import { regionsFromSelectedBarcodes } from '@/lib/batch/resume';
 import type {
   BatchAffineMatrix,
   BatchMatrixLayout,
@@ -56,6 +57,28 @@ export function hasCustomRegions(
   packageId: string,
 ): boolean {
   return Boolean(customRegions[packageId]);
+}
+
+/**
+ * Editable regions recovered from a package exported by step 5.
+ *
+ * The `selected_class` map has to travel with the barcodes: without it every
+ * resumed region is rebuilt as class 1, so all of the operator's colours come
+ * back red.
+ */
+export function resumedRegionsForPackage(entry: BatchPackage): BatchRegion[] | null {
+  if (!entry.resume?.selectedBarcodes || !entry.spots || !entry.fullresSize) {
+    return null;
+  }
+
+  return regionsFromSelectedBarcodes({
+    spots: entry.spots,
+    selectedBarcodes: entry.resume.selectedBarcodes,
+    classByBarcode: entry.resume.classByBarcode,
+    size: entry.fullresSize,
+    anchorMode: DEFAULT_SELECTION_SETTINGS.anchorMode,
+    spotDiameterFullres: entry.spotDiameterFullres,
+  });
 }
 
 /**

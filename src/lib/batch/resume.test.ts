@@ -4,6 +4,8 @@ import type { BatchSpot, BatchSimilarityParams } from '@/types/batch';
 
 import { normalizeSimilarityParams, resolvePackageMatrix } from './affine';
 import { computeSelection } from './pipeline';
+import { parsePositionsTable, readSpotsFromPositions, writePositionsWithSelection } from './positions';
+import { createRegion } from './regions';
 import {
   parseTransformMatrixCsv,
   regionsFromSelectedBarcodes,
@@ -264,5 +266,107 @@ describe('regionsFromSelectedBarcodes on an irregular selection', () => {
     });
 
     expect([...replayed.selectedBarcodes].sort()).toEqual([...[...firstHalf, ...secondHalf]].sort());
+  });
+});
+
+describe('colour round trip through tissue_positions.csv', () => {
+  const size = { width: 600, height: 600 };
+  const spots: BatchSpot[] = [];
+  for (let row = 0; row < 12; row += 1) {
+    for (let col = 0; col < 12; col += 1) {
+      spots.push({
+        barcode: `r${row}c${col}`,
+        inTissue: true,
+        arrayRow: row + 1,
+        arrayCol: col + 1,
+        pxlRowInFullres: row * 50,
+        pxlColInFullres: col * 50,
+      });
+    }
+  }
+  const sourceCsv = [
+    'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres',
+    ...spots.map((spot) => [
+      spot.barcode,
+      1,
+      spot.arrayRow,
+      spot.arrayCol,
+      spot.pxlRowInFullres,
+      spot.pxlColInFullres,
+    ].join(',')),
+  ].join('\n');
+
+  it('keeps every barcode in the colour class it was drawn with', () => {
+    const table = parsePositionsTable(sourceCsv);
+    expect(table).not.toBeNull();
+    const parsedSpots = readSpotsFromPositions(table!);
+    const regions = [
+      createRegion([
+        { x: 0.05, y: 0.1 },
+        { x: 0.45, y: 0.1 },
+        { x: 0.45, y: 0.9 },
+        { x: 0.05, y: 0.9 },
+      ], 2),
+      createRegion([
+        { x: 0.55, y: 0.1 },
+        { x: 0.95, y: 0.1 },
+        { x: 0.95, y: 0.9 },
+        { x: 0.55, y: 0.9 },
+      ], 5),
+    ].filter((region) => region !== null);
+    const settings = { anchorMode: 'top-left' as const, hitMode: 'overlap' as const };
+
+    const drawn = computeSelection({
+      spots: parsedSpots,
+      regions,
+      size,
+      settings,
+      spotDiameterFullres: 30,
+    });
+    expect(new Set(drawn.classByBarcode.values())).toEqual(new Set([2, 5]));
+
+    // Step 5 writes the class column, and a re-import reads it back exactly as
+    // `buildBatchPackage` does.
+    const exported = writePositionsWithSelection(
+      table!,
+      drawn.selectedBarcodeSet,
+      drawn.classByBarcode,
+    );
+    const reloaded = parsePositionsTable(exported);
+    expect(reloaded).not.toBeNull();
+    const selectedColumn = reloaded!.columnIndex.in_selected;
+    const classColumn = reloaded!.columnIndex.selected_class;
+    const barcodeColumn = reloaded!.columnIndex.barcode;
+    const classByBarcode = new Map<string, number>();
+    for (const row of reloaded!.rows) {
+      if ((row[selectedColumn] ?? '').trim() !== '1') continue;
+      const barcode = (row[barcodeColumn] ?? '').trim();
+      const classId = Number((row[classColumn] ?? '').trim());
+      if (barcode !== '' && Number.isFinite(classId) && classId > 0) {
+        classByBarcode.set(barcode, classId);
+      }
+    }
+
+    const replayedSpots = readSpotsFromPositions(reloaded!);
+    const resumed = regionsFromSelectedBarcodes({
+      spots: replayedSpots,
+      selectedBarcodes: [...classByBarcode.keys()],
+      classByBarcode,
+      size,
+      anchorMode: 'top-left',
+      spotDiameterFullres: 30,
+    });
+    expect(new Set(resumed.map((region) => region.colorId))).toEqual(new Set([2, 5]));
+
+    const replayed = computeSelection({
+      spots: replayedSpots,
+      regions: resumed,
+      size,
+      settings,
+      spotDiameterFullres: 30,
+    });
+    for (const [barcode, classId] of drawn.classByBarcode) {
+      expect(replayed.classByBarcode.get(barcode)).toBe(classId);
+    }
   });
 });
