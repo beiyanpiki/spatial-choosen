@@ -27,6 +27,10 @@ export type ToolMode = 'activate' | 'deactivate';
 
 const CLICK_MOVEMENT_THRESHOLD_PX = 4;
 const ZOOM_WHEEL_FACTOR = 1.1;
+// Distinct outline color for the contour-filled matrix so the fill overlay
+// never reads as part of the selected-spot fill palette.
+const FILL_OUTLINE_COLOR = '#00B5D8';
+const FILL_OUTLINE_WIDTH_PX = 1.5;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -36,6 +40,8 @@ type TissueSelectionPanelProps = {
   projectedSpots: ProjectedSpot[];
   selectedSpotIds: string[];
   spotStyle?: TissueSpotStyle;
+  /** Spots covered by the derived contour-filled matrix; outlined when non-empty. */
+  fillSpotIds?: string[];
   showSpots?: boolean;
   disabled?: boolean;
   showControls?: boolean;
@@ -50,6 +56,7 @@ export function TissueSelectionPanel({
   projectedSpots,
   selectedSpotIds,
   spotStyle,
+  fillSpotIds,
   showSpots = true,
   disabled = false,
   showControls = true,
@@ -209,6 +216,10 @@ export function TissueSelectionPanel({
   }, [eosinCropDataUrl, imageDimensions]);
 
   const selectedSpotIdSet = useMemo(() => new Set(selectedSpotIds), [selectedSpotIds]);
+  const fillSpotIdSet = useMemo(
+    () => (fillSpotIds && fillSpotIds.length > 0 ? new Set(fillSpotIds) : null),
+    [fillSpotIds],
+  );
   const neutralSpotFillColor = '#e5e5e520';
 
   const computeBaseViewCb = useCallback(
@@ -533,6 +544,11 @@ export function TissueSelectionPanel({
         }
         ctx.fillRect(spotX, spotY, spotWidth, spotHeight);
         ctx.globalAlpha = 1;
+        if (fillSpotIdSet?.has(spot.id)) {
+          ctx.strokeStyle = FILL_OUTLINE_COLOR;
+          ctx.lineWidth = FILL_OUTLINE_WIDTH_PX;
+          ctx.strokeRect(spotX, spotY, spotWidth, spotHeight);
+        }
       }
     }
 
@@ -558,6 +574,7 @@ export function TissueSelectionPanel({
   }, [
     activeTool,
     canvasRefresh,
+    fillSpotIdSet,
     getTransformCb,
     hostRect,
     isDrawing,

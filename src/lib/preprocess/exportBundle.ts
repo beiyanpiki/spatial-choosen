@@ -11,6 +11,7 @@ import {
   resolveAuthoritativeSpotDiameterFullres,
   resolveSpotExportFullresLayout,
 } from './spotProjection';
+import { deriveFilledTissueMatrix } from './tissueFill';
 import { selectedSpotIdsFromMatrix, validateTissueActivationMatrix } from './tissueMatrix';
 import { resolveTissueSelectionSupport } from './tissueSupport';
 
@@ -38,6 +39,8 @@ type PreprocessExportReadiness =
         columns: number;
         matrixValues: number[];
         selectedSpotIds: Set<string>;
+        /** Contour-filled selection, only present when the fill outline option is enabled. */
+        fillSelectedSpotIds: Set<string> | null;
         spotDiameterFullres: number;
         tissueHiresScale: number;
         tissueLowresScale: number;
@@ -320,6 +323,12 @@ export function getPreprocessZipExportReadiness(
   }
 
   const resolvedSelectedSpotIds = selectedSpotIdsFromMatrix(validatedMatrix, projectedSpots);
+  const fillSelectedSpotIds = project.tissueSelection.fillOutlineEnabled === true
+    ? new Set(selectedSpotIdsFromMatrix(
+      deriveFilledTissueMatrix(validatedMatrix),
+      projectedSpots,
+    ))
+    : null;
 
   return {
     canExport: true,
@@ -336,6 +345,7 @@ export function getPreprocessZipExportReadiness(
       columns,
       matrixValues: validatedMatrix.values,
       selectedSpotIds: new Set(resolvedSelectedSpotIds),
+      fillSelectedSpotIds,
       spotDiameterFullres,
       tissueHiresScale,
       tissueLowresScale,
@@ -362,6 +372,7 @@ export async function exportPreprocessZip(args: {
     columns,
     matrixValues,
     selectedSpotIds,
+    fillSelectedSpotIds,
     tissueHiresScale,
     tissueLowresScale,
     alignedImageDataUrl,
@@ -390,6 +401,12 @@ export async function exportPreprocessZip(args: {
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
   zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, exportOnlyLayout.spotCenters, rows));
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));
+  if (fillSelectedSpotIds) {
+    zip.file(
+      'tissue_positions.fill.csv',
+      toCsv(projectedSpots, fillSelectedSpotIds, exportOnlyLayout.spotCenters, rows),
+    );
+  }
 
   if (includeAlignedImage) {
     if (!alignedImageDataUrl) {

@@ -87,6 +87,7 @@ import {
 	resolveAuthoritativeSpotDiameterFullres,
 } from "@/lib/preprocess/spotProjection";
 import type { PreprocessPersistMode } from "@/lib/preprocess/storage";
+import { deriveFilledTissueMatrix } from "@/lib/preprocess/tissueFill";
 import { selectedSpotIdsFromMatrix } from "@/lib/preprocess/tissueMatrix";
 import {
 	DEFAULT_TISSUE_SPOT_STYLE,
@@ -2147,6 +2148,21 @@ export function PreprocessWorkspace({
 
 		return project.tissueSelection.selectedSpotIds ?? [];
 	}, [project, tissueProjectedSpots]);
+	const tissueFillSpotIds = useMemo(() => {
+		if (
+			!project ||
+			project.tissueSelection.fillOutlineEnabled !== true ||
+			!project.tissueSelection.matrix ||
+			tissueProjectedSpots.length === 0
+		) {
+			return [];
+		}
+
+		return selectedSpotIdsFromMatrix(
+			deriveFilledTissueMatrix(project.tissueSelection.matrix),
+			tissueProjectedSpots,
+		);
+	}, [project, tissueProjectedSpots]);
 	const effectiveSpotStyle =
 		project?.tissueSelection.spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE;
 	const exportRoiSummary =
@@ -2403,6 +2419,25 @@ export function PreprocessWorkspace({
 					};
 				},
 				{ mode: "tissue", strategy: "debounced" },
+			);
+		},
+		[onProjectMutate],
+	);
+
+	const handleFillOutlineChange = useCallback(
+		(enabled: boolean) => {
+			// The filled matrix is derived from `matrix` on demand, so the toggle
+			// only persists the preference; the fill follows every selection edit.
+			onProjectMutate(
+				(current) => ({
+					...current,
+					tissueSelection: {
+						...current.tissueSelection,
+						fillOutlineEnabled: enabled,
+						updatedAt: new Date().toISOString(),
+					},
+				}),
+				{ mode: "metadata", strategy: "debounced" },
 			);
 		},
 		[onProjectMutate],
@@ -3047,6 +3082,7 @@ export function PreprocessWorkspace({
 												}
 												projectedSpots={tissueProjectedSpots}
 												selectedSpotIds={tissueSelectedSpotIds}
+												fillSpotIds={tissueFillSpotIds}
 												spotStyle={effectiveSpotStyle}
 												showSpots={showTissueSpots}
 												showControls={false}
@@ -3089,6 +3125,11 @@ export function PreprocessWorkspace({
 												supportState={tissueSupport.supportState}
 												unsupportedReason={tissueSupport.unsupportedReason}
 												isDetecting={isDetectingTissue}
+												fillOutlineEnabled={
+													project.tissueSelection.fillOutlineEnabled ===
+													true
+												}
+												onFillOutlineChange={handleFillOutlineChange}
 												tissueTool={tissueTool}
 												showSpots={showTissueSpots}
 												onThresholdModeChange={(thresholdMode) => {
@@ -3292,6 +3333,9 @@ export function PreprocessWorkspace({
 									isStale={project.exportState.isStale}
 									lastExportedAt={project.exportState.lastExportedAt}
 									includeAlignedImage={includeAlignedImage}
+									includeFillPositions={
+										project.tissueSelection.fillOutlineEnabled === true
+									}
 									roiSummary={exportRoiSummary}
 									chipSummary={exportChipSummary}
 									tissueSummary={exportTissueSummary}

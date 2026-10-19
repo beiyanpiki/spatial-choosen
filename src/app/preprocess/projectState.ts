@@ -296,6 +296,7 @@ export const buildEmptyPreprocessProject = (
 			...createSlice("idle"),
 			...DEFAULT_TISSUE_PARAMS,
 			spotStyle: DEFAULT_TISSUE_SPOT_STYLE,
+			fillOutlineEnabled: false,
 			mode: "matrix",
 			thresholdMode: "raw",
 			autoSelectedSpotIds: [],

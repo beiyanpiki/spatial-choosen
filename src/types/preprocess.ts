@@ -504,6 +504,13 @@ export type CanonicalTissueSelectionSlice = PreprocessSliceBase & {
   warning: string | null;
   /** Global presentation for tissue-selected spots on the canvas. */
   spotStyle?: TissueSpotStyle;
+  /**
+   * When enabled, a second contour-filled matrix is derived on demand from
+   * `matrix` (background enclosed by the selection contour becomes tissue).
+   * The derived matrix is independent from `matrix`, is outlined on the
+   * tissue canvas, and is exported as `tissue_positions.fill.csv`.
+   */
+  fillOutlineEnabled?: boolean;
 };
 
 type TissueSelectionLegacyCompatibilityFields = {

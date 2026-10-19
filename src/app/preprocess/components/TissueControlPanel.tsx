@@ -46,6 +46,9 @@ type TissueControlPanelProps = {
   onActivationThresholdChange: (value: number) => void;
   onBlockThresholdChange: (value: number) => void;
   onRunAutoDetection: () => void;
+  // Contour fill outline
+  fillOutlineEnabled: boolean;
+  onFillOutlineChange: (enabled: boolean) => void;
   // Manual refinement
   tissueTool: TissueTool;
   showSpots: boolean;
@@ -136,6 +139,8 @@ export function TissueControlPanel({
   onActivationThresholdChange,
   onBlockThresholdChange,
   onRunAutoDetection,
+  fillOutlineEnabled,
+  onFillOutlineChange,
   tissueTool,
   showSpots,
   onTissueToolChange,
@@ -449,6 +454,33 @@ export function TissueControlPanel({
             >
               Detect Tissue Spots
             </Button>
+            <Box
+              p={3}
+              border="1px solid"
+              borderColor="gray.200"
+              borderRadius="lg"
+              bg="gray.50"
+            >
+              {/* A checkbox-styled button: Chakra's Checkbox (like Switch)
+                  crashes under user-event's focus patching in tests. */}
+              <Button
+                role="checkbox"
+                aria-checked={fillOutlineEnabled}
+                size="xs"
+                variant={fillOutlineEnabled ? 'solid' : 'outline'}
+                colorScheme={fillOutlineEnabled ? 'brand' : 'gray'}
+                isDisabled={isUnsupported || isDetecting}
+                onClick={() => onFillOutlineChange(!fillOutlineEnabled)}
+                data-testid="tissue-fill-outline-toggle"
+              >
+                Generate filled contour
+              </Button>
+              <Text fontSize="xs" color="gray.500" mt={1}>
+                Fills the interior of each detected tissue contour into a second
+                matrix, outlined on the canvas and exported as
+                tissue_positions.fill.csv.
+              </Text>
+            </Box>
           </Stack>
 
           {/* Manual refinement */}

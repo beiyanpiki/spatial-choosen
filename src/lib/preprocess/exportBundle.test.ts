@@ -492,6 +492,87 @@ const create15umProject = (): PreprocessProject => {
   };
 };
 
+const createFillMockChipConfigData = (): ChipConfigData => ({
+  manifest: createMockChipConfigData().manifest,
+  templateEntries: [
+    {
+      barcode: 'barcode-fill-top',
+      arrayRow: 1,
+      arrayCol: 2,
+      pxl_row_in_fullres: 75,
+      pxl_col_in_fullres: 175,
+    },
+    {
+      barcode: 'barcode-fill-left',
+      arrayRow: 2,
+      arrayCol: 1,
+      pxl_row_in_fullres: 175,
+      pxl_col_in_fullres: 75,
+    },
+    {
+      barcode: 'barcode-fill-center',
+      arrayRow: 2,
+      arrayCol: 2,
+      pxl_row_in_fullres: 175,
+      pxl_col_in_fullres: 175,
+    },
+    {
+      barcode: 'barcode-fill-right',
+      arrayRow: 2,
+      arrayCol: 3,
+      pxl_row_in_fullres: 175,
+      pxl_col_in_fullres: 275,
+    },
+    {
+      barcode: 'barcode-fill-bottom',
+      arrayRow: 3,
+      arrayCol: 2,
+      pxl_row_in_fullres: 275,
+      pxl_col_in_fullres: 175,
+    },
+    {
+      barcode: 'barcode-spot-d',
+      arrayRow: 64,
+      arrayCol: 64,
+      pxl_row_in_fullres: 6375,
+      pxl_col_in_fullres: 6375,
+    },
+  ],
+});
+
+const createFillProject = (): PreprocessProject => {
+  const project = createBaseProject();
+
+  return {
+    ...project,
+    chipConfig: {
+      ...project.chipConfig,
+      projectedSpots: [
+        createProjectedSpot('fill-top', 1, 2),
+        createProjectedSpot('fill-left', 2, 1),
+        createProjectedSpot('fill-center', 2, 2),
+        createProjectedSpot('fill-right', 2, 3),
+        createProjectedSpot('fill-bottom', 3, 2),
+        createProjectedSpot('spot-d', 64, 64),
+      ],
+    },
+    tissueSelection: {
+      ...project.tissueSelection,
+      autoSelectedSpotIds: [],
+      matrix: createMatrix(64, 64, [
+        [1, 2],
+        [2, 1],
+        [2, 3],
+        [3, 2],
+      ]),
+      selectedSpotIds: [],
+      regions: [],
+      selectedRegionId: null,
+      fillOutlineEnabled: true,
+    },
+  };
+};
+
 const readZipText = async (blob: Blob, fileName: string) => {
   const archive = await JSZip.loadAsync(await blob.arrayBuffer());
   const file = archive.file(fileName);
@@ -500,6 +581,12 @@ const readZipText = async (blob: Blob, fileName: string) => {
   }
 
   return file.async('string');
+};
+
+const hasZipFile = async (blob: Blob, fileName: string) => {
+  const archive = await JSZip.loadAsync(await blob.arrayBuffer());
+
+  return archive.file(fileName) !== null;
 };
 
 type ExportedTissuePositionRow = {
@@ -725,6 +812,63 @@ describe('exportBundle canonical matrix exports', () => {
         pxl_col_in_fullres: 640,
       }),
     ]));
+  });
+
+  it('writes tissue_positions.fill.csv from the contour-filled matrix when the fill outline option is enabled', async () => {
+    mockLoadChipConfigData.mockResolvedValue(createFillMockChipConfigData());
+    const project = createFillProject();
+
+    const result = await exportProject(project);
+    const originalRows = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
+    const fillCsv = await readZipText(result.blob, 'tissue_positions.fill.csv');
+    const fillRows = indexRowsByBarcode(parseTissuePositionsCsv(fillCsv));
+
+    // The detected contour keeps its own membership untouched.
+    expect(originalRows.get('barcode-fill-center')?.in_tissue).toBe(0);
+    expect(fillCsv.startsWith('barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres')).toBe(true);
+    // The contour-enclosed center becomes tissue in the fill matrix only.
+    expect(fillRows.get('barcode-fill-center')?.in_tissue).toBe(1);
+    for (const barcode of [
+      'barcode-fill-top',
+      'barcode-fill-left',
+      'barcode-fill-right',
+      'barcode-fill-bottom',
+    ]) {
+      expect(originalRows.get(barcode)?.in_tissue).toBe(1);
+      expect(fillRows.get(barcode)?.in_tissue).toBe(1);
+    }
+    // Background outside the contour stays background in both matrices.
+    expect(originalRows.get('barcode-spot-d')?.in_tissue).toBe(0);
+    expect(fillRows.get('barcode-spot-d')?.in_tissue).toBe(0);
+  });
+
+  it('omits tissue_positions.fill.csv when the fill outline option is disabled', async () => {
+    mockLoadChipConfigData.mockResolvedValue(createFillMockChipConfigData());
+    const project = createFillProject();
+    project.tissueSelection.fillOutlineEnabled = false;
+
+    const result = await exportProject(project);
+
+    expect(await hasZipFile(result.blob, 'tissue_positions.fill.csv')).toBe(false);
+    expect(await hasZipFile(result.blob, 'tissue_positions.csv')).toBe(true);
+  });
+
+  it('exposes contour-filled membership through the export readiness contract', () => {
+    const readiness = getPreprocessZipExportReadiness(createFillProject());
+
+    if (!readiness.canExport) {
+      throw new Error(`Unexpected export block: ${readiness.reason}`);
+    }
+    expect(readiness.data.fillSelectedSpotIds).toBeInstanceOf(Set);
+    expect(readiness.data.fillSelectedSpotIds?.has('fill-center')).toBe(true);
+    expect(readiness.data.fillSelectedSpotIds?.has('spot-d')).toBe(false);
+    expect(readiness.data.selectedSpotIds.has('fill-center')).toBe(false);
+
+    const disabledReadiness = getPreprocessZipExportReadiness(createBaseProject());
+    if (!disabledReadiness.canExport) {
+      throw new Error(`Unexpected export block: ${disabledReadiness.reason}`);
+    }
+    expect(disabledReadiness.data.fillSelectedSpotIds).toBeNull();
   });
 
   it('writes tissue_positions.csv in the emitted fullres image coordinate frame when crop metadata is stale', async () => {

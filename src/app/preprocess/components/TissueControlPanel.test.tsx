@@ -46,6 +46,7 @@ function renderPanel({
 	const onShowSpotsChange = vi.fn();
 	const onChipTypeChange = vi.fn();
 	const onSpotStyleChange = vi.fn();
+	const onFillOutlineChange = vi.fn();
 
 	function Harness() {
 		const [currentThresholdMode, setCurrentThresholdMode] =
@@ -56,6 +57,8 @@ function renderPanel({
 			useState(blockThreshold);
 		const [currentTissueTool, setCurrentTissueTool] = useState(tissueTool);
 		const [currentShowSpots, setCurrentShowSpots] = useState(showSpots);
+		const [currentFillOutlineEnabled, setCurrentFillOutlineEnabled] =
+			useState(false);
 		const [currentSpotStyle, setCurrentSpotStyle] = useState<TissueSpotStyle>({
 			color: "#38A169",
 			opacity: 0.8,
@@ -103,6 +106,11 @@ function renderPanel({
 					setCurrentTissueTool(value);
 				}}
 				onRunAutoDetection={onRunAutoDetection}
+				fillOutlineEnabled={currentFillOutlineEnabled}
+				onFillOutlineChange={(value) => {
+					onFillOutlineChange(value);
+					setCurrentFillOutlineEnabled(value);
+				}}
 				onInvertSelection={vi.fn()}
 				onShowSpotsChange={(value) => {
 					onShowSpotsChange(value);
@@ -127,6 +135,7 @@ function renderPanel({
 		onShowSpotsChange,
 		onChipTypeChange,
 		onSpotStyleChange,
+		onFillOutlineChange,
 	};
 }
 
@@ -174,6 +183,8 @@ function renderEditingHarness({
 				}}
 				onTissueToolChange={vi.fn()}
 				onRunAutoDetection={vi.fn()}
+				fillOutlineEnabled={false}
+				onFillOutlineChange={vi.fn()}
 				onInvertSelection={vi.fn()}
 				onShowSpotsChange={vi.fn()}
 			/>
@@ -204,6 +215,28 @@ describe("TissueControlPanel", () => {
 		await user.click(spotGridSwitch);
 		expect(onShowSpotsChange).toHaveBeenCalledWith(false);
 		expect(spotGridSwitch).not.toBeChecked();
+	});
+
+	it("toggles the filled contour checkbox and callback", async () => {
+		const user = userEvent.setup();
+		const { onFillOutlineChange } = renderPanel();
+
+		const fillOutlineCheckbox = screen.getByTestId("tissue-fill-outline-toggle");
+		expect(fillOutlineCheckbox).not.toBeChecked();
+
+		await user.click(fillOutlineCheckbox);
+		expect(onFillOutlineChange).toHaveBeenCalledWith(true);
+		expect(fillOutlineCheckbox).toBeChecked();
+
+		await user.click(fillOutlineCheckbox);
+		expect(onFillOutlineChange).toHaveBeenCalledWith(false);
+		expect(fillOutlineCheckbox).not.toBeChecked();
+	});
+
+	it("disables the filled contour checkbox while detecting", () => {
+		renderPanel({ isDetecting: true });
+
+		expect(screen.getByTestId("tissue-fill-outline-toggle")).toBeDisabled();
 	});
 
 	it("renders the palette, chip, detection and refinement sections", async () => {

@@ -25,6 +25,8 @@ type ExportPanelProps = {
   isStale?: boolean;
   lastExportedAt?: string | null;
   includeAlignedImage?: boolean;
+  /** Controlled from the tissue step: adds tissue_positions.fill.csv to the package. */
+  includeFillPositions?: boolean;
   roiSummary?: string | null;
   chipSummary?: string | null;
   tissueSummary?: string | null;
@@ -85,6 +87,7 @@ export function ExportPanel({
   isStale = false,
   lastExportedAt = null,
   includeAlignedImage = true,
+  includeFillPositions = false,
   roiSummary = null,
   chipSummary = null,
   tissueSummary = null,
@@ -162,6 +165,9 @@ export function ExportPanel({
               <IncludedItem label="Aligned tissue image (registered overlay)" included={includeAlignedImage} />
               <IncludedItem label="Eosin reference crop" />
               <IncludedItem label="Tissue selection matrix (CSV)" />
+              {includeFillPositions ? (
+                <IncludedItem label="Filled tissue contour positions (CSV)" />
+              ) : null}
               <IncludedItem label="Spot projection metadata (JSON)" />
               <IncludedItem
                 label="NATAScope project file"
