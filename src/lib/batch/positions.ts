@@ -22,9 +22,246 @@ const REQUIRED_COLUMNS = [
 
 const toNumber = (value: string | undefined): number | null => {
   if (value === undefined) return null;
-  const parsed = Number(value.trim());
+  const trimmed = value.trim();
+  // `Number('')` is 0, which would silently move empty E/F cells to the image
+  // corner; an empty cell means "not measured", not "pixel zero".
+  if (trimmed === '') return null;
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+/**
+ * Affine map from array coordinates (C/D) to full-resolution pixels (E/F):
+ *
+ *   pxl_col = a * array_col + b * array_row + c
+ *   pxl_row = d * array_col + e * array_row + f
+ */
+export type SpotPixelMapping = {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+};
+
+const determinant3 = (matrix: readonly (readonly number[])[]): number => (
+  matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+  - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+  + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+);
+
+const solve3 = (
+  matrix: readonly (readonly number[])[],
+  vector: readonly number[],
+): [number, number, number] | null => {
+  const base = determinant3(matrix);
+  if (!Number.isFinite(base) || Math.abs(base) < 1e-9) return null;
+
+  const replaced = (column: number) => matrix.map((row, rowIndex) => (
+    row.map((value, columnIndex) => (columnIndex === column ? vector[rowIndex] : value))
+  ));
+
+  return [
+    determinant3(replaced(0)) / base,
+    determinant3(replaced(1)) / base,
+    determinant3(replaced(2)) / base,
+  ];
+};
+
+/**
+ * Fits the array -> pixel lattice from the table itself.
+ *
+ * C/D are the chip's regular row/column indices; E/F are the measured pixel
+ * coordinates. A least-squares affine fit recovers the pitch, offset and any
+ * rotation/shear without assuming an axis-aligned scan.
+ */
+export function fitSpotPixelMapping(
+  spots: readonly BatchSpot[],
+): SpotPixelMapping | null {
+  const valid = spots.filter((spot) => (
+    Number.isFinite(spot.arrayRow)
+    && Number.isFinite(spot.arrayCol)
+    && Number.isFinite(spot.pxlRowInFullres)
+    && Number.isFinite(spot.pxlColInFullres)
+  ));
+  if (valid.length < 3) return null;
+
+  let sumColCol = 0;
+  let sumColRow = 0;
+  let sumCol = 0;
+  let sumRowRow = 0;
+  let sumRow = 0;
+  let sumColPxlCol = 0;
+  let sumRowPxlCol = 0;
+  let sumPxlCol = 0;
+  let sumColPxlRow = 0;
+  let sumRowPxlRow = 0;
+  let sumPxlRow = 0;
+
+  for (const spot of valid) {
+    const col = spot.arrayCol;
+    const row = spot.arrayRow;
+    sumColCol += col * col;
+    sumColRow += col * row;
+    sumCol += col;
+    sumRowRow += row * row;
+    sumRow += row;
+    sumColPxlCol += col * spot.pxlColInFullres;
+    sumRowPxlCol += row * spot.pxlColInFullres;
+    sumPxlCol += spot.pxlColInFullres;
+    sumColPxlRow += col * spot.pxlRowInFullres;
+    sumRowPxlRow += row * spot.pxlRowInFullres;
+    sumPxlRow += spot.pxlRowInFullres;
+  }
+
+  const normal = [
+    [sumColCol, sumColRow, sumCol],
+    [sumColRow, sumRowRow, sumRow],
+    [sumCol, sumRow, valid.length],
+  ] as const;
+  const pxCol = solve3(normal, [sumColPxlCol, sumRowPxlCol, sumPxlCol]);
+  const pxRow = solve3(normal, [sumColPxlRow, sumRowPxlRow, sumPxlRow]);
+  if (!pxCol || !pxRow) return null;
+
+  const [a, b, c] = pxCol;
+  const [d, e, f] = pxRow;
+  // A zero determinant means every array point collapses onto one line; the
+  // table cannot define a pixel lattice in that case.
+  if (!Number.isFinite(a * e - b * d) || Math.abs(a * e - b * d) < 1e-9) {
+    return null;
+  }
+
+  return { a, b, c, d, e, f };
+}
+
+/**
+ * Recomputes E/F from C/D for every spot.
+ *
+ * The table's own array columns are the source of truth; the measured pixels
+ * only calibrate the lattice. When the fit is impossible the original values
+ * are kept so a malformed table still imports.
+ */
+export function recomputeSpotPixelsFromArray(
+  spots: readonly BatchSpot[],
+): { spots: BatchSpot[]; mapping: SpotPixelMapping | null } {
+  const mapping = fitSpotPixelMapping(spots);
+  if (!mapping) {
+    return { spots: spots.map((spot) => ({ ...spot })), mapping: null };
+  }
+
+  return {
+    mapping,
+    spots: spots.map((spot) => ({
+      ...spot,
+      pxlColInFullres: Math.round(
+        mapping.a * spot.arrayCol + mapping.b * spot.arrayRow + mapping.c,
+      ),
+      pxlRowInFullres: Math.round(
+        mapping.d * spot.arrayCol + mapping.e * spot.arrayRow + mapping.f,
+      ),
+    })),
+  };
+}
+
+/** Writes recomputed E/F values back into the parsed table for export. */
+export function withComputedSpotPixels(
+  table: BatchPositionsTable,
+  spots: readonly BatchSpot[],
+): BatchPositionsTable {
+  const rowIndex = table.columnIndex.pxl_row_in_fullres;
+  const colIndex = table.columnIndex.pxl_col_in_fullres;
+  const barcodeIndex = table.columnIndex.barcode;
+  if (rowIndex === undefined || colIndex === undefined || barcodeIndex === undefined) {
+    return table;
+  }
+
+  const byBarcode = new Map(spots.map((spot) => [spot.barcode, spot] as const));
+  return {
+    ...table,
+    rows: table.rows.map((row) => {
+      const barcode = (row[barcodeIndex] ?? '').trim();
+      const spot = byBarcode.get(barcode);
+      if (!spot) return row;
+
+      const cells = [...row];
+      cells[rowIndex] = String(spot.pxlRowInFullres);
+      cells[colIndex] = String(spot.pxlColInFullres);
+      return cells;
+    }),
+  };
+}
+
+/**
+ * Rebuilds E/F for every row that has array coordinates.
+ *
+ * Rows whose measured pixels are empty or malformed used to be dropped by
+ * `readSpotsFromPositions`, which left whole rows of the spot grid blank. The
+ * lattice is fitted from the rows that do have pixels, then written back to
+ * every array row so those rows come back into the overlay and the export.
+ */
+export function recomputeTablePixelsFromArray(
+  table: BatchPositionsTable,
+): { table: BatchPositionsTable; mapping: SpotPixelMapping | null } {
+  const barcodeIndex = table.columnIndex.barcode;
+  const rowIndex = table.columnIndex.array_row;
+  const colIndex = table.columnIndex.array_col;
+  const pxlRowIndex = table.columnIndex.pxl_row_in_fullres;
+  const pxlColIndex = table.columnIndex.pxl_col_in_fullres;
+  if (
+    barcodeIndex === undefined
+    || rowIndex === undefined
+    || colIndex === undefined
+    || pxlRowIndex === undefined
+    || pxlColIndex === undefined
+  ) {
+    return { table, mapping: null };
+  }
+
+  const samples: BatchSpot[] = [];
+  for (const row of table.rows) {
+    const barcode = (row[barcodeIndex] ?? '').trim();
+    const arrayRow = toNumber(row[rowIndex]);
+    const arrayCol = toNumber(row[colIndex]);
+    const pxlRow = toNumber(row[pxlRowIndex]);
+    const pxlCol = toNumber(row[pxlColIndex]);
+    if (barcode === '' || arrayRow === null || arrayCol === null) continue;
+    if (pxlRow === null || pxlCol === null) continue;
+
+    samples.push({
+      barcode,
+      inTissue: false,
+      arrayRow,
+      arrayCol,
+      pxlRowInFullres: pxlRow,
+      pxlColInFullres: pxlCol,
+    });
+  }
+
+  const mapping = fitSpotPixelMapping(samples);
+  if (!mapping) return { table, mapping: null };
+
+  return {
+    mapping,
+    table: {
+      ...table,
+      rows: table.rows.map((row) => {
+        const arrayRow = toNumber(row[rowIndex]);
+        const arrayCol = toNumber(row[colIndex]);
+        if (arrayRow === null || arrayCol === null) return row;
+
+        const cells = [...row];
+        cells[pxlRowIndex] = String(Math.round(
+          mapping.d * arrayCol + mapping.e * arrayRow + mapping.f,
+        ));
+        cells[pxlColIndex] = String(Math.round(
+          mapping.a * arrayCol + mapping.b * arrayRow + mapping.c,
+        ));
+        return cells;
+      }),
+    },
+  };
+}
 
 export function parsePositionsTable(text: string): BatchPositionsTable | null {
   const rows = parseCsv(text);

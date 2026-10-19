@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
+import type { BatchSpot } from '@/types/batch';
+
 import {
   parsePositionsTable,
+  recomputeTablePixelsFromArray,
+  recomputeSpotPixelsFromArray,
   readSpotDiameter,
   readSpotsFromPositions,
+  withComputedSpotPixels,
   writePositionsWithSelection,
 } from './positions';
 
@@ -131,5 +136,108 @@ describe('readSpotDiameter', () => {
     expect(readSpotDiameter('not json')).toBeNull();
     expect(readSpotDiameter('{"spot_diameter_fullres":"18"}')).toBeNull();
     expect(readSpotDiameter('{"spot_diameter_fullres":0}')).toBeNull();
+  });
+});
+
+describe('recomputing E/F from the array columns', () => {
+  /** 5x5 lattice with a pitch, an offset and a small shear/rotation. */
+  const buildGrid = (): BatchSpot[] => {
+    const spots: BatchSpot[] = [];
+    for (let row = 1; row <= 5; row += 1) {
+      for (let col = 1; col <= 5; col += 1) {
+        spots.push({
+          barcode: `r${row}c${col}`,
+          inTissue: true,
+          arrayRow: row,
+          arrayCol: col,
+          pxlColInFullres: 100 + col * 10 + row * 2,
+          pxlRowInFullres: 500 - row * 10 + col,
+        });
+      }
+    }
+    return spots;
+  };
+
+  it('recovers every pixel coordinate from C/D', () => {
+    const grid = buildGrid();
+    const { spots, mapping } = recomputeSpotPixelsFromArray(grid);
+
+    expect(mapping).not.toBeNull();
+    spots.forEach((spot, index) => {
+      expect(spot.pxlColInFullres).toBe(grid[index].pxlColInFullres);
+      expect(spot.pxlRowInFullres).toBe(grid[index].pxlRowInFullres);
+    });
+  });
+
+  it('writes the recomputed E/F into the table used for export', () => {
+    const grid = buildGrid();
+    const csv = [
+      'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres',
+      ...grid.map((spot) => [
+        spot.barcode,
+        1,
+        spot.arrayRow,
+        spot.arrayCol,
+        spot.pxlRowInFullres,
+        spot.pxlColInFullres,
+      ].join(',')),
+    ].join('\n');
+    const table = parsePositionsTable(csv);
+    expect(table).not.toBeNull();
+
+    const shifted = grid.map((spot) => ({
+      ...spot,
+      pxlRowInFullres: spot.pxlRowInFullres + 7,
+      pxlColInFullres: spot.pxlColInFullres + 7,
+    }));
+    const updated = withComputedSpotPixels(table!, shifted);
+    const exported = writePositionsWithSelection(updated, new Set());
+    const firstDataRow = exported.trim().split('\n')[1].split(',');
+    const header = exported.trim().split('\n')[0].split(',');
+
+    expect(firstDataRow[header.indexOf('pxl_row_in_fullres')]).toBe(
+      String(shifted[0].pxlRowInFullres),
+    );
+    expect(firstDataRow[header.indexOf('pxl_col_in_fullres')]).toBe(
+      String(shifted[0].pxlColInFullres),
+    );
+  });
+
+  it('keeps the original values when the lattice cannot be fitted', () => {
+    const spots: BatchSpot[] = [
+      { barcode: 'a', inTissue: true, arrayRow: 1, arrayCol: 1, pxlRowInFullres: 10, pxlColInFullres: 10 },
+      { barcode: 'b', inTissue: true, arrayRow: 1, arrayCol: 1, pxlRowInFullres: 20, pxlColInFullres: 20 },
+    ];
+
+    const { spots: kept, mapping } = recomputeSpotPixelsFromArray(spots);
+    expect(mapping).toBeNull();
+    expect(kept.map((spot) => [spot.pxlRowInFullres, spot.pxlColInFullres]))
+      .toEqual([[10, 10], [20, 20]]);
+  });
+
+  it('fills rows whose measured E/F are blank instead of dropping them', () => {
+    const grid = buildGrid();
+    const csv = [
+      'barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres',
+      ...grid.map((spot, index) => [
+        spot.barcode,
+        1,
+        spot.arrayRow,
+        spot.arrayCol,
+        index < 10 ? '' : spot.pxlRowInFullres,
+        index < 10 ? '' : spot.pxlColInFullres,
+      ].join(',')),
+    ].join('\n');
+    const table = parsePositionsTable(csv);
+    expect(table).not.toBeNull();
+
+    const { table: computed, mapping } = recomputeTablePixelsFromArray(table!);
+    expect(mapping).not.toBeNull();
+
+    const spots = readSpotsFromPositions(computed);
+    // Every array row survives, including the two rows with no measured pixels.
+    expect(spots).toHaveLength(grid.length);
+    expect(spots[0].pxlRowInFullres).toBe(grid[0].pxlRowInFullres);
+    expect(spots[0].pxlColInFullres).toBe(grid[0].pxlColInFullres);
   });
 });

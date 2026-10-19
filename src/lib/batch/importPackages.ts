@@ -8,6 +8,7 @@ import {
   POSITIONS_FILE_PATTERN,
   SCALEFACTORS_FILE_PATTERN,
   parsePositionsTable,
+  recomputeTablePixelsFromArray,
   readSpotDiameter,
   readSpotsFromPositions,
 } from './positions';
@@ -396,6 +397,12 @@ export async function buildBatchPackage(
             .filter(([classId, name]) => Number.isFinite(classId) && classId > 0 && name !== ''),
         );
     const preview = await createPreviewDerivative(fullresFile.blob);
+    // C/D are the chip's array indices and define the lattice; E/F are the
+    // measured pixel values. Recompute the pixels from the array coordinates so
+    // the overlay and the exported table always describe the same regular grid.
+    const recomputed = recomputeTablePixelsFromArray(positions);
+    const positionsWithPixels = recomputed.table;
+    const spots = readSpotsFromPositions(positionsWithPixels);
 
     return {
       ...base,
@@ -404,8 +411,8 @@ export async function buildBatchPackage(
       previewSize: preview.size,
       contentBounds: preview.contentBounds,
       spotDiameterFullres: readSpotDiameter(scalefactorsText),
-      spots: readSpotsFromPositions(positions),
-      positions,
+      spots,
+      positions: positionsWithPixels,
       resume: selectedBarcodes || alignment
         ? { alignment, selectedBarcodes, classByBarcode, colorByClass, nameByClass }
         : null,
