@@ -249,6 +249,9 @@ const assertNoLegacyCanonicalTissueFields = (slice: Record<string, unknown>) => 
 const packageSourcePath = (kind: PreprocessImageKind) => `source-assets/${kind}`;
 const packageHeFocusPath = () => 'derived-assets/he-focus';
 const packageHeFocusStoreKey = (projectId: string) => `${projectId}:he-focus`;
+const packageCheckerboardPreviewPath = () => 'derived-assets/crop-qc-checkerboard';
+const packageFeatureMatchesPreviewPath = () => 'derived-assets/crop-qc-feature-matches';
+const packageAlignedImagePath = () => 'aligned_tissue_image.png';
 
 const openPackagedAssetDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
   const request = window.indexedDB.open(PREPROCESS_DB_NAME);
@@ -322,6 +325,19 @@ const imageUrlToBlob = async (image: PreprocessSourceImage) => {
   return response.blob();
 };
 
+const derivedPreviewUrlToBlob = async (dataUrl: string | null | undefined): Promise<Blob | null> => {
+  if (!dataUrl) return null;
+  try {
+    const response = await fetch(dataUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to read preview URL "${dataUrl.slice(0, 32)}"`);
+    }
+    return await response.blob();
+  } catch {
+    return null;
+  }
+};
+
 export async function getPreprocessPackageSourceEntries(project: PreprocessProject) {
   const sourceEntries = await Promise.all(
     (['eosin', 'he'] as const).map(async (kind) => {
@@ -347,9 +363,38 @@ export async function getPreprocessPackageSourceEntries(project: PreprocessProje
       }
     : null;
 
+  // Checkerboard/feature-matches previews are dropped from project.json, so the
+  // ZIP must carry them as entries or restored projects can no longer export
+  // with the registered H&E overlay.
+  const [checkerboardPreviewBlob, featureMatchesPreviewBlob] = await Promise.all([
+    derivedPreviewUrlToBlob(
+      project.cropQc.checkerboardPreview?.dataUrl ?? project.cropQc.checkerboardPreviewDataUrl ?? null,
+    ),
+    derivedPreviewUrlToBlob(
+      project.cropQc.featureMatchesPreview?.dataUrl ?? project.cropQc.featureMatchesPreviewDataUrl ?? null,
+    ),
+  ]);
+
+  const checkerboardEntry = checkerboardPreviewBlob
+    ? {
+        kind: 'crop-qc-checkerboard',
+        path: packageCheckerboardPreviewPath(),
+        blob: checkerboardPreviewBlob,
+      }
+    : null;
+  const featureMatchesEntry = featureMatchesPreviewBlob
+    ? {
+        kind: 'crop-qc-feature-matches',
+        path: packageFeatureMatchesPreviewPath(),
+        blob: featureMatchesPreviewBlob,
+      }
+    : null;
+
   return [
     ...sourceEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)),
     ...(focusedHeEntry ? [focusedHeEntry] : []),
+    ...(checkerboardEntry ? [checkerboardEntry] : []),
+    ...(featureMatchesEntry ? [featureMatchesEntry] : []),
   ];
 }
 
@@ -442,9 +487,47 @@ const attachPackagedDerivedImage = async (project: PreprocessProject, zip: JSZip
   };
 };
 
+const attachPackagedCropQcPreviews = async (project: PreprocessProject, zip: JSZip) => {
+  // Prefer the dedicated preview entries; fall back to the export-only aligned
+  // image so packages written before the dedicated entries existed still
+  // restore the registered overlay.
+  const checkerboardEntry = zip.file(packageCheckerboardPreviewPath()) ?? zip.file(packageAlignedImagePath());
+  const featureMatchesEntry = zip.file(packageFeatureMatchesPreviewPath());
+  const checkerboardDataUrl = checkerboardEntry
+    ? URL.createObjectURL(await checkerboardEntry.async('blob'))
+    : null;
+  const featureMatchesDataUrl = featureMatchesEntry
+    ? URL.createObjectURL(await featureMatchesEntry.async('blob'))
+    : null;
+
+  if (!checkerboardDataUrl && !featureMatchesDataUrl) {
+    return project;
+  }
+
+  return {
+    ...project,
+    cropQc: {
+      ...project.cropQc,
+      ...(checkerboardDataUrl
+        ? {
+            checkerboardPreview: { dataUrl: checkerboardDataUrl },
+            checkerboardPreviewDataUrl: checkerboardDataUrl,
+          }
+        : {}),
+      ...(featureMatchesDataUrl
+        ? {
+            featureMatchesPreview: { dataUrl: featureMatchesDataUrl },
+            featureMatchesPreviewDataUrl: featureMatchesDataUrl,
+          }
+        : {}),
+    },
+  };
+};
+
 const attachPackagedAssets = async (project: PreprocessProject, zip: JSZip) => {
   const withSources = await attachPackagedSourceBlobs(project, zip);
-  return attachPackagedDerivedImage(withSources, zip);
+  const withHeFocus = await attachPackagedDerivedImage(withSources, zip);
+  return attachPackagedCropQcPreviews(withHeFocus, zip);
 };
 
 const assertString = (value: unknown, fieldName: string) => {

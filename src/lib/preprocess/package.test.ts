@@ -7,7 +7,7 @@ import {
 } from '@/app/preprocess/projectState';
 import type { PreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
-import { deserializePreprocessImport, deserializePreprocessProject, PACKAGE_VERSION, serializePreprocessProject } from '@/lib/preprocess/package';
+import { deserializePreprocessImport, deserializePreprocessProject, getPreprocessPackageSourceEntries, PACKAGE_VERSION, serializePreprocessProject } from '@/lib/preprocess/package';
 
 const createProjectedSpot = (
   id: string,
@@ -747,5 +747,93 @@ describe('preprocess package matrix-first validation', () => {
 
 		const restored = await deserializePreprocessProject(packaged);
 		expect(restored.cropQc.status).toBe('stale');
+	});
+
+	it('restores checkerboard and feature-matches previews from packaged ZIP entries on import', async () => {
+		const project = createProject();
+		project.cropQc.status = 'complete';
+		project.cropQc.qcAccepted = true;
+		project.cropQc.cropWidth = 640;
+		project.cropQc.cropHeight = 640;
+		project.cropQc.tissue_hires_scalef = 0.5;
+		project.cropQc.tissue_lowres_scalef = 0.25;
+		project.cropQc.spot_diameter_fullres = 18;
+		project.cropQc.fiducial_diameter_fullres = 27;
+		project.cropQc.cropAssets = {
+			eosin: {
+				fullres: { dataUrl: 'data:image/png;base64,eosin-fullres' },
+				hires: { dataUrl: 'data:image/png;base64,eosin-hires' },
+				lowres: { dataUrl: 'data:image/png;base64,eosin-lowres' },
+			},
+			he: {
+				fullres: { dataUrl: 'data:image/png;base64,he-fullres' },
+				hires: { dataUrl: 'data:image/png;base64,he-hires' },
+				lowres: { dataUrl: 'data:image/png;base64,he-lowres' },
+			},
+		};
+		project.cropQc.checkerboardPreview = { dataUrl: 'data:image/png;base64,checkerboard' };
+		project.cropQc.featureMatchesPreview = { dataUrl: 'data:image/png;base64,feature-matches' };
+		project.heFocus.focusedImageDataUrl = 'data:image/png;base64,he-focus';
+
+		const checkerboardBytes = new Uint8Array([21, 22, 23]);
+		const featureMatchesBytes = new Uint8Array([24, 25, 26]);
+		vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === 'data:image/png;base64,checkerboard') {
+				return new Response(new Blob([checkerboardBytes], { type: 'image/png' }));
+			}
+			if (url === 'data:image/png;base64,feature-matches') {
+				return new Response(new Blob([featureMatchesBytes], { type: 'image/png' }));
+			}
+			if (url === 'data:image/png;base64,he-focus') {
+				return new Response(new Blob([new Uint8Array([27, 28])], { type: 'image/png' }));
+			}
+			throw new TypeError(`Unexpected fetch: ${url}`);
+		}));
+		vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => `blob:restored:${blob.size}`);
+
+		const zip = new JSZip();
+		zip.file('project.json', await (await serializePreprocessProject(project)).text());
+		const entries = await getPreprocessPackageSourceEntries(project);
+		expect(entries.map((entry) => entry.path)).toEqual([
+			'derived-assets/he-focus',
+			'derived-assets/crop-qc-checkerboard',
+			'derived-assets/crop-qc-feature-matches',
+		]);
+		for (const entry of entries) {
+			zip.file(entry.path, new Uint8Array(await entry.blob.arrayBuffer()));
+		}
+		const file = new File([await zip.generateAsync({ type: 'blob' })], 'project.zip', {
+			type: 'application/zip',
+		});
+
+		const restored = await deserializePreprocessImport(file);
+
+		expect(restored.cropQc.checkerboardPreview?.dataUrl).toBe(`blob:restored:${checkerboardBytes.byteLength}`);
+		expect(restored.cropQc.checkerboardPreviewDataUrl).toBe(`blob:restored:${checkerboardBytes.byteLength}`);
+		expect(restored.cropQc.featureMatchesPreview?.dataUrl).toBe(`blob:restored:${featureMatchesBytes.byteLength}`);
+	});
+
+	it('falls back to the export-only aligned image when restoring checkerboard previews from legacy packages', async () => {
+		const project = createProject();
+		project.cropQc.checkerboardPreview = { dataUrl: null };
+
+		const alignedBytes = new Uint8Array([31, 32, 33]);
+		vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => `blob:legacy:${blob.size}`);
+
+		const zip = new JSZip();
+		zip.file('project.json', JSON.stringify({
+			version: PACKAGE_VERSION,
+			project: toCanonicalProjectPayload(project),
+		}));
+		zip.file('aligned_tissue_image.png', alignedBytes);
+		const file = new File([await zip.generateAsync({ type: 'blob' })], 'project.zip', {
+			type: 'application/zip',
+		});
+
+		const restored = await deserializePreprocessImport(file);
+
+		expect(restored.cropQc.checkerboardPreview?.dataUrl).toBe(`blob:legacy:${alignedBytes.byteLength}`);
+		expect(restored.cropQc.checkerboardPreviewDataUrl).toBe(`blob:legacy:${alignedBytes.byteLength}`);
 	});
 });

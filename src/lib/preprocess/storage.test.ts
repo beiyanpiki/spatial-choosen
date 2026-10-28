@@ -1518,14 +1518,24 @@ describe('preprocess storage tissue metadata', () => {
 			['blob:http://localhost/he-fullres', createPngBytes(204, 204)],
 			['blob:http://localhost/he-hires', createPngBytes(205, 205)],
 			['blob:http://localhost/he-lowres', createPngBytes(206, 206)],
+			['blob:http://localhost/checkerboard', createPngBytes(207, 207)],
 		]);
 		installImageProxyMocks();
-		// The export happens in the project's original session, where the object
-		// URLs are alive; the import happens in a fresh session where they are
-		// dead — the reported restore bug.
+		// Object URLs created in the active session stay fetchable, like in a
+		// real browser; URLs from the exporting session die once it ends.
+		const sessionObjectUrls = new Map<string, Blob>();
+		vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => {
+			const url = `blob:session:${sessionObjectUrls.size + 1}`;
+			sessionObjectUrls.set(url, blob);
+			return url;
+		});
 		let objectUrlsAlive = true;
 		const fetchMock = vi.fn(async (input: string) => {
 			const url = String(input);
+			const sessionBlob = sessionObjectUrls.get(url);
+			if (sessionBlob) {
+				return new Response(sessionBlob);
+			}
 			if (url.startsWith('blob:')) {
 				const bytes = objectUrlsAlive ? cropObjectUrlBytes.get(url) : undefined;
 				if (bytes) {
@@ -1601,6 +1611,7 @@ describe('preprocess storage tissue metadata', () => {
 				lowres: { dataUrl: 'blob:http://localhost/he-lowres' },
 			},
 		};
+		project.cropQc.checkerboardPreview = { dataUrl: 'blob:http://localhost/checkerboard' };
 
 		const packagedProjectJson = await (await serializePreprocessProject(project)).text();
 		objectUrlsAlive = false;
@@ -1609,6 +1620,7 @@ describe('preprocess storage tissue metadata', () => {
 		zip.file('project.json', packagedProjectJson);
 		zip.file('source-assets/eosin', eosinSourceBytes);
 		zip.file('source-assets/he', heSourceBytes);
+		zip.file('derived-assets/crop-qc-checkerboard', createPngBytes(207, 207));
 
 		// Import path used by the preprocess landing page.
 		const imported = normalizeProjectForWorkspace(await deserializePreprocessImport(
@@ -1626,6 +1638,7 @@ describe('preprocess storage tissue metadata', () => {
 		expect(workspace.cropQc.qcAccepted).toBe(true);
 		expect(workspace.cropQc.cropAssets?.he?.fullres.dataUrl).toBeTruthy();
 		expect(workspace.cropQc.cropAssets?.eosin?.fullres.dataUrl).toBeTruthy();
+		expect(workspace.cropQc.checkerboardPreview?.dataUrl).toBeTruthy();
 		expect(workspace.tissueSelection.status).toBe('complete');
 		expect(workspace.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
 		expect(workspace.chipConfig.status).toBe('complete');
@@ -1649,13 +1662,16 @@ describe('preprocess storage tissue metadata', () => {
 			cropHeight: workspace.cropQc.cropHeight ?? 0,
 		});
 
-		const readiness = getPreprocessZipExportReadiness({
-			...workspace,
-			chipConfig: {
-				...workspace.chipConfig,
-				projectedSpots,
+		const readiness = getPreprocessZipExportReadiness(
+			{
+				...workspace,
+				chipConfig: {
+					...workspace.chipConfig,
+					projectedSpots,
+				},
 			},
-		});
+			{ includeAlignedImage: true },
+		);
 
 		expect(readiness.canExport).toBe(true);
 	});
