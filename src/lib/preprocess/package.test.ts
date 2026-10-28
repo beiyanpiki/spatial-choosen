@@ -7,7 +7,7 @@ import {
 } from '@/app/preprocess/projectState';
 import type { PreprocessProject, ProjectedSpot, TissueActivationValue } from '@/types/preprocess';
 
-import { deserializePreprocessImport, deserializePreprocessProject, PACKAGE_VERSION } from '@/lib/preprocess/package';
+import { deserializePreprocessImport, deserializePreprocessProject, PACKAGE_VERSION, serializePreprocessProject } from '@/lib/preprocess/package';
 
 const createProjectedSpot = (
   id: string,
@@ -300,6 +300,12 @@ const toLegacyCropMetadataPayload = (project: PreprocessProject) => {
     cropQc: legacyCropQc,
   };
 };
+
+const PACKAGE_CROP_OBJECT_URLS = [
+  { bytes: new Uint8Array([1, 2, 3, 4]), eosinUrl: 'blob:http://localhost/eosin-fullres', heUrl: 'blob:http://localhost/he-fullres' },
+  { bytes: new Uint8Array([5, 6, 7, 8]), eosinUrl: 'blob:http://localhost/eosin-hires', heUrl: 'blob:http://localhost/he-hires' },
+  { bytes: new Uint8Array([9, 10, 11, 12]), eosinUrl: 'blob:http://localhost/eosin-lowres', heUrl: 'blob:http://localhost/he-lowres' },
+] as const;
 
 describe('preprocess package matrix-first validation', () => {
   beforeEach(() => {
@@ -623,5 +629,123 @@ describe('preprocess package matrix-first validation', () => {
 		);
 
 		expect(result.heFocus.chipBounds).toEqual(heFocusBounds);
+	});
+
+	it('packages runtime blob: crop asset URLs as durable data URLs so completed crop QC survives import', async () => {
+		const project = createProject();
+		project.currentStep = 'exportState';
+		project.sourceAssets.images = {
+			eosin: createSourceImage('eosin'),
+			he: createSourceImage('he'),
+		};
+		project.alignment.solveAccepted = true;
+		project.alignment.qualityFlags.accepted = true;
+		project.cropQc.status = 'complete';
+		project.cropQc.qcAccepted = true;
+		project.cropQc.eosinReferenceGeometry = {
+			rect: { x: 0, y: 0, width: 1, height: 1 },
+			width: 640,
+			height: 640,
+		};
+		project.cropQc.cropWidth = 640;
+		project.cropQc.cropHeight = 640;
+		project.cropQc.tissue_hires_scalef = 0.5;
+		project.cropQc.tissue_lowres_scalef = 0.25;
+		project.cropQc.spot_diameter_fullres = 18;
+		project.cropQc.fiducial_diameter_fullres = 27;
+
+		// Reloading a project from storage swaps crop asset data URLs for
+		// transient object URLs; a package that embeds them verbatim cannot be
+		// restored in another session.
+		const objectUrlPayloads = new Map<string, Uint8Array>(
+			PACKAGE_CROP_OBJECT_URLS.flatMap((entry) => [
+				[entry.eosinUrl, entry.bytes] as const,
+				[entry.heUrl, entry.bytes] as const,
+			]),
+		);
+		vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			const bytes = objectUrlPayloads.get(url);
+			if (!bytes) {
+				throw new TypeError(`Unexpected fetch: ${url}`);
+			}
+			return new Response(new Blob([bytes], { type: 'image/png' }));
+		}));
+		project.cropQc.cropAssets = {
+			eosin: {
+				fullres: { dataUrl: PACKAGE_CROP_OBJECT_URLS[0].eosinUrl },
+				hires: { dataUrl: PACKAGE_CROP_OBJECT_URLS[1].eosinUrl },
+				lowres: { dataUrl: PACKAGE_CROP_OBJECT_URLS[2].eosinUrl },
+			},
+			he: {
+				fullres: { dataUrl: PACKAGE_CROP_OBJECT_URLS[0].heUrl },
+				hires: { dataUrl: PACKAGE_CROP_OBJECT_URLS[1].heUrl },
+				lowres: { dataUrl: PACKAGE_CROP_OBJECT_URLS[2].heUrl },
+			},
+		};
+
+		const packaged = await serializePreprocessProject(project);
+		const packagedText = await packaged.text();
+
+		expect(packagedText).not.toMatch(/"blob:/);
+		const payload = JSON.parse(packagedText) as {
+			project: { cropQc: { cropAssets: Record<'eosin' | 'he', Record<'fullres' | 'hires' | 'lowres', { dataUrl: string }>> } };
+		};
+		for (const [index, level] of ([ 'fullres', 'hires', 'lowres' ] as const).entries()) {
+			const expectedDataUrl = `data:image/png;base64,${Buffer.from(PACKAGE_CROP_OBJECT_URLS[index].bytes).toString('base64')}`;
+			expect(payload.project.cropQc.cropAssets.eosin[level].dataUrl).toBe(expectedDataUrl);
+			expect(payload.project.cropQc.cropAssets.he[level].dataUrl).toBe(expectedDataUrl);
+		}
+
+		const restored = normalizeProjectForWorkspace(
+			await deserializePreprocessProject(packaged),
+		);
+
+		expect(restored.currentStep).toBe('exportState');
+		expect(restored.cropQc.status).toBe('complete');
+		expect(restored.cropQc.qcAccepted).toBe(true);
+		expect(restored.cropQc.cropAssets?.he?.fullres.dataUrl).toBe(
+			`data:image/png;base64,${Buffer.from(PACKAGE_CROP_OBJECT_URLS[0].bytes).toString('base64')}`,
+		);
+	});
+
+	it('downgrades unfetchable runtime crop assets to the empty canonical crop state instead of packaging dead references', async () => {
+		const project = createProject();
+		project.cropQc.status = 'complete';
+		project.cropQc.qcAccepted = true;
+		project.cropQc.cropWidth = 640;
+		project.cropQc.cropHeight = 640;
+		project.cropQc.tissue_hires_scalef = 0.5;
+		project.cropQc.tissue_lowres_scalef = 0.25;
+		project.cropQc.spot_diameter_fullres = 18;
+		project.cropQc.fiducial_diameter_fullres = 27;
+		project.cropQc.cropAssets = {
+			eosin: {
+				fullres: { dataUrl: 'blob:http://localhost/dead-eosin-fullres' },
+				hires: { dataUrl: 'blob:http://localhost/dead-eosin-hires' },
+				lowres: { dataUrl: 'blob:http://localhost/dead-eosin-lowres' },
+			},
+			he: {
+				fullres: { dataUrl: 'blob:http://localhost/dead-he-fullres' },
+				hires: { dataUrl: 'blob:http://localhost/dead-he-hires' },
+				lowres: { dataUrl: 'blob:http://localhost/dead-he-lowres' },
+			},
+		};
+		vi.stubGlobal('fetch', vi.fn(async () => {
+			throw new TypeError('Failed to fetch');
+		}));
+
+		const packaged = await serializePreprocessProject(project);
+		const payload = JSON.parse(await packaged.text()) as {
+			project: { cropQc: { status: string; qcAccepted: boolean; cropAssets: { eosin: unknown; he: unknown } } };
+		};
+
+		expect(payload.project.cropQc.status).toBe('stale');
+		expect(payload.project.cropQc.qcAccepted).toBe(false);
+		expect(payload.project.cropQc.cropAssets.eosin).toBeNull();
+		expect(payload.project.cropQc.cropAssets.he).toBeNull();
+
+		const restored = await deserializePreprocessProject(packaged);
+		expect(restored.cropQc.status).toBe('stale');
 	});
 });
