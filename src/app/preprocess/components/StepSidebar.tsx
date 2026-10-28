@@ -46,6 +46,12 @@ export const PREPROCESS_STEP_ITEMS: readonly StepItem[] = [
     testId: 'preprocess-step-tissue',
   },
   {
+    id: 'exportPreview',
+    label: 'Export Preview',
+    description: 'Compare the cropped eosin and H&E images with the standalone spot image.',
+    testId: 'preprocess-step-export-preview',
+  },
+  {
     id: 'exportState',
     label: 'Export Preprocessing Package',
     description: 'Download the preprocessing package for downstream analysis in NATA Insight Bioinformatics Software.',
@@ -78,6 +84,10 @@ const stepStateFor = (project: PreprocessProject, stepId: PreprocessStepId) => {
       return project.chipConfig;
     case 'tissueSelection':
       return project.tissueSelection;
+    case 'exportPreview':
+      // View-only step: mirror the export slice status because the preview
+      // verifies the same export-facing data freshness.
+      return project.exportState;
     case 'exportState':
       return project.exportState;
     default:
@@ -107,6 +117,8 @@ const isStepEnabled = (project: PreprocessProject, stepId: PreprocessStepId) => 
       return project.cropQc.status === 'complete';
     case 'tissueSelection':
       return project.cropQc.status === 'complete';
+    case 'exportPreview':
+      return project.tissueSelection.status === 'complete';
     case 'exportState':
       return project.tissueSelection.status === 'complete';
     default:

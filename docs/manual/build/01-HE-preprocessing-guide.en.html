@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>H&E Image Preprocessing Guide</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 17mm 20mm 17mm;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+  body {
+    font-family: "Noto Sans", "Noto Sans CJK SC", "Noto Sans", sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.7;
+    color: #1f2937;
+  }
+  h1 {
+    font-size: 21pt;
+    line-height: 1.35;
+    color: #0f172a;
+    border-bottom: 2.5px solid #2563eb;
+    padding-bottom: 10px;
+    margin: 0 0 18px 0;
+    break-after: avoid;
+  }
+  h2 {
+    font-size: 15pt;
+    color: #1e3a8a;
+    margin: 26px 0 10px 0;
+    break-after: avoid;
+  }
+  h3 {
+    font-size: 12.5pt;
+    color: #1f2937;
+    margin: 20px 0 8px 0;
+    break-after: avoid;
+  }
+  h4 {
+    font-size: 11pt;
+    color: #374151;
+    margin: 14px 0 6px 0;
+    break-after: avoid;
+  }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0 10px 0; padding-left: 22px; }
+  li { margin: 3px 0; }
+  li > ul { margin: 2px 0; }
+  a { color: #2563eb; text-decoration: none; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 14px 0;
+    font-size: 9.5pt;
+    line-height: 1.5;
+  }
+  th, td {
+    border: 1px solid #d1d5db;
+    padding: 5px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f3f4f6; font-weight: 600; color: #111827; }
+  tr { break-inside: avoid; }
+  figure.fig {
+    margin: 14px 0 16px 0;
+    padding: 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #ffffff;
+    break-inside: avoid;
+    text-align: center;
+  }
+  figure.fig img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+  figure.fig figcaption {
+    margin-top: 7px;
+    font-size: 9pt;
+    color: #4b5563;
+    text-align: left;
+    line-height: 1.55;
+  }
+  h2, h3, h4 { break-inside: avoid; }
+</style>
+</head>
+<body>
+<h1>H&amp;E Image Preprocessing Guide</h1>
+<p>This guide explains how to use the H&amp;E preprocessing tool to import dual-staining images, localize the chip, align the H&amp;E image, select tissue regions, preview the export, and export preprocessing results. The tool runs locally in the browser. Project drafts and source images are stored only in the current browser.</p>
+<h2>1 Software Requirements</h2>
+<ul>
+<li>Minimum browser engine requirement: Chromium 130 or later.</li>
+<li>Recommended clients: Google Chrome v130+ or Microsoft Edge v130+.</li>
+<li>Use a stable desktop environment when processing large pathology images. If a source file is too large, compress or crop it appropriately before importing.</li>
+</ul>
+<h2>2 Software URL</h2>
+<p>https://spatial.tool.m20genomics.cn/preprocess</p>
+<h2>3 Workspace Entry</h2>
+<figure class="fig"><img alt="Figure 1" src="../images-en/fig-01.png" /><figcaption>Figure 1: ① Create a new preprocessing project; ② import an existing preprocessing package; ③ open a project saved in the current browser.</figcaption></figure>
+<p>After opening the page, start or continue H&amp;E preprocessing in one of the following ways:</p>
+<ol>
+<li>Create preprocess project: Create a new preprocessing project. Enter a project name to enter the workflow. Source images are imported later in the Source step.</li>
+<li>Import preprocess project: Import a saved preprocessing project package to restore a previous workspace.</li>
+<li>Saved preprocess projects: Open a project draft saved in the current browser and continue the previous processing progress.</li>
+</ol>
+<h2>4 Generate H&amp;E Preprocessing Files</h2>
+<p>The preprocessing workflow includes the following steps: Source (Upload Images) → Localize (Define Capture Area) → HE Focus (H&amp;E ROI Alignment) → Align (Image Registration) → Crop (Registration Review) → Tissue (Tissue Spot Selection) → Preview (Export Preview) → Export (Export Preprocessing Package).</p>
+<h3>4.1 Source: Import Source Images</h3>
+<figure class="fig"><img alt="Figure 2" src="../images-en/fig-02.png" /><figcaption>Figure 2: ① Eosin / NATA Align reference image and Replace reference; ② H&amp;E image and Replace image.</figcaption></figure>
+<p>Import two types of source images in the Source step:</p>
+<ul>
+<li>Eosin source image / NATA Align image: Import the eosin-stained reference image. This image is used for chip localization and as the reference image for subsequent registration.</li>
+<li>H&amp;E source image: Import the H&amp;E-stained image. This image is used for H&amp;E workspace focusing, feature-point registration, and final export.</li>
+</ul>
+<p>To import the files, click Replace reference in the NATA Align image area and Upload HE image or Replace image in the H&amp;E stained tissue image area. Check the file names, pixel dimensions, and previews to confirm that both images come from the same sample and cover the same tissue region.</p>
+<p>Import notes:</p>
+<ol>
+<li>Common browser-decodable image formats are supported, including .tif / .tiff files. Recommended formats are tif, png, jpg, or jpeg.</li>
+<li>The system generates thumbnails and working images from the source images to improve display and interaction performance in the browser.</li>
+<li>Replacing either source image preserves the project itself, but invalidates downstream results such as localization, registration, crop, tissue selection, and export. These results must be checked or generated again.</li>
+</ol>
+<h3>4.2 Localize: Chip Localization</h3>
+<figure class="fig"><img alt="Figure 3" src="../images-en/fig-03.png" /><figcaption>Figure 3: ① Green capture/localization box; ② LL orientation marker; ③ zoom, rotation, flip, and reset controls.</figcaption></figure>
+<p>The Localize step determines the chip coverage area on the eosin image. Adjust the image and localization box so that the box accurately covers the chip area, and make sure the LL marker corresponds to the lower-left corner direction of the chip.</p>
+<p>Main controls:</p>
+<ol>
+<li>Zoom: Adjust the canvas zoom level to inspect chip boundaries.</li>
+<li>Rotation: Rotate the image. From left to right, the buttons rotate 90 degrees counterclockwise, 90 degrees clockwise, 1 degree counterclockwise, and 1 degree clockwise.</li>
+<li>Flip: Flip the image. From left to right, the buttons flip horizontally and vertically.</li>
+<li>Reset: Reset the current image zoom, rotation, and flip state.</li>
+<li>Localization box: Drag or resize the localization box so it covers the chip range. The localization result is used as the spatial reference for later H&amp;E focusing, crop generation, and spot projection.</li>
+</ol>
+<h3>4.3 HE Focus: H&amp;E Workspace Focusing</h3>
+<figure class="fig"><img alt="Figure 4" src="../images-en/fig-04.png" /><figcaption>Figure 4: ① H&amp;E working ROI; ② orientation and zoom controls; ③ NATA Align reference image for checking the corresponding tissue.</figcaption></figure>
+<p>The HE Focus step determines the workspace area in the H&amp;E image that corresponds to the eosin chip area. After entering this step, an initial square working area is displayed. Use the confirmed eosin chip area as the reference, and manually adjust the image orientation and green focus box so it covers the matching H&amp;E tissue area.</p>
+<p>Key operations:</p>
+<ol>
+<li>Use the zoom, rotation, flip, and Reset controls to adjust the display orientation of the H&amp;E image.</li>
+<li>Drag or resize the green focus box so that it covers the tissue range in the H&amp;E image corresponding to the eosin chip area.</li>
+<li>The NATA Align reference image on the right can be used to compare the current H&amp;E focus area with the confirmed eosin chip area.</li>
+<li>The focus area may be slightly larger than the target area to ensure that tissue boundaries are not missed during later registration and cropping.</li>
+</ol>
+<h3>4.4 Align: Feature-Point Alignment</h3>
+<figure class="fig"><img alt="Figure 5" src="../images-en/fig-05.png" /><figcaption>Figure 5: ① Pair-count prompt; ② corresponding feature points with the same number in both images; ③ Review Registration to compute the registration.</figcaption></figure>
+<p>The Align step registers the eosin image and the H&amp;E image using paired feature points. The left canvas shows the Eosin reference, and the right canvas shows the H&amp;E moving image.</p>
+<p>Select clear, evenly distributed, and repeatably identifiable tissue structures in both images as feature points. First click a feature point in the eosin image on the left, then click the corresponding position in the H&amp;E image on the right to create one registration pair. Create at least 7 pairs and cover both tissue edges and interiors. Click Review Registration to compute the registration matrix.</p>
+<p>Control descriptions:</p>
+<ol>
+<li>Move NATA Align Image Point: Move the selected feature point in the eosin/reference image. First click the point to adjust, then click this button and place it again.</li>
+<li>Move HE point: Move the selected feature point in the H&amp;E image. The operation is the same as Move NATA Align Image Point.</li>
+<li>Delete pair: Delete a pair of feature points. Click a feature point on either side, then click this button to delete the corresponding point pair.</li>
+<li>Cancel: Cancel the current selection or pending placement state.</li>
+<li>Registration Preview: Show registration diagnostics to evaluate feature-point quality and registration reliability.</li>
+<li>Undo last point: Undo the most recently added complete pair.</li>
+<li>Clear All Pairs: Clear all current point pairs and restart marking.</li>
+<li>Review Registration: Compute the H&amp;E-to-eosin registration relationship from the marked point pairs.</li>
+</ol>
+<p>Diagnostic metrics:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Meaning</th>
+<th>Recommendation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inlier ratio</td>
+<td>Percentage of matched points that fit the final geometric model</td>
+<td>Higher values indicate fewer incorrect matches</td>
+</tr>
+<tr>
+<td>Reprojection RMSE</td>
+<td>Root mean square reprojection error</td>
+<td>Lower values indicate higher registration accuracy</td>
+</tr>
+<tr>
+<td>Quality gates</td>
+<td>Registration quality checks</td>
+<td>Proceed to registration review only after all checks pass</td>
+</tr>
+</tbody>
+</table>
+<p>Quality gates include the following checks:</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>minPairs</td>
+<td>Whether the number of matching point pairs is sufficient</td>
+</tr>
+<tr>
+<td>inlier</td>
+<td>Whether the inlier ratio meets the requirement</td>
+</tr>
+<tr>
+<td>rmse</td>
+<td>Whether the reprojection error meets the requirement</td>
+</tr>
+<tr>
+<td>matrix</td>
+<td>Whether the computed matrix is valid and not degenerate</td>
+</tr>
+<tr>
+<td>scale</td>
+<td>Whether the estimated scale is within a reasonable range</td>
+</tr>
+</tbody>
+</table>
+<p>In addition to the gates above, feature points must cover a sufficiently wide chip area. If the interface shows Landmark spread is narrow, the points are too concentrated. Add more widely distributed paired points within the tissue area and click Review Registration again. Later tissue selection becomes available only after the registration passes and its review is approved.</p>
+<h3>4.5 Crop: Crop and QC (Registration Review)</h3>
+<p>After registration is completed, enter the Crop / Registration Review step to generate crop results and perform visual QC. The system maps the H&amp;E image to the eosin chip area according to the registration result and generates preview images for inspection.</p>
+<h4>Tissue Align</h4>
+<figure class="fig"><img alt="Figure 6" src="../images-en/fig-06.png" /><figcaption>Figure 6: ① Generate the registered ROI; ② approve the registration; ③ Checkerboard View, used to check structural continuity across tile boundaries.</figcaption></figure>
+<p>Tissue Align / Checkerboard View displays a checkerboard comparison between the eosin crop and the transformed H&amp;E crop. Use it to quickly judge whether the overall tissue structures are aligned.</p>
+<h4>Feature Matches</h4>
+<figure class="fig"><img alt="Figure 7" src="../images-en/fig-07.png" /><figcaption>Figure 7: ① Landmark Pair Verification tab; ② registration-point connection lines; ③ Approve Registration.</figcaption></figure>
+<p>Feature Matches / Landmark Pair Verification displays the two cropped images and feature-point connection lines. Use it to check whether the feature-point correspondence is reasonable.</p>
+<h4>Overlay opacity</h4>
+<figure class="fig"><img alt="Figure 8" src="../images-en/fig-08.png" /><figcaption>Figure 8: ① Overlay View tab; ② Overlay Transparency slider; ③ overlay preview area.</figcaption></figure>
+<p>Overlay opacity / Overlay View adjusts the transparency of the H&amp;E overlay, making it easier to inspect whether local tissue structures overlap.</p>
+<p>QC operations:</p>
+<ol>
+<li>Click Generate Registered ROI to generate the registered ROI and QC previews.</li>
+<li>If the tissue structures and feature-point positions in the two images align well, click Approve Registration to mark the registration review as complete and enable the Tissue step. Then enter Tissue from the workflow sidebar on the left.</li>
+<li>If the alignment result does not meet requirements, click Return to Landmark Pairing to return to the Align step and adjust feature points.</li>
+</ol>
+<p>Note: After registration review passes, the system generates projected spots according to the chip configuration. These projected spots are used as the basis for tissue selection in the Tissue step.</p>
+<h3>4.6 Tissue: Tissue Region Selection</h3>
+<figure class="fig"><img alt="Figure 9" src="../images-en/fig-09.png" /><figcaption>Figure 9: ① Spot Size; ② automatic-detection parameters and Detect Tissue Spots; ③ Manual Refinement tools; ④ Number of Tissue Spots.</figcaption></figure>
+<p>The Tissue step selects valid tissue regions on projected spots. The system supports both automatic detection and manual spot activation or deactivation.</p>
+<p>Main parameters:</p>
+<ol>
+<li>Spot Size / Chip size: Select the chip size. The current tool supports 15um and 50um chip configurations. Different chips correspond to different spot grids and templates. Changing the size clears existing tissue edits, so confirm it before manual refinement.</li>
+<li>Automatic Tissue Detection / Auto detection: Automatically identify tissue regions from the cropped eosin image.</li>
+<li>Signal mode / Threshold mode: Threshold mode.<ul>
+<li>raw: Threshold detection based on image saturation. This is often used for images with obvious stained regions.</li>
+<li>gray-min: Threshold detection based on the minimum grayscale channel.</li>
+<li>gray-max: Threshold detection based on the maximum grayscale channel.</li>
+</ul>
+</li>
+<li>Tissue Signal Threshold / Activation threshold: Spot activation ratio. The input accepts 0 to 1, while the effective value during automatic detection is limited to 0 to 0.3. If the proportion of pixels inside a spot that meet the threshold condition is lower than this value, the spot is not classified as tissue.</li>
+<li>Saturation Threshold / Background cutoff: Threshold intensity, ranging from 0 to 255. In raw mode, this is shown as Saturation Threshold; in grayscale modes, it is shown as Background cutoff.</li>
+<li>Manual Refinement / Selection controls: Manual selection tools.</li>
+<li>Hide spot grid / Show spot grid: Hide or show the spot grid.</li>
+<li>Invert selection: Invert the current tissue activation matrix.</li>
+<li>Mark as tissue: Click a single spot or hold the left button and draw around target spots to mark them as tissue.</li>
+<li>Mark as background: Click or draw around background areas, tissue holes, or false-positive regions to mark covered spots as background.</li>
+</ol>
+<p>It is recommended to run Auto detection first to generate an initial result. After changing a parameter, click Detect Tissue Spots again. Then use Mark as tissue / Mark as background to manually correct tissue edges, blank regions, or false-positive regions. Use the wheel to zoom and hold the middle mouse button while dragging to pan the canvas.</p>
+<p>When using Mark as background, first confirm that the tool is selected, then hold the left mouse button and draw along the region to remove. When the button is released, covered spots are deactivated and the spot count is updated. Use Mark as tissue as needed to restore missed tissue spots.</p>
+<figure class="fig"><img alt="Figure 10a" src="../images-en/fig-10a.png" /><figcaption>Figure 10a: ① Selected Mark as background; ② red path being drawn; ③ current spot count. Keep the mouse button pressed until drawing is complete.</figcaption></figure>
+<figure class="fig"><img alt="Figure 10b" src="../images-en/fig-10b.png" /><figcaption>Figure 10b: ① Mark as background; ② updated spot canvas; ③ updated spot count.</figcaption></figure>
+<h3>4.7 Preview: Export Preview</h3>
+<p>After tissue region selection is complete, enter the Preview (Export Preview) step before exporting to review three images of identical dimensions side by side:</p>
+<ul>
+<li>Cropped eosin image: The cropped eosin reference image.</li>
+<li>Cropped H&amp;E image: The cropped H&amp;E tissue image.</li>
+<li>Under tissue spot: The standalone spot image. It contains no H&amp;E/eosin tissue background: spots classified as tissue are shown in blue, the remaining spot grid is shown in light gray, and the background is white.</li>
+</ul>
+<p>All three images share the registered crop dimensions (the page shows the exact pixel size), so tissue coverage can be compared position by position to confirm that the tissue selection matches the registered crop.</p>
+<figure class="fig"><img alt="Figure 11" src="../images-en/fig-11.png" /><figcaption>Figure 11: The Export Preview step. Left: cropped eosin image (Cropped eosin image); middle: cropped H&amp;E image (Cropped H&amp;E image); right: Under tissue spot, the standalone spot image (tissue spots in blue, no tissue background). All three images share the same dimensions, and the page shows the shared registered crop size. Click Continue to export at the bottom to open the Export step.</figcaption></figure>
+<p>Usage notes:</p>
+<ol>
+<li>The Preview step becomes available after tissue region selection is complete. If upstream results are missing or invalidated, the page shows the blocking reason; return to the corresponding step and retry after fixing it.</li>
+<li>The standalone spot image refreshes automatically with the tissue selection results; a placeholder is shown while it is being rendered.</li>
+<li>After confirming the results, click Continue to export to enter the Export step. The spot_image.png file in the exported package is this standalone spot image.</li>
+</ol>
+<h3>4.8 Export: Export Results</h3>
+<figure class="fig"><img alt="Figure 12" src="../images-en/fig-12.png" /><figcaption>Figure 12: ① Include NATAScope project file; ② Download. To resume editing later, select ① first, then click ②.</figcaption></figure>
+<p>The Export step packages preprocessing results as a ZIP file for downstream analysis workflows. To resume editing later, select Include NATAScope project file first. Then click Download to download the result package.</p>
+<p>Default export contents:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tissue_fullres_image.png</td>
+<td>Full-resolution H&amp;E tissue crop</td>
+</tr>
+<tr>
+<td>tissue_hires_image.png</td>
+<td>High-resolution downsampled image</td>
+</tr>
+<tr>
+<td>tissue_lowres_image.png</td>
+<td>Low-resolution downsampled image</td>
+</tr>
+<tr>
+<td>spot_image.png</td>
+<td>Standalone spot image without any H&amp;E tissue background; tissue spots are shown in blue; same dimensions as the H&amp;E crop</td>
+</tr>
+<tr>
+<td>scalefactors_json.json</td>
+<td>Spot diameter and high-/low-resolution scale factors</td>
+</tr>
+<tr>
+<td>tissue_positions.csv</td>
+<td>Spot coordinates, tissue status, and array row/column information</td>
+</tr>
+<tr>
+<td>tissue_matrix.csv</td>
+<td>Tissue activation matrix</td>
+</tr>
+<tr>
+<td>aligned_tissue_image.png</td>
+<td>Checkerboard image for registration review</td>
+</tr>
+</tbody>
+</table>
+<p>Optional export items:</p>
+<ol>
+<li>Include NATAScope project file: Write the project recovery file and source-image resources into the ZIP so the workspace can later be restored from the landing page through Select Package.</li>
+</ol>
+<p>When using an H&amp;E tissue image downstream, choose a tissue_*_image.png file; use spot_image.png when a pure spot map is needed; aligned_tissue_image.png is intended for registration review.</p>
+<figure class="fig"><img alt="Figure 13" src="../images-en/fig-13.png" /><figcaption>Figure 13: ① derived-assets and source-assets directories used for project recovery; ② result images, JSON, and CSV files. spot_image.png is the standalone spot image. Keep the complete directory structure.</figcaption></figure>
+<p>Before exporting, confirm that registration review has passed, the chip configuration is correct, and tissue region selection is complete; the Preview step can be used to verify the export previews. If upstream results are invalidated or required files are missing, the export button is disabled or prompts you to return to the corresponding step for reprocessing.</p>
+</body>
+</html>

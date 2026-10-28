@@ -16,6 +16,10 @@ import { resolveTissueSelectionSupport } from './tissueSupport';
 
 const FIDUCIAL_DIAMETER_FULLRES = 0.027;
 const FULLRES_DIMENSIONS_UNAVAILABLE_ERROR = 'Full-resolution H&E crop image dimensions are unavailable. Regenerate crop QC before export.';
+const SPOT_IMAGE_MISSING_ERROR = 'Standalone spot image data is missing. Open the export preview step and retry the export.';
+const SPOT_IMAGE_INVALID_ERROR = 'Standalone spot image data is invalid. Open the export preview step and retry the export.';
+const SPOT_IMAGE_DIMENSION_MISMATCH_ERROR = 'Standalone spot image dimensions do not match the registered H&E crop. Regenerate crop QC and retry the export.';
+const SPOT_IMAGE_FILE_NAME = 'spot_image.png';
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 
 type PreprocessExportReadiness =
@@ -348,8 +352,13 @@ export async function exportPreprocessZip(args: {
   project: PreprocessProject;
   includeProjectJson: boolean;
   includeAlignedImage: boolean;
+  spotImageDataUrl: string;
 }) {
-  const { project, includeProjectJson, includeAlignedImage } = args;
+  const { project, includeProjectJson, includeAlignedImage, spotImageDataUrl } = args;
+  if (typeof spotImageDataUrl !== 'string' || spotImageDataUrl.length === 0) {
+    throw new Error(SPOT_IMAGE_MISSING_ERROR);
+  }
+
   const readiness = getPreprocessZipExportReadiness(project, { includeAlignedImage });
   if (!readiness.canExport) {
     throw new Error(readiness.reason);
@@ -368,6 +377,19 @@ export async function exportPreprocessZip(args: {
   } = readiness.data;
   const heFullresBytes = await imageSourceToBytes(heCropAssets.fullres.dataUrl);
   const { width: exportFullresWidth, height: exportFullresHeight } = getPngDimensionsFromBytes(heFullresBytes);
+  const spotImageBytes = await imageSourceToBytes(spotImageDataUrl);
+  let spotImageDimensions: { width: number; height: number };
+  try {
+    spotImageDimensions = getPngDimensionsFromBytes(spotImageBytes);
+  } catch {
+    throw new Error(SPOT_IMAGE_INVALID_ERROR);
+  }
+  if (
+    spotImageDimensions.width !== exportFullresWidth
+    || spotImageDimensions.height !== exportFullresHeight
+  ) {
+    throw new Error(SPOT_IMAGE_DIMENSION_MISMATCH_ERROR);
+  }
   const exportOnlyLayout = await resolveExportOnlyFullresLayout({
     chipType: project.chipConfig.chipType,
     cropQc: project.cropQc,
@@ -387,6 +409,7 @@ export async function exportPreprocessZip(args: {
   zip.file('tissue_fullres_image.png', heFullresBytes);
   zip.file('tissue_hires_image.png', await imageSourceToBytes(heCropAssets.hires.dataUrl));
   zip.file('tissue_lowres_image.png', await imageSourceToBytes(heCropAssets.lowres.dataUrl));
+  zip.file(SPOT_IMAGE_FILE_NAME, spotImageBytes);
   zip.file('scalefactors_json.json', JSON.stringify(scalefactors, null, 2));
   zip.file('tissue_positions.csv', toCsv(projectedSpots, selectedSpotIds, exportOnlyLayout.spotCenters, rows));
   zip.file('tissue_matrix.csv', toMatrixCsv(matrixValues, rows, columns));

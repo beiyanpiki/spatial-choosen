@@ -105,10 +105,10 @@ describe('ExportPanel copy policy', () => {
   it('renders neutral bullets for unconditional items and reserves checks for options', () => {
     renderExportPanel();
 
-    // Four always-bundled artifacts use the neutral bullet; the two
+    // Five always-bundled artifacts use the neutral bullet; the two
     // user-controllable options (aligned image, project file) get the
     // checkmark so a green check always means "user opted in".
-    expect(screen.getAllByText('•')).toHaveLength(4);
+    expect(screen.getAllByText('•')).toHaveLength(5);
     expect(screen.getAllByText('✓')).toHaveLength(2);
   });
 
@@ -116,7 +116,8 @@ describe('ExportPanel copy policy', () => {
     renderExportPanel({ includeProject: false });
 
     // Opting out keeps the row (with a dimmed check) rather than removing it.
-    expect(screen.getAllByText('•')).toHaveLength(4);
+    expect(screen.getAllByText('•')).toHaveLength(5);
     expect(screen.getAllByText('✓')).toHaveLength(2);
+    expect(screen.getByText('Standalone spot image (no tissue background)')).toBeInTheDocument();
   });
 });

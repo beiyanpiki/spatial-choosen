@@ -605,16 +605,44 @@ const indexRowsByBarcode = (rows: ExportedTissuePositionRow[]) => new Map(
   rows.map((row) => [row.barcode, row] as const),
 );
 
+const resolveImageSourceBytes = async (sourceUrl: string): Promise<Uint8Array> => {
+  if (sourceUrl.startsWith('blob:')) {
+    return new Uint8Array(await (await fetch(sourceUrl)).arrayBuffer());
+  }
+
+  const payload = sourceUrl.split(',', 2)[1] ?? '';
+  return new Uint8Array(Buffer.from(payload, 'base64'));
+};
+
+// Mirrors the browser export flow, which renders the standalone spot image at
+// exactly the emitted H&E fullres crop dimensions. Malformed fixtures fall
+// back to the base 640x640 crop so the export itself surfaces its own error.
+const createSpotImageDataUrlForProject = async (project: PreprocessProject) => {
+  const fullresDataUrl = project.cropQc.cropAssets?.he?.fullres.dataUrl;
+  if (!fullresDataUrl) {
+    return createPngDataUrl(640, 640);
+  }
+
+  try {
+    const { width, height } = readPngDimensions(await resolveImageSourceBytes(fullresDataUrl));
+    return createPngDataUrl(width, height);
+  } catch {
+    return createPngDataUrl(640, 640);
+  }
+};
+
 const exportProject = async (project: PreprocessProject) => exportPreprocessZip({
   project,
   includeAlignedImage: false,
   includeProjectJson: false,
+  spotImageDataUrl: await createSpotImageDataUrlForProject(project),
 });
 
 const exportProjectWithAlignedImage = async (project: PreprocessProject) => exportPreprocessZip({
   project,
   includeAlignedImage: true,
   includeProjectJson: false,
+  spotImageDataUrl: await createSpotImageDataUrlForProject(project),
 });
 
 const rebuildRuntimeProjection = (project: PreprocessProject): PreprocessProject => {
@@ -981,6 +1009,57 @@ describe('exportBundle canonical matrix exports', () => {
     expect(rows.every((line) => line.split(',').length === 64)).toBe(true);
   });
 
+  it('embeds the standalone spot image with dimensions matching the registered H&E crop', async () => {
+    const project = createBaseProject();
+    const spotImageBytes = createPngBytes(640, 640);
+
+    const result = await exportPreprocessZip({
+      project,
+      includeAlignedImage: false,
+      includeProjectJson: false,
+      spotImageDataUrl: createDataUrlFromBytes(spotImageBytes),
+    });
+
+    await expect(readZipBytes(result.blob, 'spot_image.png')).resolves.toEqual(spotImageBytes);
+    await expect(readExportedPngDimensions(result.blob, 'spot_image.png')).resolves.toEqual({ width: 640, height: 640 });
+    await expect(readExportedPngDimensions(result.blob, 'tissue_fullres_image.png')).resolves.toEqual({ width: 640, height: 640 });
+  });
+
+  it('keeps the standalone spot image aligned with the emitted fullres frame when crop metadata is stale', async () => {
+    const project = createBaseProject();
+    const emittedFullresDataUrl = createPngDataUrl(4200, 5705);
+    if (project.cropQc.cropAssets?.he) {
+      project.cropQc.cropAssets.he.fullres.dataUrl = emittedFullresDataUrl;
+    }
+
+    const result = await exportProject(project);
+
+    await expect(readExportedPngDimensions(result.blob, 'spot_image.png')).resolves.toEqual({ width: 4200, height: 5705 });
+    await expect(readExportedPngDimensions(result.blob, 'tissue_fullres_image.png')).resolves.toEqual({ width: 4200, height: 5705 });
+  });
+
+  it('blocks export when the standalone spot image is missing', async () => {
+    const project = createBaseProject();
+
+    await expect(exportPreprocessZip({
+      project,
+      includeAlignedImage: false,
+      includeProjectJson: false,
+      spotImageDataUrl: '',
+    })).rejects.toThrow('Standalone spot image data is missing. Open the export preview step and retry the export.');
+  });
+
+  it('blocks export when the standalone spot image dimensions do not match the registered H&E crop', async () => {
+    const project = createBaseProject();
+
+    await expect(exportPreprocessZip({
+      project,
+      includeAlignedImage: false,
+      includeProjectJson: false,
+      spotImageDataUrl: createPngDataUrl(320, 320),
+    })).rejects.toThrow('Standalone spot image dimensions do not match the registered H&E crop. Regenerate crop QC and retry the export.');
+  });
+
   it('writes aligned_tissue_image.png from the accepted checkerboard Crop/QC image', async () => {
     const checkerboardBytes = createPngBytes(32, 48);
     const checkerboardDataUrl = createDataUrlFromBytes(checkerboardBytes);
@@ -1143,6 +1222,7 @@ describe('exportBundle canonical matrix exports', () => {
 
     expect(Object.keys(archive.files).sort()).toEqual([
       'scalefactors_json.json',
+      'spot_image.png',
       'tissue_fullres_image.png',
       'tissue_hires_image.png',
       'tissue_lowres_image.png',

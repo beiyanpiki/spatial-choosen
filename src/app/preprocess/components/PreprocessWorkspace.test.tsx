@@ -127,6 +127,12 @@ vi.mock('../../../lib/preprocess/exportBundle', () => ({
   getPreprocessZipExportReadiness: mockGetPreprocessZipExportReadinessProxy,
 }));
 
+const mockRenderStandaloneSpotImageDataUrl = vi.fn();
+
+vi.mock('../../../lib/preprocess/spotImage', () => ({
+  renderStandaloneSpotImageDataUrl: (...args: unknown[]) => mockRenderStandaloneSpotImageDataUrl(...args),
+}));
+
 vi.mock('../../../lib/preprocess/invalidation', () => ({
   invalidateOnAlignmentChange: (project: unknown) => project,
   invalidateOnCropQcChange: (project: unknown) => project,
@@ -1578,5 +1584,165 @@ describe('PreprocessWorkspace chip projection auto-run guards', () => {
     expect(latestProject.cropQc.cropHeight).toBe(96);
     expect(latestProject.cropQc.eosinReferenceGeometry?.width).toBe(30);
     expect(latestProject.cropQc.eosinReferenceGeometry?.height).toBe(40);
+  });
+});
+
+describe('PreprocessWorkspace export preview step', () => {
+  const SPOT_IMAGE_DATA_URL = 'data:image/png;base64,U1BPVD==';
+
+  beforeEach(() => {
+    mockLoadAllChipConfigManifests.mockResolvedValue([]);
+    mockLoadChipConfigData.mockResolvedValue(null);
+    mockGetPreprocessZipExportReadiness.mockClear();
+    mockRenderStandaloneSpotImageDataUrl.mockReset();
+    mockRenderStandaloneSpotImageDataUrl.mockResolvedValue({
+      dataUrl: SPOT_IMAGE_DATA_URL,
+      width: 100,
+      height: 100,
+    });
+  });
+
+  it('renders the eosin crop, H&E crop, and standalone spot image previews together', async () => {
+    const initialProject = createProject();
+    initialProject.currentStep = 'exportPreview';
+    initialProject.tissueSelection.status = 'complete';
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(await screen.findByTestId('export-preview-eosin-image')).toHaveAttribute(
+      'src',
+      'data:image/png;base64,AA==',
+    );
+    expect(screen.getByTestId('export-preview-he-image')).toHaveAttribute(
+      'src',
+      'data:image/png;base64,AA==',
+    );
+
+    await waitFor(() => {
+      expect(mockRenderStandaloneSpotImageDataUrl).toHaveBeenCalledTimes(1);
+    });
+    expect(mockRenderStandaloneSpotImageDataUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ referenceImageUrl: 'data:image/png;base64,AA==' }),
+    );
+    expect(await screen.findByTestId('export-preview-spot-image')).toHaveAttribute(
+      'src',
+      SPOT_IMAGE_DATA_URL,
+    );
+    expect(screen.getByTestId('export-preview-status-badge')).toHaveTextContent('Ready');
+  });
+
+  it('continues to the export step from the preview action', async () => {
+    const onStepChange = vi.fn();
+    const initialProject = createProject();
+    initialProject.currentStep = 'exportPreview';
+    initialProject.tissueSelection.status = 'complete';
+
+    render(<WorkspaceHarness initialProject={initialProject} onStepChange={onStepChange} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('export-preview-continue')).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId('export-preview-continue'));
+
+    expect(onStepChange).toHaveBeenCalledWith('exportState');
+  });
+
+  it('shows the blocked reason instead of previews when export data is unavailable', async () => {
+    mockGetPreprocessZipExportReadiness.mockImplementation(() => ({
+      canExport: false,
+      reason: 'Crop QC output is stale or incomplete.',
+    }));
+
+    const initialProject = createProject();
+    initialProject.currentStep = 'exportPreview';
+
+    render(<WorkspaceHarness initialProject={initialProject} />);
+
+    expect(await screen.findByTestId('export-preview-blocked-reason')).toHaveTextContent(
+      'Crop QC output is stale or incomplete.',
+    );
+    expect(screen.queryByTestId('export-preview-eosin-image')).not.toBeInTheDocument();
+    expect(mockRenderStandaloneSpotImageDataUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe('PreprocessWorkspace export download spot image flow', () => {
+  beforeEach(() => {
+    mockLoadAllChipConfigManifests.mockResolvedValue([]);
+    mockLoadChipConfigData.mockResolvedValue(null);
+    mockGetPreprocessZipExportReadiness.mockReset();
+    mockGetPreprocessZipExportReadiness.mockImplementation(() => ({
+      canExport: true,
+      data: {
+        cropWidth: 100,
+        cropHeight: 100,
+        heCropAssets: {
+          fullres: { dataUrl: 'data:image/png;base64,AA==' },
+          hires: { dataUrl: 'data:image/png;base64,AA==' },
+          lowres: { dataUrl: 'data:image/png;base64,AA==' },
+        },
+        projectedSpots: [],
+        rows: 1,
+        columns: 1,
+        matrixValues: [1],
+        selectedSpotIds: new Set<string>(),
+        spotDiameterFullres: 1,
+        tissueHiresScale: 1,
+        tissueLowresScale: 1,
+      },
+    }));
+    mockExportPreprocessZip.mockReset();
+    mockExportPreprocessZip.mockResolvedValue({
+      fileName: 'project-preprocess.zip',
+      blob: new Blob(['zip']),
+    });
+    mockRenderStandaloneSpotImageDataUrl.mockReset();
+    mockRenderStandaloneSpotImageDataUrl.mockResolvedValue({
+      dataUrl: 'data:image/png;base64,U1BPVD==',
+      width: 100,
+      height: 100,
+    });
+  });
+
+  it('renders the standalone spot image at the H&E fullres crop dimensions and embeds it in the zip', async () => {
+    const objectUrlOverrides = {
+      createObjectURL: URL.createObjectURL,
+      revokeObjectURL: URL.revokeObjectURL,
+    };
+    URL.createObjectURL = vi.fn(() => 'blob:export-download') as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
+
+    try {
+      const exportProject = {
+        ...createProject(),
+        currentStep: 'exportState' as const,
+      };
+
+      render(<WorkspaceHarness initialProject={exportProject} />);
+
+      await waitFor(() => {
+        expect(capturedExportPanelProps?.canExport).toBe(true);
+      });
+      await act(async () => {
+        capturedExportPanelProps?.onDownload();
+      });
+
+      expect(mockRenderStandaloneSpotImageDataUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          referenceImageUrl: 'data:image/png;base64,AA==',
+          projectedSpots: exportProject.chipConfig.projectedSpots,
+        }),
+      );
+      expect(mockExportPreprocessZip).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spotImageDataUrl: 'data:image/png;base64,U1BPVD==',
+          includeProjectJson: false,
+          includeAlignedImage: true,
+        }),
+      );
+    } finally {
+      URL.createObjectURL = objectUrlOverrides.createObjectURL;
+      URL.revokeObjectURL = objectUrlOverrides.revokeObjectURL;
+    }
   });
 });

@@ -161,6 +161,7 @@ export function ExportPanel({
               <IncludedItem label="Registered H&E crop (full-res, hires, lowres)" />
               <IncludedItem label="Aligned tissue image (registered overlay)" included={includeAlignedImage} />
               <IncludedItem label="Eosin reference crop" />
+              <IncludedItem label="Standalone spot image (no tissue background)" />
               <IncludedItem label="Tissue selection matrix (CSV)" />
               <IncludedItem label="Spot projection metadata (JSON)" />
               <IncludedItem

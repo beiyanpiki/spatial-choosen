@@ -517,6 +517,7 @@ const assertPreprocessStepId = (value: unknown, fieldName: string) => {
     'cropQc',
     'chipConfig',
     'tissueSelection',
+    'exportPreview',
     'exportState',
   ];
 
