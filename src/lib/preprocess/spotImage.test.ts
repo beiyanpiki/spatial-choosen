@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ProjectedSpot, TissueSpotStyle } from '@/types/preprocess';
+import type { ProjectedSpot } from '@/types/preprocess';
 
 import {
   computeStandaloneSpotImageFillRects,
   drawStandaloneSpotImage,
+  STANDALONE_SPOT_IMAGE_ACTIVE_FILL,
   STANDALONE_SPOT_IMAGE_BACKGROUND_COLOR,
   STANDALONE_SPOT_IMAGE_INACTIVE_FILL,
   type StandaloneSpotImageDrawSurface,
@@ -28,10 +29,8 @@ const createSpot = (
   diameterY: side,
 });
 
-const spotStyle: TissueSpotStyle = { color: '#FF0000', opacity: 0.4 };
-
 describe('computeStandaloneSpotImageFillRects', () => {
-  it('maps normalized spot centers to pixel rects with active and inactive fills', () => {
+  it('maps normalized spot centers to pixel rects with blue active and neutral inactive fills', () => {
     const rects = computeStandaloneSpotImageFillRects({
       width: 200,
       height: 100,
@@ -40,7 +39,6 @@ describe('computeStandaloneSpotImageFillRects', () => {
         createSpot('spot-b', 0.25, 0.25, 0.2),
       ],
       selectedSpotIds: ['spot-a'],
-      spotStyle,
     });
 
     // 0.2 normalized side over a 200x100 canvas: 40px wide, 20px tall.
@@ -49,7 +47,7 @@ describe('computeStandaloneSpotImageFillRects', () => {
       y: 0.5 * 100 - 10,
       width: 40,
       height: 20,
-      fill: '#FF0000',
+      fill: STANDALONE_SPOT_IMAGE_ACTIVE_FILL,
     });
     expect(rects[1]).toEqual({
       x: 0.25 * 200 - 20,
@@ -58,6 +56,7 @@ describe('computeStandaloneSpotImageFillRects', () => {
       height: 20,
       fill: STANDALONE_SPOT_IMAGE_INACTIVE_FILL,
     });
+    expect(STANDALONE_SPOT_IMAGE_ACTIVE_FILL).toBe('#3182CE');
   });
 
   it('accepts a Set of selected spot ids and legacy diameter-only spots', () => {
@@ -74,7 +73,6 @@ describe('computeStandaloneSpotImageFillRects', () => {
       height: 100,
       projectedSpots: [legacySpot],
       selectedSpotIds: new Set(['legacy-spot']),
-      spotStyle,
     });
 
     expect(rects[0]).toEqual({
@@ -82,11 +80,11 @@ describe('computeStandaloneSpotImageFillRects', () => {
       y: 25,
       width: 50,
       height: 50,
-      fill: '#FF0000',
+      fill: STANDALONE_SPOT_IMAGE_ACTIVE_FILL,
     });
   });
 
-  it('keeps degenerate spots at least one pixel and falls back to the default style color', () => {
+  it('keeps degenerate spots at least one pixel', () => {
     const rects = computeStandaloneSpotImageFillRects({
       width: 10,
       height: 10,
@@ -94,7 +92,7 @@ describe('computeStandaloneSpotImageFillRects', () => {
       selectedSpotIds: ['tiny-active'],
     });
 
-    expect(rects[0]).toMatchObject({ width: 1, height: 1, fill: '#38A169' });
+    expect(rects[0]).toMatchObject({ width: 1, height: 1, fill: STANDALONE_SPOT_IMAGE_ACTIVE_FILL });
     expect(rects[1]).toMatchObject({ width: 1, height: 1, fill: STANDALONE_SPOT_IMAGE_INACTIVE_FILL });
   });
 });
@@ -134,13 +132,12 @@ describe('drawStandaloneSpotImage', () => {
         createSpot('spot-b', 0.2, 0.2, 0.2),
       ],
       selectedSpotIds: ['spot-b'],
-      spotStyle,
     });
 
     expect(fills).toEqual([
       { style: STANDALONE_SPOT_IMAGE_BACKGROUND_COLOR, args: [0, 0, 100, 80] },
       { style: STANDALONE_SPOT_IMAGE_INACTIVE_FILL, args: [40, 32, 20, 16] },
-      { style: '#FF0000', args: [10, 8, 20, 16] },
+      { style: STANDALONE_SPOT_IMAGE_ACTIVE_FILL, args: [10, 8, 20, 16] },
     ]);
   });
 });

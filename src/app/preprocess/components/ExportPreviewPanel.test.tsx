@@ -36,7 +36,7 @@ describe('ExportPreviewPanel', () => {
     expect(screen.getByTestId('export-preview-spot-image')).toHaveAttribute('src', SPOT_IMAGE_DATA_URL);
     expect(screen.getByText('Cropped eosin image')).toBeInTheDocument();
     expect(screen.getByText('Cropped H&E image')).toBeInTheDocument();
-    expect(screen.getByText('Standalone spot image')).toBeInTheDocument();
+    expect(screen.getByText('Under tissue spot')).toBeInTheDocument();
     // Captions stay limited to the image titles — no explanatory subtitles or
     // legend notes below the grid.
     expect(screen.queryByText('Registered eosin reference crop')).not.toBeInTheDocument();

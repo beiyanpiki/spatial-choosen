@@ -1,15 +1,14 @@
-import type { ProjectedSpot, TissueSpotStyle } from '@/types/preprocess';
-import { DEFAULT_TISSUE_SPOT_STYLE } from './tissueSpotStyle';
+import type { ProjectedSpot } from '@/types/preprocess';
 
 /**
- * Background and unselected-spot presentation for the standalone spot image.
+ * Background and spot presentation for the standalone spot image.
  *
  * The image shows the full projected chip grid without any H&E/eosin tissue
- * background: tissue-selected spots use the tissue spot style color at full
- * opacity, while unselected spots keep a light neutral fill so the grid stays
- * visible for QC.
+ * background: tissue-selected spots are filled blue, while unselected spots
+ * keep a light neutral fill so the grid stays visible for QC.
  */
 export const STANDALONE_SPOT_IMAGE_BACKGROUND_COLOR = '#FFFFFF';
+export const STANDALONE_SPOT_IMAGE_ACTIVE_FILL = '#3182CE';
 export const STANDALONE_SPOT_IMAGE_INACTIVE_FILL = '#E2E8F0';
 
 export const STANDALONE_SPOT_IMAGE_RENDER_UNAVAILABLE_ERROR =
@@ -28,13 +27,11 @@ export type StandaloneSpotImageRenderArgs = {
   height: number;
   projectedSpots: readonly ProjectedSpot[];
   selectedSpotIds: ReadonlySet<string> | readonly string[];
-  spotStyle?: TissueSpotStyle;
 };
 
-const resolveSpotFill = (
-  isSelected: boolean,
-  spotStyle: TissueSpotStyle | undefined,
-) => (isSelected ? (spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE).color : STANDALONE_SPOT_IMAGE_INACTIVE_FILL);
+const resolveSpotFill = (isSelected: boolean) => (
+  isSelected ? STANDALONE_SPOT_IMAGE_ACTIVE_FILL : STANDALONE_SPOT_IMAGE_INACTIVE_FILL
+);
 
 const normalizeSelectedSpotIds = (
   selectedSpotIds: ReadonlySet<string> | readonly string[],
@@ -64,7 +61,7 @@ export function computeStandaloneSpotImageFillRects(
       y: spot.y * height - spotHeight / 2,
       width: spotWidth,
       height: spotHeight,
-      fill: resolveSpotFill(selectedSpotIds.has(spot.id), args.spotStyle),
+      fill: resolveSpotFill(selectedSpotIds.has(spot.id)),
     };
   });
 }
@@ -110,7 +107,6 @@ export async function renderStandaloneSpotImageDataUrl(args: {
   referenceImageUrl: string;
   projectedSpots: readonly ProjectedSpot[];
   selectedSpotIds: ReadonlySet<string> | readonly string[];
-  spotStyle?: TissueSpotStyle;
 }): Promise<RenderedStandaloneSpotImage> {
   if (typeof document === 'undefined' || typeof window === 'undefined') {
     throw new Error(STANDALONE_SPOT_IMAGE_RENDER_UNAVAILABLE_ERROR);
@@ -133,7 +129,6 @@ export async function renderStandaloneSpotImageDataUrl(args: {
     height,
     projectedSpots: args.projectedSpots,
     selectedSpotIds: args.selectedSpotIds,
-    spotStyle: args.spotStyle,
   });
 
   return {

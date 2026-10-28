@@ -106,7 +106,7 @@ export function ExportPreviewPanel({
       placeholderText: 'The cropped H&E image is unavailable.',
     },
     {
-      title: 'Standalone spot image',
+      title: 'Under tissue spot',
       imageUrl: canPreview ? spotImageDataUrl : null,
       testId: 'export-preview-spot-image',
       placeholderText: isRenderingSpotImage

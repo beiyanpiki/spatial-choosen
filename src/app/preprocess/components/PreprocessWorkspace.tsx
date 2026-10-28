@@ -2186,10 +2186,8 @@ export function PreprocessWorkspace({
 					tissueProjectedSpots,
 				),
 				selectedSpotIds: tissueSelectedSpotIds.join(","),
-				spotColor: effectiveSpotStyle.color,
 			}),
 		[
-			effectiveSpotStyle.color,
 			exportPreviewHeDataUrl,
 			tissueProjectedSpots,
 			tissueSelectedSpotIds,
@@ -2228,7 +2226,6 @@ export function PreprocessWorkspace({
 					referenceImageUrl: exportPreviewHeDataUrl,
 					projectedSpots: tissueProjectedSpots,
 					selectedSpotIds: tissueSelectedSpotIds,
-					spotStyle: effectiveSpotStyle,
 				});
 				if (cancelled) {
 					return;
@@ -2258,7 +2255,6 @@ export function PreprocessWorkspace({
 			cancelled = true;
 		};
 	}, [
-		effectiveSpotStyle,
 		exportPreviewCanExport,
 		exportPreviewHeDataUrl,
 		exportPreviewSpotImageSignature,
@@ -3472,7 +3468,6 @@ export function PreprocessWorkspace({
 														referenceImageUrl: heFullresDataUrl,
 														projectedSpots: project.chipConfig.projectedSpots ?? [],
 														selectedSpotIds: tissueSelectedSpotIds,
-														spotStyle: effectiveSpotStyle,
 													});
 
 												const output = await exportPreprocessZip({
