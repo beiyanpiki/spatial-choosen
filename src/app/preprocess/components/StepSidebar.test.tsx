@@ -189,7 +189,7 @@ const renderSidebar = (project: PreprocessProject) =>
   );
 
 describe('StepSidebar', () => {
-  it('renders the revised seven-step workflow copy', () => {
+  it('renders the revised eight-step workflow copy', () => {
     renderSidebar(createProject('complete', true));
 
     expect(screen.getByText('Complete each step in sequence to generate the preprocessing results required for downstream analysis.')).toBeInTheDocument();
@@ -205,6 +205,8 @@ describe('StepSidebar', () => {
     expect(screen.getByText('Review the registration results using Checkerboard, Landmark Pair, and Overlay views.')).toBeInTheDocument();
     expect(screen.getByText('Tissue Spot Selection')).toBeInTheDocument();
     expect(screen.getByText('Automatically detect and manually refine tissue spots.')).toBeInTheDocument();
+    expect(screen.getByText('Export Preview')).toBeInTheDocument();
+    expect(screen.getByText('Compare the cropped eosin and H&E images with the standalone spot image.')).toBeInTheDocument();
     expect(screen.getByText('Export Preprocessing Package')).toBeInTheDocument();
     expect(screen.getByText('Download the preprocessing package for downstream analysis in NATA Insight Bioinformatics Software.')).toBeInTheDocument();
   });
@@ -245,5 +247,26 @@ describe('StepSidebar', () => {
     renderSidebar(createProject('complete', false, true));
 
     expect(screen.getByTestId('preprocess-step-crop')).toBeEnabled();
+  });
+
+  it('keeps Export Preview disabled until tissue selection is complete', () => {
+    const project = createProject('complete', true);
+    project.cropQc.status = 'complete';
+
+    const { rerender } = renderSidebar(project);
+    expect(screen.getByTestId('preprocess-step-export-preview')).toBeDisabled();
+
+    project.tissueSelection.status = 'complete';
+    rerender(
+      <ChakraProvider theme={theme}>
+        <StepSidebar
+          currentStep='tissueSelection'
+          onStepSelect={vi.fn()}
+          project={project}
+        />
+      </ChakraProvider>,
+    );
+    expect(screen.getByTestId('preprocess-step-export-preview')).toBeEnabled();
+    expect(screen.getByTestId('preprocess-step-export')).toBeEnabled();
   });
 });

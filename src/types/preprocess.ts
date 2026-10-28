@@ -6,6 +6,7 @@ export type PreprocessStepId =
   | "cropQc"
   | "chipConfig"
   | "tissueSelection"
+  | "exportPreview"
   | "exportState";
 
 export type PreprocessStepStatus =
@@ -598,4 +599,13 @@ export type LegacyPreprocessProject = Omit<PreprocessProject, "heFocus" | "align
   tissueSelection: LegacyTissueSelectionSlice;
 };
 
-export type PreprocessProjectSlices = Pick<PreprocessProject, PreprocessStepId>;
+/**
+ * Steps that own a persisted project slice.
+ *
+ * `exportPreview` is a view-only verification step rendered from existing
+ * crop/chip/tissue data, so it has no slice of its own on `PreprocessProject`.
+ */
+export type PreprocessProjectSlices = Pick<
+  PreprocessProject,
+  Exclude<PreprocessStepId, "exportPreview">
+>;

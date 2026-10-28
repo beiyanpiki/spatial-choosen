@@ -52,6 +52,7 @@ const STEP_LABELS: Record<PreprocessStepId, string> = {
   cropQc: 'Crop QC',
   chipConfig: 'Chip projection',
   tissueSelection: 'Tissue spot selection',
+  exportPreview: 'Export preview',
   exportState: 'Export package',
 };
 

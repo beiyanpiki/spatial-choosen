@@ -78,6 +78,7 @@ import {
 	buildInvertedTissueSelectionState,
 	buildManualTissueSelectionState,
 } from "@/lib/preprocess/projectUpdates";
+import { renderStandaloneSpotImageDataUrl } from "@/lib/preprocess/spotImage";
 import {
 	buildSourceImage,
 	createThumbnailBlob,
@@ -97,6 +98,7 @@ import { AlignmentPanel } from "./AlignmentPanel";
 import { CanvasStage } from "./CanvasStage";
 import { CropQcPanel } from "./CropQcPanel";
 import { ExportPanel } from "./ExportPanel";
+import { ExportPreviewPanel } from "./ExportPreviewPanel";
 import { StepSidebar } from "./StepSidebar";
 import {
 	TissueControlPanel,
@@ -492,9 +494,13 @@ const placeholderCopyByStep: Record<
 		title: "Tissue spot selection",
 		body: "Auto-select tissue-covered capture spots from the eosin crop, then manually refine the spot matrix.",
 	},
+	exportPreview: {
+		title: "Export preview",
+		body: "Compare the cropped eosin image, the cropped H&E image, and the standalone spot image at identical dimensions before downloading the export package.",
+	},
 	exportState: {
 		title: "Export package",
-		body: "Download the registered crop outputs, tissue spot matrix, and optional recovery file for downstream analysis.",
+		body: "Download the registered crop outputs, tissue spot matrix, standalone spot image, and optional recovery file for downstream analysis.",
 	},
 };
 
@@ -956,6 +962,14 @@ export function PreprocessWorkspace({
 		useState<PreprocessRect | null>(null);
 	const [tissueTool, setTissueTool] = useState<TissueTool>("activate");
 	const [isDetectingTissue, setIsDetectingTissue] = useState(false);
+	const [spotImagePreview, setSpotImagePreview] = useState<{
+		dataUrl: string;
+		width: number;
+		height: number;
+	} | null>(null);
+	const [isRenderingSpotImage, setIsRenderingSpotImage] = useState(false);
+	const [spotImageError, setSpotImageError] = useState<string | null>(null);
+	const spotImageSignatureRef = useRef<string | null>(null);
 	const tissueDetectionRequestTokenRef = useRef(0);
 	const chipConfigRequestTokenRef = useRef(0);
 
@@ -2149,6 +2163,110 @@ export function PreprocessWorkspace({
 	}, [project, tissueProjectedSpots]);
 	const effectiveSpotStyle =
 		project?.tissueSelection.spotStyle ?? DEFAULT_TISSUE_SPOT_STYLE;
+	const exportPreviewEosinDataUrl =
+		project?.cropQc.cropAssets?.eosin?.fullres.dataUrl ??
+		project?.cropQc.eosinPreviewDataUrl ??
+		null;
+	const exportPreviewHeDataUrl =
+		project?.cropQc.cropAssets?.he?.fullres.dataUrl ??
+		project?.cropQc.previewDataUrl ??
+		null;
+	const exportPreviewReadiness =
+		project && project.currentStep === "exportPreview"
+			? getPreprocessZipExportReadiness(project, {
+					includeAlignedImage: false,
+				})
+			: ({ canExport: false as const, reason: "Project unavailable." });
+	const exportPreviewCanExport = exportPreviewReadiness.canExport;
+	const exportPreviewSpotImageSignature = useMemo(
+		() =>
+			JSON.stringify({
+				referenceImageUrl: exportPreviewHeDataUrl,
+				projectedSpotSignature: buildProjectedSpotSignature(
+					tissueProjectedSpots,
+				),
+				selectedSpotIds: tissueSelectedSpotIds.join(","),
+				spotColor: effectiveSpotStyle.color,
+			}),
+		[
+			effectiveSpotStyle.color,
+			exportPreviewHeDataUrl,
+			tissueProjectedSpots,
+			tissueSelectedSpotIds,
+		],
+	);
+
+	useEffect(() => {
+		if (project?.currentStep !== "exportPreview") {
+			spotImageSignatureRef.current = null;
+			setSpotImagePreview(null);
+			setSpotImageError(null);
+			setIsRenderingSpotImage(false);
+			return;
+		}
+
+		if (!exportPreviewCanExport || !exportPreviewHeDataUrl) {
+			setSpotImagePreview(null);
+			setIsRenderingSpotImage(false);
+			return;
+		}
+
+		if (
+			spotImagePreview &&
+			spotImageSignatureRef.current === exportPreviewSpotImageSignature
+		) {
+			return;
+		}
+
+		let cancelled = false;
+
+		setIsRenderingSpotImage(true);
+		setSpotImageError(null);
+		void (async () => {
+			try {
+				const renderedSpotImage = await renderStandaloneSpotImageDataUrl({
+					referenceImageUrl: exportPreviewHeDataUrl,
+					projectedSpots: tissueProjectedSpots,
+					selectedSpotIds: tissueSelectedSpotIds,
+					spotStyle: effectiveSpotStyle,
+				});
+				if (cancelled) {
+					return;
+				}
+				spotImageSignatureRef.current = exportPreviewSpotImageSignature;
+				setSpotImagePreview(renderedSpotImage);
+				setSpotImageError(null);
+			} catch (error) {
+				if (cancelled) {
+					return;
+				}
+				spotImageSignatureRef.current = null;
+				setSpotImagePreview(null);
+				setSpotImageError(
+					error instanceof Error
+						? error.message
+						: "Failed to render the standalone spot image.",
+				);
+			} finally {
+				if (!cancelled) {
+					setIsRenderingSpotImage(false);
+				}
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		effectiveSpotStyle,
+		exportPreviewCanExport,
+		exportPreviewHeDataUrl,
+		exportPreviewSpotImageSignature,
+		project?.currentStep,
+		spotImagePreview,
+		tissueProjectedSpots,
+		tissueSelectedSpotIds,
+	]);
 	const exportRoiSummary =
 		project?.cropQc.cropWidth && project?.cropQc.cropHeight
 			? `${project.cropQc.cropWidth} × ${project.cropQc.cropHeight} px`
@@ -3280,6 +3398,33 @@ export function PreprocessWorkspace({
 										</Flex>
 									) : null}
 								</Box>
+							) : project.currentStep === "exportPreview" ? (
+								<Stack spacing={5}>
+									<Text color="gray.600" maxW="3xl">
+										{currentCopy.body}
+									</Text>
+									<ExportPreviewPanel
+										eosinCropDataUrl={exportPreviewEosinDataUrl}
+										heCropDataUrl={exportPreviewHeDataUrl}
+										spotImageDataUrl={spotImagePreview?.dataUrl ?? null}
+										imageDimensionsSummary={
+											spotImagePreview
+												? `${spotImagePreview.width} × ${spotImagePreview.height} px`
+												: exportRoiSummary
+										}
+										isRenderingSpotImage={isRenderingSpotImage}
+										spotImageError={spotImageError}
+										canPreview={exportPreviewCanExport}
+										blockedReason={
+											exportPreviewReadiness.canExport
+												? null
+												: exportPreviewReadiness.reason
+										}
+										onContinueToExport={() => {
+											onStepChange("exportState");
+										}}
+									/>
+								</Stack>
 							) : project.currentStep === "exportState" ? (
 								<ExportPanel
 									includeProject={includeProjectJson}
@@ -3312,10 +3457,29 @@ export function PreprocessWorkspace({
 										void (async () => {
 											setIsExporting(true);
 											try {
+												const heFullresDataUrl =
+													project.cropQc.cropAssets?.he?.fullres.dataUrl ??
+													project.cropQc.previewDataUrl ??
+													null;
+												if (!heFullresDataUrl) {
+													throw new Error(
+														"Registered H&E crop assets are missing. Regenerate crop QC before export.",
+													);
+												}
+
+												const spotImage =
+													await renderStandaloneSpotImageDataUrl({
+														referenceImageUrl: heFullresDataUrl,
+														projectedSpots: project.chipConfig.projectedSpots ?? [],
+														selectedSpotIds: tissueSelectedSpotIds,
+														spotStyle: effectiveSpotStyle,
+													});
+
 												const output = await exportPreprocessZip({
 													project,
 													includeProjectJson,
 													includeAlignedImage,
+													spotImageDataUrl: spotImage.dataUrl,
 												});
 
 												const url = URL.createObjectURL(output.blob);

@@ -18,6 +18,7 @@ export const PREPROCESS_STEP_IDS = [
   "cropQc",
   "chipConfig",
   "tissueSelection",
+  "exportPreview",
   "exportState",
 ] as const satisfies readonly PreprocessStepId[];
 

@@ -787,6 +787,7 @@ describe('preprocess storage tissue metadata', () => {
       project: runtimeProject,
       includeAlignedImage: false,
       includeProjectJson: false,
+      spotImageDataUrl: PNG_DATA_URL,
     });
     const rowsByBarcode = indexRowsByBarcode(await readExportedTissuePositions(result.blob));
 

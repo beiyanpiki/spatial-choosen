@@ -18,6 +18,9 @@ export const PREPROCESS_INVALIDATION_GRAPH: Record<PreprocessStepId, readonly Pr
   cropQc: ["chipConfig", "tissueSelection", "exportState"],
   chipConfig: ["tissueSelection", "exportState"],
   tissueSelection: ["exportState"],
+  // View-only verification step: it has no persisted slice to invalidate and is
+  // re-rendered from current crop/chip/tissue data whenever it is opened.
+  exportPreview: [],
   exportState: [],
 };
 
