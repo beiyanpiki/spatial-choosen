@@ -201,6 +201,10 @@ Tissue 步骤用于在 projected spots 上选择有效组织区域。系统支�
 
 三幅图像共享同一配准裁剪尺寸（页面会标注具体像素尺寸），可逐位置比对组织覆盖情况，确认组织选择结果与配准裁剪是否一致。
 
+![图 11](images-zh/fig-11.png)
+
+图 11：导出预览步骤。左为裁剪后伊红图（Cropped eosin image），中为裁剪后 H&E 图（Cropped H&E image），右为 Under tissue spot 独立 spot 图（蓝色为组织 spot，无组织背景）；三幅图像尺寸一致，页面同时标注共享的配准裁剪尺寸；点击底部 Continue to export 进入 Export 步骤。
+
 使用说明：
 
 1. Preview 步骤在组织区域选择完成后启用；若上游结果缺失或已失效，页面会显示阻塞原因，需返回对应步骤处理后重试。
@@ -209,9 +213,9 @@ Tissue 步骤用于在 projected spots 上选择有效组织区域。系统支�
 
 ### 4.8 Export：导出结果
 
-![图 11](images-zh/fig-11.png)
+![图 12](images-zh/fig-12.png)
 
-图 11：① Include NATAScope project file；② Download。需要恢复编辑时先勾选 ①，再点击 ②。
+图 12：① Include NATAScope project file；② Download。需要恢复编辑时先勾选 ①，再点击 ②。
 
 Export 步骤将预处理结果打包为 ZIP 文件，用于后续分析流程。如需以后恢复编辑，先勾选 Include NATAScope project file；再点击 Download 下载结果包。
 
@@ -234,8 +238,8 @@ Export 步骤将预处理结果打包为 ZIP 文件，用于后续分析流程�
 
 下游使用 H&E 组织图像时，请选择 tissue_*_image.png；需要纯 spot 分布图时使用 spot_image.png；aligned_tissue_image.png 用于配准检查。
 
-![图 12](images-zh/fig-12.png)
+![图 13](images-zh/fig-13.png)
 
-图 12：① 用于恢复项目的 derived-assets 和 source-assets 目录；② 结果图像、JSON 和 CSV 文件。其中 spot_image.png 为独立 spot 图。请保留完整目录结构。
+图 13：① 用于恢复项目的 derived-assets 和 source-assets 目录；② 结果图像、JSON 和 CSV 文件。其中 spot_image.png 为独立 spot 图。请保留完整目录结构。
 
 导出前请确认配准审核已通过、芯片配置正确、组织区域选择结果已完成，并可在 Preview 步骤核对导出预览。若上游结果失效或缺少必要文件，导出按钮会被禁用或提示需要返回对应步骤重新处理。

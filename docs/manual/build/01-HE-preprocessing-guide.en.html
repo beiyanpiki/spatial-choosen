@@ -272,6 +272,7 @@
 <li>Under tissue spot: The standalone spot image. It contains no H&amp;E/eosin tissue background: spots classified as tissue are shown in blue, the remaining spot grid is shown in light gray, and the background is white.</li>
 </ul>
 <p>All three images share the registered crop dimensions (the page shows the exact pixel size), so tissue coverage can be compared position by position to confirm that the tissue selection matches the registered crop.</p>
+<figure class="fig"><img alt="Figure 11" src="../images-en/fig-11.png" /><figcaption>Figure 11: The Export Preview step. Left: cropped eosin image (Cropped eosin image); middle: cropped H&amp;E image (Cropped H&amp;E image); right: Under tissue spot, the standalone spot image (tissue spots in blue, no tissue background). All three images share the same dimensions, and the page shows the shared registered crop size. Click Continue to export at the bottom to open the Export step.</figcaption></figure>
 <p>Usage notes:</p>
 <ol>
 <li>The Preview step becomes available after tissue region selection is complete. If upstream results are missing or invalidated, the page shows the blocking reason; return to the corresponding step and retry after fixing it.</li>
@@ -279,7 +280,7 @@
 <li>After confirming the results, click Continue to export to enter the Export step. The spot_image.png file in the exported package is this standalone spot image.</li>
 </ol>
 <h3>4.8 Export: Export Results</h3>
-<figure class="fig"><img alt="Figure 11" src="../images-en/fig-11.png" /><figcaption>Figure 11: ① Include NATAScope project file; ② Download. To resume editing later, select ① first, then click ②.</figcaption></figure>
+<figure class="fig"><img alt="Figure 12" src="../images-en/fig-12.png" /><figcaption>Figure 12: ① Include NATAScope project file; ② Download. To resume editing later, select ① first, then click ②.</figcaption></figure>
 <p>The Export step packages preprocessing results as a ZIP file for downstream analysis workflows. To resume editing later, select Include NATAScope project file first. Then click Download to download the result package.</p>
 <p>Default export contents:</p>
 <table>
@@ -329,7 +330,7 @@
 <li>Include NATAScope project file: Write the project recovery file and source-image resources into the ZIP so the workspace can later be restored from the landing page through Select Package.</li>
 </ol>
 <p>When using an H&amp;E tissue image downstream, choose a tissue_*_image.png file; use spot_image.png when a pure spot map is needed; aligned_tissue_image.png is intended for registration review.</p>
-<figure class="fig"><img alt="Figure 12" src="../images-en/fig-12.png" /><figcaption>Figure 12: ① derived-assets and source-assets directories used for project recovery; ② result images, JSON, and CSV files. spot_image.png is the standalone spot image. Keep the complete directory structure.</figcaption></figure>
+<figure class="fig"><img alt="Figure 13" src="../images-en/fig-13.png" /><figcaption>Figure 13: ① derived-assets and source-assets directories used for project recovery; ② result images, JSON, and CSV files. spot_image.png is the standalone spot image. Keep the complete directory structure.</figcaption></figure>
 <p>Before exporting, confirm that registration review has passed, the chip configuration is correct, and tissue region selection is complete; the Preview step can be used to verify the export previews. If upstream results are invalidated or required files are missing, the export button is disabled or prompts you to return to the corresponding step for reprocessing.</p>
 </body>
 </html>

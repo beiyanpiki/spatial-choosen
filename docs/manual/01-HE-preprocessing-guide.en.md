@@ -201,6 +201,10 @@ After tissue region selection is complete, enter the Preview (Export Preview) st
 
 All three images share the registered crop dimensions (the page shows the exact pixel size), so tissue coverage can be compared position by position to confirm that the tissue selection matches the registered crop.
 
+![Figure 11](images-en/fig-11.png)
+
+Figure 11: The Export Preview step. Left: cropped eosin image (Cropped eosin image); middle: cropped H&E image (Cropped H&E image); right: Under tissue spot, the standalone spot image (tissue spots in blue, no tissue background). All three images share the same dimensions, and the page shows the shared registered crop size. Click Continue to export at the bottom to open the Export step.
+
 Usage notes:
 
 1. The Preview step becomes available after tissue region selection is complete. If upstream results are missing or invalidated, the page shows the blocking reason; return to the corresponding step and retry after fixing it.
@@ -209,9 +213,9 @@ Usage notes:
 
 ### 4.8 Export: Export Results
 
-![Figure 11](images-en/fig-11.png)
+![Figure 12](images-en/fig-12.png)
 
-Figure 11: ① Include NATAScope project file; ② Download. To resume editing later, select ① first, then click ②.
+Figure 12: ① Include NATAScope project file; ② Download. To resume editing later, select ① first, then click ②.
 
 The Export step packages preprocessing results as a ZIP file for downstream analysis workflows. To resume editing later, select Include NATAScope project file first. Then click Download to download the result package.
 
@@ -234,8 +238,8 @@ Optional export items:
 
 When using an H&E tissue image downstream, choose a tissue_*_image.png file; use spot_image.png when a pure spot map is needed; aligned_tissue_image.png is intended for registration review.
 
-![Figure 12](images-en/fig-12.png)
+![Figure 13](images-en/fig-13.png)
 
-Figure 12: ① derived-assets and source-assets directories used for project recovery; ② result images, JSON, and CSV files. spot_image.png is the standalone spot image. Keep the complete directory structure.
+Figure 13: ① derived-assets and source-assets directories used for project recovery; ② result images, JSON, and CSV files. spot_image.png is the standalone spot image. Keep the complete directory structure.
 
 Before exporting, confirm that registration review has passed, the chip configuration is correct, and tissue region selection is complete; the Preview step can be used to verify the export previews. If upstream results are invalidated or required files are missing, the export button is disabled or prompts you to return to the corresponding step for reprocessing.
