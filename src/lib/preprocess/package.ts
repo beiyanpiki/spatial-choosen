@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import type {
+  CanonicalCropQcSlice,
   LegacyPreprocessProject,
   PreprocessImageKind,
   PreprocessProject,
@@ -8,6 +9,7 @@ import type {
   TissueActivationMatrix,
 } from '@/types/preprocess';
 import {
+  PREPROCESS_CANONICAL_CROP_ASSET_LEVELS,
   PREPROCESS_DB_NAME,
   PREPROCESS_DERIVED_IMAGE_STORE,
   PREPROCESS_NUMERIC_DEFAULTS,
@@ -247,6 +249,9 @@ const assertNoLegacyCanonicalTissueFields = (slice: Record<string, unknown>) => 
 const packageSourcePath = (kind: PreprocessImageKind) => `source-assets/${kind}`;
 const packageHeFocusPath = () => 'derived-assets/he-focus';
 const packageHeFocusStoreKey = (projectId: string) => `${projectId}:he-focus`;
+const packageCheckerboardPreviewPath = () => 'derived-assets/crop-qc-checkerboard';
+const packageFeatureMatchesPreviewPath = () => 'derived-assets/crop-qc-feature-matches';
+const packageAlignedImagePath = () => 'aligned_tissue_image.png';
 
 const openPackagedAssetDb = async () => new Promise<IDBDatabase>((resolve, reject) => {
   const request = window.indexedDB.open(PREPROCESS_DB_NAME);
@@ -320,6 +325,19 @@ const imageUrlToBlob = async (image: PreprocessSourceImage) => {
   return response.blob();
 };
 
+const derivedPreviewUrlToBlob = async (dataUrl: string | null | undefined): Promise<Blob | null> => {
+  if (!dataUrl) return null;
+  try {
+    const response = await fetch(dataUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to read preview URL "${dataUrl.slice(0, 32)}"`);
+    }
+    return await response.blob();
+  } catch {
+    return null;
+  }
+};
+
 export async function getPreprocessPackageSourceEntries(project: PreprocessProject) {
   const sourceEntries = await Promise.all(
     (['eosin', 'he'] as const).map(async (kind) => {
@@ -345,9 +363,38 @@ export async function getPreprocessPackageSourceEntries(project: PreprocessProje
       }
     : null;
 
+  // Checkerboard/feature-matches previews are dropped from project.json, so the
+  // ZIP must carry them as entries or restored projects can no longer export
+  // with the registered H&E overlay.
+  const [checkerboardPreviewBlob, featureMatchesPreviewBlob] = await Promise.all([
+    derivedPreviewUrlToBlob(
+      project.cropQc.checkerboardPreview?.dataUrl ?? project.cropQc.checkerboardPreviewDataUrl ?? null,
+    ),
+    derivedPreviewUrlToBlob(
+      project.cropQc.featureMatchesPreview?.dataUrl ?? project.cropQc.featureMatchesPreviewDataUrl ?? null,
+    ),
+  ]);
+
+  const checkerboardEntry = checkerboardPreviewBlob
+    ? {
+        kind: 'crop-qc-checkerboard',
+        path: packageCheckerboardPreviewPath(),
+        blob: checkerboardPreviewBlob,
+      }
+    : null;
+  const featureMatchesEntry = featureMatchesPreviewBlob
+    ? {
+        kind: 'crop-qc-feature-matches',
+        path: packageFeatureMatchesPreviewPath(),
+        blob: featureMatchesPreviewBlob,
+      }
+    : null;
+
   return [
     ...sourceEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)),
     ...(focusedHeEntry ? [focusedHeEntry] : []),
+    ...(checkerboardEntry ? [checkerboardEntry] : []),
+    ...(featureMatchesEntry ? [featureMatchesEntry] : []),
   ];
 }
 
@@ -440,9 +487,47 @@ const attachPackagedDerivedImage = async (project: PreprocessProject, zip: JSZip
   };
 };
 
+const attachPackagedCropQcPreviews = async (project: PreprocessProject, zip: JSZip) => {
+  // Prefer the dedicated preview entries; fall back to the export-only aligned
+  // image so packages written before the dedicated entries existed still
+  // restore the registered overlay.
+  const checkerboardEntry = zip.file(packageCheckerboardPreviewPath()) ?? zip.file(packageAlignedImagePath());
+  const featureMatchesEntry = zip.file(packageFeatureMatchesPreviewPath());
+  const checkerboardDataUrl = checkerboardEntry
+    ? URL.createObjectURL(await checkerboardEntry.async('blob'))
+    : null;
+  const featureMatchesDataUrl = featureMatchesEntry
+    ? URL.createObjectURL(await featureMatchesEntry.async('blob'))
+    : null;
+
+  if (!checkerboardDataUrl && !featureMatchesDataUrl) {
+    return project;
+  }
+
+  return {
+    ...project,
+    cropQc: {
+      ...project.cropQc,
+      ...(checkerboardDataUrl
+        ? {
+            checkerboardPreview: { dataUrl: checkerboardDataUrl },
+            checkerboardPreviewDataUrl: checkerboardDataUrl,
+          }
+        : {}),
+      ...(featureMatchesDataUrl
+        ? {
+            featureMatchesPreview: { dataUrl: featureMatchesDataUrl },
+            featureMatchesPreviewDataUrl: featureMatchesDataUrl,
+          }
+        : {}),
+    },
+  };
+};
+
 const attachPackagedAssets = async (project: PreprocessProject, zip: JSZip) => {
   const withSources = await attachPackagedSourceBlobs(project, zip);
-  return attachPackagedDerivedImage(withSources, zip);
+  const withHeFocus = await attachPackagedDerivedImage(withSources, zip);
+  return attachPackagedCropQcPreviews(withHeFocus, zip);
 };
 
 const assertString = (value: unknown, fieldName: string) => {
@@ -1065,6 +1150,88 @@ const assertPreprocessProjectShape = (
   return packagedProject;
 };
 
+const objectUrlToDataUrl = async (objectUrl: string): Promise<string> => {
+  const response = await fetch(objectUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to read object URL "${objectUrl}"`);
+  }
+
+  const blob = await response.blob();
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.byteLength; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`;
+};
+
+const materializeCropAssetSet = async (
+  assetSet: NonNullable<CanonicalCropQcSlice["cropAssets"]["eosin"]>,
+): Promise<NonNullable<CanonicalCropQcSlice["cropAssets"]["eosin"]>> => {
+  const materialized = {} as NonNullable<CanonicalCropQcSlice["cropAssets"]["eosin"]>;
+  for (const level of PREPROCESS_CANONICAL_CROP_ASSET_LEVELS) {
+    const dataUrl = assetSet[level].dataUrl;
+    materialized[level] = {
+      dataUrl: dataUrl.startsWith('blob:') ? await objectUrlToDataUrl(dataUrl) : dataUrl,
+    };
+  }
+  return materialized;
+};
+
+const createPackagedEmptyCropQcSlice = (
+  cropQc: PreprocessProject["cropQc"],
+): PreprocessProject["cropQc"] => ({
+  ...cropQc,
+  status: "stale",
+  isStale: true,
+  error: null,
+  eosinReferenceGeometry: null,
+  heQcGeometry: null,
+  cropRect: null,
+  cropWidth: null,
+  cropHeight: null,
+  cropAssets: {
+    eosin: null,
+    he: null,
+  },
+  tissue_hires_scalef: null,
+  tissue_lowres_scalef: null,
+  spot_diameter_fullres: null,
+  fiducial_diameter_fullres: null,
+  qcAccepted: false,
+  issues: [],
+});
+
+// Once a project has been reloaded from storage, its canonical crop assets hang
+// off transient `blob:` object URLs. Packaging those verbatim exports dead
+// references: the import side then fails to persist the crop images, hydration
+// flags the canonical assets as missing, and crop QC (plus every downstream
+// step) is reset to stale. Materialize the image bytes into the package instead.
+const materializePackagedCropQcSlice = async (
+  cropQc: PreprocessProject["cropQc"],
+): Promise<PreprocessProject["cropQc"]> => {
+  const eosinAssets = cropQc.cropAssets?.eosin;
+  const heAssets = cropQc.cropAssets?.he;
+  if (!eosinAssets || !heAssets) {
+    return cropQc;
+  }
+
+  try {
+    return {
+      ...cropQc,
+      cropAssets: {
+        eosin: await materializeCropAssetSet(eosinAssets),
+        he: await materializeCropAssetSet(heAssets),
+      },
+    };
+  } catch {
+    // An object URL that can no longer be read cannot be packaged; emit the
+    // empty canonical crop state so the package stays importable and honest.
+    return createPackagedEmptyCropQcSlice(cropQc);
+  }
+};
+
 export async function serializePreprocessProject(project: PreprocessProject): Promise<Blob> {
   if (!isBrowser()) {
     throw new Error("Preprocessing project export is available in-browser only");
@@ -1072,7 +1239,10 @@ export async function serializePreprocessProject(project: PreprocessProject): Pr
 
   const payload: PreprocessPackageV4 = {
     version: PACKAGE_VERSION,
-    project: toPackagedProject(project),
+    project: toPackagedProject({
+      ...project,
+      cropQc: await materializePackagedCropQcSlice(project.cropQc),
+    }),
   };
 
   return new Blob([JSON.stringify(payload)], {

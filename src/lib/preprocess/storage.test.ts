@@ -6,8 +6,8 @@ import type { PreprocessProject, ProjectedSpot } from '@/types/preprocess';
 
 import * as chipConfigs from './chipConfigs';
 import { PREPROCESS_STORAGE_SCHEMA_VERSION } from './constants';
-import { exportPreprocessZip } from './exportBundle';
-import { serializePreprocessProject } from './package';
+import { exportPreprocessZip, getPreprocessZipExportReadiness } from './exportBundle';
+import { deserializePreprocessImport, serializePreprocessProject } from './package';
 import { projectSpotsForCrop } from './spotProjection';
 import {
   deletePreprocessProject,
@@ -1507,5 +1507,172 @@ describe('preprocess storage tissue metadata', () => {
 			createObjectUrlSpy.mockRestore();
 			warnSpy.mockRestore();
 		}
+	});
+
+	it('keeps imported crop QC and tissue selection complete across storage round-trip when packaged assets were runtime object URLs', async () => {
+		const realFetch = globalThis.fetch.bind(globalThis);
+		const cropObjectUrlBytes = new Map<string, Uint8Array>([
+			['blob:http://localhost/eosin-fullres', createPngBytes(201, 201)],
+			['blob:http://localhost/eosin-hires', createPngBytes(202, 202)],
+			['blob:http://localhost/eosin-lowres', createPngBytes(203, 203)],
+			['blob:http://localhost/he-fullres', createPngBytes(204, 204)],
+			['blob:http://localhost/he-hires', createPngBytes(205, 205)],
+			['blob:http://localhost/he-lowres', createPngBytes(206, 206)],
+			['blob:http://localhost/checkerboard', createPngBytes(207, 207)],
+		]);
+		installImageProxyMocks();
+		// Object URLs created in the active session stay fetchable, like in a
+		// real browser; URLs from the exporting session die once it ends.
+		const sessionObjectUrls = new Map<string, Blob>();
+		vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => {
+			const url = `blob:session:${sessionObjectUrls.size + 1}`;
+			sessionObjectUrls.set(url, blob);
+			return url;
+		});
+		let objectUrlsAlive = true;
+		const fetchMock = vi.fn(async (input: string) => {
+			const url = String(input);
+			const sessionBlob = sessionObjectUrls.get(url);
+			if (sessionBlob) {
+				return new Response(sessionBlob);
+			}
+			if (url.startsWith('blob:')) {
+				const bytes = objectUrlsAlive ? cropObjectUrlBytes.get(url) : undefined;
+				if (bytes) {
+					return new Response(new Blob([bytes], { type: 'image/png' }));
+				}
+				throw new TypeError('Failed to fetch');
+			}
+			if (url.startsWith('data:')) {
+				return realFetch(url);
+			}
+			if (url === '/preprocess-chip-configs/50um/manifest.json') {
+				return new Response(JSON.stringify({
+					id: '50um',
+					label: '50um',
+					gridRows: 64,
+					gridCols: 64,
+					spotDiameter: 1,
+					spotGap: 1,
+					barcodeTemplatePath: '/template.csv',
+					tissuePositionsPath: '/template.csv',
+				}), { status: 200 });
+			}
+			if (url === '/template.csv') {
+				return new Response([
+					'barcode,array_row,array_col',
+					'spot-a,1,1',
+					'spot-b,2,2',
+				].join('\n'), { status: 200 });
+			}
+			return new Response(null, { status: 404 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		// A project reloaded from storage: QC is accepted, but the canonical
+		// crop assets reference transient object URLs instead of data URLs.
+		const project = createProject();
+		project.currentStep = 'exportState';
+		const eosinSourceBytes = createPngBytes(11, 11);
+		const heSourceBytes = createPngBytes(12, 12);
+		project.sourceAssets.images = {
+			eosin: {
+				...createSourceImage('eosin'),
+				sourceBlob: new Blob([eosinSourceBytes], { type: 'image/png' }),
+			},
+			he: {
+				...createSourceImage('he'),
+				sourceBlob: new Blob([heSourceBytes], { type: 'image/png' }),
+			},
+		};
+		project.alignment.solveAccepted = true;
+		project.alignment.qualityFlags.accepted = true;
+		project.cropQc.qcAccepted = true;
+		project.cropQc.eosinReferenceGeometry = {
+			rect: { x: 0, y: 0, width: 1, height: 1 },
+			width: 640,
+			height: 640,
+		};
+		project.cropQc.cropWidth = 640;
+		project.cropQc.cropHeight = 640;
+		project.cropQc.tissue_hires_scalef = 0.5;
+		project.cropQc.tissue_lowres_scalef = 0.25;
+		project.cropQc.spot_diameter_fullres = 18;
+		project.cropQc.fiducial_diameter_fullres = 27;
+		project.cropQc.cropAssets = {
+			eosin: {
+				fullres: { dataUrl: 'blob:http://localhost/eosin-fullres' },
+				hires: { dataUrl: 'blob:http://localhost/eosin-hires' },
+				lowres: { dataUrl: 'blob:http://localhost/eosin-lowres' },
+			},
+			he: {
+				fullres: { dataUrl: 'blob:http://localhost/he-fullres' },
+				hires: { dataUrl: 'blob:http://localhost/he-hires' },
+				lowres: { dataUrl: 'blob:http://localhost/he-lowres' },
+			},
+		};
+		project.cropQc.checkerboardPreview = { dataUrl: 'blob:http://localhost/checkerboard' };
+
+		const packagedProjectJson = await (await serializePreprocessProject(project)).text();
+		objectUrlsAlive = false;
+
+		const zip = new JSZip();
+		zip.file('project.json', packagedProjectJson);
+		zip.file('source-assets/eosin', eosinSourceBytes);
+		zip.file('source-assets/he', heSourceBytes);
+		zip.file('derived-assets/crop-qc-checkerboard', createPngBytes(207, 207));
+
+		// Import path used by the preprocess landing page.
+		const imported = normalizeProjectForWorkspace(await deserializePreprocessImport(
+			new File([await zip.generateAsync({ type: 'blob' })], 'project.zip', { type: 'application/zip' }),
+		));
+		await upsertPreprocessProject(imported);
+
+		const workspace = normalizeProjectForWorkspace(
+			(await getPreprocessProject(imported.id)) as PreprocessProject,
+		);
+
+		expect(workspace.currentStep).toBe('exportState');
+		expect(workspace.cropQc.status).toBe('complete');
+		expect(workspace.cropQc.isStale).toBe(false);
+		expect(workspace.cropQc.qcAccepted).toBe(true);
+		expect(workspace.cropQc.cropAssets?.he?.fullres.dataUrl).toBeTruthy();
+		expect(workspace.cropQc.cropAssets?.eosin?.fullres.dataUrl).toBeTruthy();
+		expect(workspace.cropQc.checkerboardPreview?.dataUrl).toBeTruthy();
+		expect(workspace.tissueSelection.status).toBe('complete');
+		expect(workspace.tissueSelection.matrix).toEqual(project.tissueSelection.matrix);
+		expect(workspace.chipConfig.status).toBe('complete');
+
+		const projectedSpots = projectSpotsForCrop({
+			chip: {
+				id: '50um',
+				label: '50um',
+				gridRows: 64,
+				gridCols: 64,
+				spotDiameter: 1,
+				spotGap: 1,
+				barcodeTemplatePath: '/template.csv',
+				tissuePositionsPath: '/template.csv',
+			},
+			templateEntries: [
+				{ barcode: 'spot-a', arrayRow: 1, arrayCol: 1, pxl_row_in_fullres: 75, pxl_col_in_fullres: 75 },
+				{ barcode: 'spot-b', arrayRow: 2, arrayCol: 2, pxl_row_in_fullres: 175, pxl_col_in_fullres: 175 },
+			],
+			cropWidth: workspace.cropQc.cropWidth ?? 0,
+			cropHeight: workspace.cropQc.cropHeight ?? 0,
+		});
+
+		const readiness = getPreprocessZipExportReadiness(
+			{
+				...workspace,
+				chipConfig: {
+					...workspace.chipConfig,
+					projectedSpots,
+				},
+			},
+			{ includeAlignedImage: true },
+		);
+
+		expect(readiness.canExport).toBe(true);
 	});
 });
