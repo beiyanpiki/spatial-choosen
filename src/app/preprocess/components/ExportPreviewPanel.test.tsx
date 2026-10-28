@@ -37,6 +37,12 @@ describe('ExportPreviewPanel', () => {
     expect(screen.getByText('Cropped eosin image')).toBeInTheDocument();
     expect(screen.getByText('Cropped H&E image')).toBeInTheDocument();
     expect(screen.getByText('Standalone spot image')).toBeInTheDocument();
+    // Captions stay limited to the image titles — no explanatory subtitles or
+    // legend notes below the grid.
+    expect(screen.queryByText('Registered eosin reference crop')).not.toBeInTheDocument();
+    expect(screen.queryByText('Registered H&E tissue crop')).not.toBeInTheDocument();
+    expect(screen.queryByText('Projected spots only, no tissue background')).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining chip grid stays visible/)).not.toBeInTheDocument();
     expect(screen.getByText(/640 × 640 px/)).toBeInTheDocument();
     expect(screen.getByTestId('export-preview-status-badge')).toHaveTextContent('Ready');
   });

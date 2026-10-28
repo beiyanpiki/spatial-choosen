@@ -27,7 +27,6 @@ type ExportPreviewPanelProps = {
 
 type PreviewSlot = {
   title: string;
-  subtitle: string;
   imageUrl: string | null;
   testId: string;
   placeholderText: string;
@@ -38,14 +37,9 @@ const PREVIEW_IMAGE_BOX_HEIGHT = { base: '220px', md: '280px' };
 function PreviewImageFrame({ slot }: { slot: PreviewSlot }) {
   return (
     <Stack spacing={2}>
-      <Stack spacing={0.5}>
-        <Text fontSize="sm" fontWeight="semibold" color="gray.800">
-          {slot.title}
-        </Text>
-        <Text fontSize="xs" color="gray.500">
-          {slot.subtitle}
-        </Text>
-      </Stack>
+      <Text fontSize="sm" fontWeight="semibold" color="gray.800">
+        {slot.title}
+      </Text>
       {slot.imageUrl ? (
         <Image
           src={slot.imageUrl}
@@ -101,21 +95,18 @@ export function ExportPreviewPanel({
   const previewSlots: PreviewSlot[] = [
     {
       title: 'Cropped eosin image',
-      subtitle: 'Registered eosin reference crop',
       imageUrl: canPreview ? eosinCropDataUrl : null,
       testId: 'export-preview-eosin-image',
       placeholderText: 'The cropped eosin image is unavailable.',
     },
     {
       title: 'Cropped H&E image',
-      subtitle: 'Registered H&E tissue crop',
       imageUrl: canPreview ? heCropDataUrl : null,
       testId: 'export-preview-he-image',
       placeholderText: 'The cropped H&E image is unavailable.',
     },
     {
       title: 'Standalone spot image',
-      subtitle: 'Projected spots only, no tissue background',
       imageUrl: canPreview ? spotImageDataUrl : null,
       testId: 'export-preview-spot-image',
       placeholderText: isRenderingSpotImage
@@ -216,12 +207,6 @@ export function ExportPreviewPanel({
                 <PreviewImageFrame key={slot.testId} slot={slot} />
               ))}
             </SimpleGrid>
-            <Text fontSize="xs" color="gray.500">
-              Tissue-selected spots use the tissue spot style color; the
-              remaining chip grid stays visible in light gray. The same
-              standalone spot image is included in the exported package as
-              spot_image.png.
-            </Text>
           </Stack>
 
           <Stack px={6} py={5} spacing={3}>
