@@ -51,7 +51,7 @@ type OpenCvGlobal = {
 const OPENCV_SCRIPT_URL = '/vendor/opencv/opencv.js';
 const OPENCV_WASM_URL = '/vendor/opencv/opencv.wasm';
 const OPENCV_MAX_ATTEMPTS = 2;
-const OPENCV_RESOURCE_TIMEOUT_MS = 30_000;
+const OPENCV_RESOURCE_TIMEOUT_MS = 120_000;
 const OPENCV_RUNTIME_TIMEOUT_MS = 60_000;
 
 function isReady(cv: unknown): cv is OpenCvRuntime {
