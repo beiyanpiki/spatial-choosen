@@ -12,7 +12,7 @@ export type TissueParams = {
 };
 
 export const DEFAULT_TISSUE_PARAMS: TissueParams = {
-  thresholdMode: 'raw',
+  thresholdMode: 'auto',
   activationThreshold: 0.1,
   blockThreshold: 35,
   dbscanEps: 0.03,
@@ -23,7 +23,7 @@ export const DEFAULT_TISSUE_PARAMS: TissueParams = {
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 const normalizeThresholdMode = (value: TissueThresholdMode | undefined): TissueThresholdMode => (
-  value === 'gray-max' || value === 'gray-min' || value === 'raw'
+  value === 'auto' || value === 'gray-max' || value === 'gray-min' || value === 'raw'
     ? value
     : DEFAULT_TISSUE_PARAMS.thresholdMode
 );

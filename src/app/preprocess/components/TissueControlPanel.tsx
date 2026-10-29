@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 
 import type { TissueSpotStyle } from '@/types/preprocess';
 
-export type ThresholdMode = 'raw' | 'gray-max' | 'gray-min';
+export type ThresholdMode = 'auto' | 'raw' | 'gray-max' | 'gray-min';
 export type TissueSelectionSupportState = 'supported' | 'unsupported';
 export type TissueTool = 'activate' | 'deactivate';
 
@@ -54,7 +54,13 @@ type TissueControlPanelProps = {
   onShowSpotsChange: (showSpots: boolean) => void;
 };
 
-const THRESHOLD_MODE_OPTIONS: ThresholdMode[] = ['raw', 'gray-max', 'gray-min'];
+const THRESHOLD_MODE_OPTIONS: ThresholdMode[] = ['auto', 'raw', 'gray-max', 'gray-min'];
+const THRESHOLD_MODE_LABELS: Record<ThresholdMode, string> = {
+  auto: 'Auto',
+  raw: 'raw',
+  'gray-max': 'gray-max',
+  'gray-min': 'gray-min',
+};
 const TOOL_OPTIONS: Array<{ label: string; value: TissueTool }> = [
   { label: 'Tissue', value: 'activate' },
   { label: 'Background', value: 'deactivate' },
@@ -148,10 +154,12 @@ export function TissueControlPanel({
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [hexDraft, setHexDraft] = useState('');
   const hasInvalidLocalThresholdState =
-    activationThresholdInput === '' ||
-    blockThresholdInput === '' ||
-    hasInvalidActivationThresholdState(activationThresholdInput) ||
-    hasInvalidBlockThresholdState(blockThresholdInput);
+    thresholdMode === 'auto'
+      ? false
+      : activationThresholdInput === '' ||
+        hasInvalidActivationThresholdState(activationThresholdInput) ||
+        blockThresholdInput === '' ||
+        hasInvalidBlockThresholdState(blockThresholdInput);
 
   useEffect(() => {
     setActivationThresholdInput(String(activationThreshold));
@@ -376,69 +384,78 @@ export function TissueControlPanel({
                     onClick={() => onThresholdModeChange(mode)}
                     data-testid={`tissue-threshold-mode-option-${mode}`}
                   >
-                    {mode}
+                    {THRESHOLD_MODE_LABELS[mode]}
                   </Button>
                 ))}
               </ButtonGroup>
             </FormControl>
-            <SimpleGrid columns={2} spacing={3} alignItems="end">
-              <FormControl isDisabled={isUnsupported || isDetecting}>
-                <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Tissue Signal Threshold</FormLabel>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={activationThresholdInput}
-                  data-testid="tissue-activation-threshold-input"
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-                    const parsedValue = parseActivationThresholdInput(nextValue);
+            {thresholdMode === 'auto' ? (
+              <Text fontSize="xs" color="gray.500" data-testid="tissue-auto-mode-hint">
+                Auto mode is fully automatic: per-spot stain statistics (saturation, eosin
+                stain strength, darkness) are thresholded with Otsu and small isolated
+                background patches are removed. No parameters to adjust — switch to a
+                legacy mode for manual threshold control.
+              </Text>
+            ) : (
+              <SimpleGrid columns={2} spacing={3} alignItems="end">
+                <FormControl isDisabled={isUnsupported || isDetecting}>
+                  <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Tissue Signal Threshold</FormLabel>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    max={1}
+                    value={activationThresholdInput}
+                    data-testid="tissue-activation-threshold-input"
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      const parsedValue = parseActivationThresholdInput(nextValue);
 
-                    if (parsedValue === null) {
-                      if (/^\d*\.?\d+$/.test(nextValue)) {
-                        setActivationThresholdInput(String(activationThreshold));
+                      if (parsedValue === null) {
+                        if (/^\d*\.?\d+$/.test(nextValue)) {
+                          setActivationThresholdInput(String(activationThreshold));
+                          return;
+                        }
+
+                        setActivationThresholdInput(nextValue);
                         return;
                       }
 
                       setActivationThresholdInput(nextValue);
-                      return;
-                    }
+                      onActivationThresholdChange(parsedValue);
+                    }}
+                  />
+                </FormControl>
+                <FormControl isDisabled={isUnsupported || isDetecting}>
+                  <FormLabel fontSize="xs" color="gray.500" mb={1.5}>{blockThresholdLabel}</FormLabel>
+                  <Input
+                    type="number"
+                    step="1"
+                    min={0}
+                    max={255}
+                    value={blockThresholdInput}
+                    data-testid="tissue-block-threshold-input"
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      const parsedValue = parseBlockThresholdInput(nextValue);
 
-                    setActivationThresholdInput(nextValue);
-                    onActivationThresholdChange(parsedValue);
-                  }}
-                />
-              </FormControl>
-              <FormControl isDisabled={isUnsupported || isDetecting}>
-                <FormLabel fontSize="xs" color="gray.500" mb={1.5}>{blockThresholdLabel}</FormLabel>
-                <Input
-                  type="number"
-                  step="1"
-                  min={0}
-                  max={255}
-                  value={blockThresholdInput}
-                  data-testid="tissue-block-threshold-input"
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-                    const parsedValue = parseBlockThresholdInput(nextValue);
+                      if (parsedValue === null) {
+                        if (/^\d+$/.test(nextValue)) {
+                          setBlockThresholdInput(String(blockThreshold));
+                          return;
+                        }
 
-                    if (parsedValue === null) {
-                      if (/^\d+$/.test(nextValue)) {
-                        setBlockThresholdInput(String(blockThreshold));
+                        setBlockThresholdInput(nextValue);
                         return;
                       }
 
                       setBlockThresholdInput(nextValue);
-                      return;
-                    }
-
-                    setBlockThresholdInput(nextValue);
-                    onBlockThresholdChange(parsedValue);
-                  }}
-                />
-              </FormControl>
-            </SimpleGrid>
+                      onBlockThresholdChange(parsedValue);
+                    }}
+                  />
+                </FormControl>
+              </SimpleGrid>
+            )}
             <Button
               data-testid="tissue-run-auto"
               colorScheme="brand"

@@ -277,6 +277,15 @@ describe('migratePreprocessProject tissue matrix migration', () => {
     expect(migrated.tissueSelection.selectedSpotIds).toEqual(['spot-b']);
   });
 
+  it('preserves the auto threshold mode through migration', () => {
+    const project = createLegacyProject();
+    project.tissueSelection.thresholdMode = 'auto';
+
+    const migrated = migratePreprocessProject(project);
+
+    expect(migrated.tissueSelection.thresholdMode).toBe('auto');
+  });
+
   it('migrates supported 50um projects to 64x64 canonical matrices with 4096 cells', () => {
     const project = createLegacyProject();
     project.localization.chipType = '50um';
