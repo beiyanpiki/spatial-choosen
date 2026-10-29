@@ -241,6 +241,6 @@ When using an H&E tissue image downstream, choose a tissue_*_image.png file; use
 
 ![Figure 13](images-en/fig-13.png)
 
-Figure 13: ① derived-assets and source-assets directories used for project recovery; ② result images, JSON, and CSV files. spot_image.png is the standalone spot image. Keep the complete directory structure.
+Figure 13: ① derived-assets and source-assets directories used for project recovery; ② result images, JSON, and CSV files. Keep the complete directory structure.
 
 Before exporting, confirm that registration review has passed, the chip configuration is correct, and tissue region selection is complete; the Preview step can be used to verify the export previews. If upstream results are invalidated or required files are missing, the export button is disabled or prompts you to return to the corresponding step for reprocessing.

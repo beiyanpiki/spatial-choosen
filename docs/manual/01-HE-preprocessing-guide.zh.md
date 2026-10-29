@@ -241,6 +241,6 @@ Export 步骤将预处理结果打包为 ZIP 文件，用于后续分析流程�
 
 ![图 13](images-zh/fig-13.png)
 
-图 13：① 用于恢复项目的 derived-assets 和 source-assets 目录；② 结果图像、JSON 和 CSV 文件。其中 spot_image.png 为独立 spot 图。请保留完整目录结构。
+图 13：① 用于恢复项目的 derived-assets 和 source-assets 目录；② 结果图像、JSON 和 CSV 文件。请保留完整目录结构。
 
 导出前请确认配准审核已通过、芯片配置正确、组织区域选择结果已完成，并可在 Preview 步骤核对导出预览。若上游结果失效或缺少必要文件，导出按钮会被禁用或提示需要返回对应步骤重新处理。
