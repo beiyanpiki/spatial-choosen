@@ -297,7 +297,6 @@ export const buildEmptyPreprocessProject = (
 			...DEFAULT_TISSUE_PARAMS,
 			spotStyle: DEFAULT_TISSUE_SPOT_STYLE,
 			mode: "matrix",
-			thresholdMode: "raw",
 			autoSelectedSpotIds: [],
 			matrix: null,
 			supportState: "unsupported",

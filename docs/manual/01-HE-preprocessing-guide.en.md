@@ -168,11 +168,12 @@ Main parameters:
 1. Spot Size / Chip size: Select the chip size. The current tool supports 15um and 50um chip configurations. Different chips correspond to different spot grids and templates. Changing the size clears existing tissue edits, so confirm it before manual refinement.
 2. Automatic Tissue Detection / Auto detection: Automatically identify tissue regions from the cropped eosin image.
    - Signal mode / Threshold mode: Threshold mode.
+     - auto (default): The stain thresholds are derived automatically from each image. The eosin stain channel is computed per pixel, split into background / weak / strong stain classes by two-level Otsu thresholding, and turned into a tissue mask by morphological closing, hysteresis selection, hole filling, and removal of small isolated components. This rejects background patches whose stain statistics merely resemble tissue (for example eosin residue, grey or black scanner artifacts) without any manual threshold tuning.
      - raw: Threshold detection based on image saturation. This is often used for images with obvious stained regions.
      - gray-min: Threshold detection based on the minimum grayscale channel.
      - gray-max: Threshold detection based on the maximum grayscale channel.
-   - Tissue Signal Threshold / Activation threshold: Spot activation ratio. The input accepts 0 to 1, while the effective value during automatic detection is limited to 0 to 0.3. If the proportion of pixels inside a spot that meet the threshold condition is lower than this value, the spot is not classified as tissue.
-   - Saturation Threshold / Background cutoff: Threshold intensity, ranging from 0 to 255. In raw mode, this is shown as Saturation Threshold; in grayscale modes, it is shown as Background cutoff.
+   - Tissue Signal Threshold / Activation threshold: Spot activation ratio. The input accepts 0 to 1. If the proportion of pixels inside a spot covered by the tissue mask is lower than this value, the spot is not classified as tissue. In auto mode the effective value ranges from 0 to 1 (default 0.5, i.e. majority coverage); in the legacy modes it is limited to 0 to 0.3.
+   - Saturation Threshold / Background cutoff: Threshold intensity, ranging from 0 to 255, shown only in the legacy modes (raw shows Saturation Threshold; the grayscale modes show Background cutoff). In auto mode this input is hidden because the thresholds are computed from the image; after detection, the computed Otsu thresholds are shown in the status line.
 3. Manual Refinement / Selection controls: Manual selection tools.
    - Hide spot grid / Show spot grid: Hide or show the spot grid.
    - Invert selection: Invert the current tissue activation matrix.

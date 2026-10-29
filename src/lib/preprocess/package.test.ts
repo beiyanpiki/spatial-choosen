@@ -330,6 +330,25 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.tissueSelection.matrix?.values).toHaveLength(4096);
   });
 
+  it('accepts canonical payloads using the auto threshold mode with auto thresholds summary', async () => {
+    const project = createProject();
+    project.tissueSelection.thresholdMode = 'auto';
+    project.tissueSelection.paritySummary = {
+      selectedCount: 12,
+      selectedPercent: 25,
+      maskCoverage: 25,
+      autoThresholds: { low: 9, high: 24 },
+    };
+
+    const result = await deserializePreprocessProject(createPackageBlob({
+      version: PACKAGE_VERSION,
+      project: toCanonicalProjectPayload(project),
+    }));
+
+    expect(result.tissueSelection.thresholdMode).toBe('auto');
+    expect(result.tissueSelection.paritySummary?.autoThresholds).toEqual({ low: 9, high: 24 });
+  });
+
   it('rejects import before File checks outside browser runtime', async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal('window', undefined);

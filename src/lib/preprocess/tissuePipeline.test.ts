@@ -167,6 +167,137 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('runTissueAutoSelection (auto mode)', () => {
+  const createGridProjectedSpots = (gridSize: number, spotSize: number) => {
+    const spots: ProjectedSpot[] = [];
+
+    for (let row = 1; row <= gridSize; row += 1) {
+      for (let col = 1; col <= gridSize; col += 1) {
+        spots.push(
+          createProjectedSpot({
+            id: `spot-${row}-${col}`,
+            arrayRow: row,
+            arrayCol: col,
+            x: 0.1 + (col - 1) * 0.2,
+            y: 0.1 + (row - 1) * 0.2,
+            width: spotSize,
+            height: spotSize,
+          }),
+        );
+      }
+    }
+
+    return spots;
+  };
+
+  const AUTO_GRID_SPOTS = createGridProjectedSpots(5, 0.1);
+  const AUTO_TISSUE_SPOT_IDS = AUTO_GRID_SPOTS
+    .filter((spot) => spot.arrayRow <= 3 && spot.arrayCol <= 3)
+    .map((spot) => spot.id);
+
+  it('selects strongly stained tissue and rejects a similar-looking background patch', async () => {
+    const colorsBySpotId: Record<string, Rgb> = {};
+    for (const spotId of AUTO_TISSUE_SPOT_IDS) {
+      colorsBySpotId[spotId] = [220, 120, 180];
+    }
+    // Background patch whose stain statistics resemble, but are weaker than,
+    // the real tissue: exactly the case fixed thresholding used to misclassify.
+    colorsBySpotId['spot-5-5'] = [235, 175, 210];
+
+    installImageDataStub({
+      projectedSpots: AUTO_GRID_SPOTS,
+      colorsBySpotId,
+    });
+
+    const result = await runTissueAutoSelection({
+      eosinLowresCropDataUrl: 'data:image/png;base64,stub',
+      cropWidth: 100,
+      cropHeight: 100,
+      tissueLowresScaleFactor: 1,
+      matrixRows: 5,
+      matrixColumns: 5,
+      projectedSpots: AUTO_GRID_SPOTS,
+      params: {
+        thresholdMode: 'auto',
+        activationThreshold: 0.5,
+      },
+    });
+
+    expect(result.selectedIds).toEqual(AUTO_TISSUE_SPOT_IDS);
+    expect(result.params.thresholdMode).toBe('auto');
+    expect(result.summary.autoThresholds?.low).toBeGreaterThan(0);
+    expect(result.summary.autoThresholds?.high).toBeGreaterThanOrEqual(
+      result.summary.autoThresholds?.low ?? 0,
+    );
+    expect(result.warning).toBeNull();
+    expect(result.matrix.values.filter((value) => value === 1)).toHaveLength(9);
+  });
+
+  it('reports a warning and an empty matrix when the image has no stain signal', async () => {
+    installImageDataStub({
+      projectedSpots: AUTO_GRID_SPOTS,
+      colorsBySpotId: {},
+    });
+
+    const result = await runTissueAutoSelection({
+      eosinLowresCropDataUrl: 'data:image/png;base64,stub',
+      cropWidth: 100,
+      cropHeight: 100,
+      tissueLowresScaleFactor: 1,
+      matrixRows: 5,
+      matrixColumns: 5,
+      projectedSpots: AUTO_GRID_SPOTS,
+      params: {
+        thresholdMode: 'auto',
+        activationThreshold: 0.5,
+      },
+    });
+
+    expect(result.selectedIds).toEqual([]);
+    expect(result.summary.autoThresholds).toBeNull();
+    expect(result.warning).toBe('Auto-selection result is empty or low-confidence.');
+  });
+
+  it('keeps a real tissue region even when legacy cleanup params would remove it', async () => {
+    // Full-cell spot squares so the stain is contiguous like real tissue.
+    const gridSpots = createGridProjectedSpots(5, 0.2);
+    const colorsBySpotId: Record<string, Rgb> = {};
+    for (const spot of gridSpots) {
+      if (spot.arrayRow <= 3 && spot.arrayCol <= 3) {
+        colorsBySpotId[spot.id] = [220, 120, 180];
+      }
+    }
+
+    installImageDataStub({
+      projectedSpots: gridSpots,
+      colorsBySpotId,
+    });
+
+    const result = await runTissueAutoSelection({
+      eosinLowresCropDataUrl: 'data:image/png;base64,stub',
+      cropWidth: 100,
+      cropHeight: 100,
+      tissueLowresScaleFactor: 1,
+      matrixRows: 5,
+      matrixColumns: 5,
+      projectedSpots: gridSpots,
+      params: {
+        thresholdMode: 'auto',
+        activationThreshold: 0.5,
+        // Legacy-mode-only knobs must not affect the auto pipeline: with
+        // these values the grid heuristics would drop every selected spot.
+        minConnectedSpotCount: 50,
+        dbscanMinSamples: 50,
+      },
+    });
+
+    const expectedIds = gridSpots
+      .filter((spot) => spot.arrayRow <= 3 && spot.arrayCol <= 3)
+      .map((spot) => spot.id);
+    expect(result.selectedIds).toEqual(expectedIds);
+  });
+});
+
 describe('runTissueAutoSelection', () => {
   it('keeps matrix shape and selection stable for projected crop spots', async () => {
     const projectedSpots = projectSpotsForCrop({
@@ -282,6 +413,7 @@ describe('runTissueAutoSelection', () => {
       matrixColumns: 96,
       projectedSpots: FIFTEEN_UM_PROJECTED_SPOTS,
       params: {
+        thresholdMode: 'raw' as const,
         activationThreshold: 0.5,
         blockThreshold: 100,
         dbscanEps: 0.2,
@@ -374,6 +506,7 @@ describe('runTissueAutoSelection', () => {
       matrixColumns: 96,
       projectedSpots: FIFTEEN_UM_PROJECTED_SPOTS,
       params: {
+        thresholdMode: 'raw',
         activationThreshold: 0.5,
         blockThreshold: 10,
         dbscanEps: 0.2,

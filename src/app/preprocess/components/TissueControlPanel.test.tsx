@@ -275,6 +275,30 @@ describe("TissueControlPanel", () => {
 		expect(onRunAutoDetection).toHaveBeenCalledTimes(1);
 	});
 
+	it("auto mode hides the manual block threshold and re-exposes it for legacy modes", async () => {
+		const user = userEvent.setup();
+		const { onThresholdModeChange } = renderPanel({
+			thresholdMode: "auto",
+			activationThreshold: 0.5,
+		});
+
+		const modeOption = (mode: ThresholdMode) =>
+			screen.getByTestId(`tissue-threshold-mode-option-${mode}`);
+		expect(modeOption("auto")).toHaveAttribute("aria-pressed", "true");
+		expect(
+			screen.queryByTestId("tissue-block-threshold-input"),
+		).not.toBeInTheDocument();
+		expect(screen.getByTestId("tissue-activation-threshold-input")).toHaveValue(
+			0.5,
+		);
+
+		await user.click(modeOption("raw"));
+		expect(onThresholdModeChange).toHaveBeenCalledWith("raw");
+		expect(
+			screen.getByTestId("tissue-block-threshold-input"),
+		).toBeInTheDocument();
+	});
+
 	it("opens the in-page palette and applies colors and opacity", async () => {
 		const user = userEvent.setup();
 		const { onSpotStyleChange } = renderPanel();

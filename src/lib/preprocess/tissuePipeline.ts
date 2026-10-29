@@ -1,6 +1,7 @@
 import type { ProjectedSpot, TissueActivationMatrix } from '@/types/preprocess';
 import { getProjectedSpotLowresBounds } from './spotProjection';
 import { applyConnectedSpotCleanup, applyDensityFilter } from './tissueCleanup';
+import { buildAutoTissueMask, computeRawSaturation } from './tissueMask';
 import { matrixFromSelectedSpotIds } from './tissueMatrix';
 import { normalizeTissueParams, type TissueParams } from './tissueThresholds';
 
@@ -8,6 +9,75 @@ const SPOT_BATCH_YIELD_INTERVAL = 250;
 
 type SchedulerLike = {
   yield?: () => Promise<void>;
+};
+
+const medianOf = (values: number[]) => {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+/**
+ * Estimates the projected spot pitch in lowres pixels from grid adjacency, so
+ * the auto mask's morphology scales with the chip instead of adding knobs.
+ */
+const computeSpotPitchPx = (args: {
+  projectedSpots: ProjectedSpot[];
+  imageWidth: number;
+  imageHeight: number;
+}) => {
+  const lowresWidth = args.imageWidth;
+  const lowresHeight = args.imageHeight;
+  const byGrid = new Map(args.projectedSpots.map((spot) => [`${spot.arrayRow}:${spot.arrayCol}`, spot]));
+  const pitches: number[] = [];
+
+  for (const spot of args.projectedSpots) {
+    for (const neighbor of [
+      byGrid.get(`${spot.arrayRow}:${spot.arrayCol + 1}`),
+      byGrid.get(`${spot.arrayRow + 1}:${spot.arrayCol}`),
+    ]) {
+      if (!neighbor) {
+        continue;
+      }
+
+      pitches.push(
+        Math.hypot(
+          (neighbor.x - spot.x) * lowresWidth,
+          (neighbor.y - spot.y) * lowresHeight,
+        ),
+      );
+    }
+  }
+
+  if (pitches.length > 0) {
+    return Math.max(1, medianOf(pitches));
+  }
+
+  // Degenerate grids (a single projected spot): fall back to the mean cell size.
+  return Math.max(1, Math.sqrt((lowresWidth * lowresHeight) / Math.max(1, args.projectedSpots.length)));
+};
+
+const buildMaskIntegralImage = (mask: Uint8Array, width: number, height: number) => {
+  const stride = width + 1;
+  const integral = new Uint32Array((height + 1) * stride);
+
+  for (let py = 0; py < height; py += 1) {
+    let rowSum = 0;
+    for (let px = 0; px < width; px += 1) {
+      if (mask[py * width + px] === 1) {
+        rowSum += 1;
+      }
+      integral[(py + 1) * stride + (px + 1)] = integral[py * stride + (px + 1)] + rowSum;
+    }
+  }
+
+  return { integral, stride };
 };
 
 const computeActivePixelRatio = (args: {
@@ -59,16 +129,6 @@ const transformChannels = (args: {
   }
 
   return [r, g, b] as const;
-};
-
-const computeRawSaturation = (r: number, g: number, b: number) => {
-  const max = Math.max(r, g, b);
-  if (max === 0) {
-    return 0;
-  }
-
-  const min = Math.min(r, g, b);
-  return ((max - min) / max) * 255;
 };
 
 const buildActivePixelIntegralImage = (
@@ -138,6 +198,8 @@ export type TissueParitySummary = {
   selectedCount: number;
   selectedPercent: number;
   maskCoverage: number;
+  /** Otsu thresholds computed by the auto mode; null for legacy modes. */
+  autoThresholds?: { low: number; high: number } | null;
 };
 
 export type TissuePipelineResult = {
@@ -242,14 +304,42 @@ export async function runTissueAutoSelection(args: {
   params: Partial<TissueParams>;
 }) {
   const params = normalizeTissueParams(args.params);
+  const thresholdMode = params.thresholdMode;
+  const thresholdModeIsAuto = thresholdMode === 'auto';
   const imageData = await loadImageData(args.eosinLowresCropDataUrl);
-  const { integral, stride } = buildActivePixelIntegralImage(
-    imageData.data,
-    imageData.width,
-    imageData.height,
-    params.blockThreshold,
-    params.thresholdMode,
-  );
+  let autoThresholds: { low: number; high: number } | null = null;
+  let integral: Uint32Array;
+  let stride: number;
+
+  if (thresholdMode === 'auto') {
+    const spotPitchPx = computeSpotPitchPx({
+      projectedSpots: args.projectedSpots,
+      imageWidth: imageData.width,
+      imageHeight: imageData.height,
+    });
+    const autoMask = buildAutoTissueMask(imageData.data, {
+      width: imageData.width,
+      height: imageData.height,
+      spotPitchPx,
+    });
+    ({ integral, stride } = buildMaskIntegralImage(
+      autoMask.mask,
+      imageData.width,
+      imageData.height,
+    ));
+    if (autoMask.hasStainSignal) {
+      autoThresholds = { low: autoMask.lowThreshold, high: autoMask.highThreshold };
+    }
+  } else {
+    ({ integral, stride } = buildActivePixelIntegralImage(
+      imageData.data,
+      imageData.width,
+      imageData.height,
+      params.blockThreshold,
+      thresholdMode,
+    ));
+  }
+
   const candidateIds: string[] = [];
 
   for (let index = 0; index < args.projectedSpots.length; index += 1) {
@@ -284,7 +374,10 @@ export async function runTissueAutoSelection(args: {
 
   let selectedIdSet = new Set(candidateIds);
 
-  if (selectedIdSet.size > 0 && params.minConnectedSpotCount > 1) {
+  // Auto mode already enforces spatial coherence in image space (closing,
+  // hysteresis, connected-component filtering), so the grid-level heuristics
+  // and their extra hyperparameters only apply to the legacy modes.
+  if (!thresholdModeIsAuto && selectedIdSet.size > 0 && params.minConnectedSpotCount > 1) {
     selectedIdSet = applyConnectedSpotCleanup({
       projectedSpots: args.projectedSpots,
       selectedIds: selectedIdSet,
@@ -292,7 +385,7 @@ export async function runTissueAutoSelection(args: {
     });
   }
 
-  if (selectedIdSet.size > 0 && params.dbscanMinSamples > 1) {
+  if (!thresholdModeIsAuto && selectedIdSet.size > 0 && params.dbscanMinSamples > 1) {
     selectedIdSet = applyDensityFilter({
       projectedSpots: args.projectedSpots,
       candidateIds: selectedIdSet,
@@ -327,6 +420,7 @@ export async function runTissueAutoSelection(args: {
     selectedCount,
     selectedPercent,
     maskCoverage: selectedPercent,
+    autoThresholds: thresholdModeIsAuto ? autoThresholds : null,
   };
 
   const warning = selectedCount === 0 || selectedPercent < 1 ? 'Auto-selection result is empty or low-confidence.' : null;
