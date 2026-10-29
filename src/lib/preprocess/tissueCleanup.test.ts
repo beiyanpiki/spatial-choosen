@@ -3,6 +3,7 @@ import type { ProjectedSpot } from '@/types/preprocess';
 import {
   AUTO_COMPONENT_AREA_RATIO,
   AUTO_COMPONENT_MIN_SPOTS,
+  applyBoundaryGrowth,
   applyRelativeComponentFilter,
 } from './tissueCleanup';
 
@@ -17,6 +18,43 @@ const spot = (id: string, arrayRow: number, arrayCol: number): ProjectedSpot => 
   height: 0.05,
   diameterX: 0.05,
   diameterY: 0.05,
+});
+
+describe('applyBoundaryGrowth', () => {
+  it('adds only candidates touching the original selection, exactly one ring', () => {
+    const projectedSpots = [
+      // Selection: a 2x2 block.
+      spot('t1', 1, 1),
+      spot('t2', 1, 2),
+      spot('t3', 2, 1),
+      spot('t4', 2, 2),
+      // Candidates adjacent to the block.
+      spot('ring-a', 3, 1),
+      spot('ring-b', 1, 3),
+      // Candidate only adjacent to ring-a: must NOT be added in the same round.
+      spot('second-ring', 4, 1),
+      // Candidate far away.
+      spot('far', 8, 8),
+    ];
+
+    const keep = applyBoundaryGrowth({
+      projectedSpots,
+      selectedIds: new Set(['t1', 't2', 't3', 't4']),
+      candidateIds: new Set(['ring-a', 'ring-b', 'second-ring', 'far']),
+    });
+
+    expect([...keep].sort()).toEqual(['ring-a', 'ring-b', 't1', 't2', 't3', 't4']);
+  });
+
+  it('never grows beyond the selection when no candidate qualifies', () => {
+    const keep = applyBoundaryGrowth({
+      projectedSpots: [spot('a', 1, 1), spot('b', 1, 2)],
+      selectedIds: new Set(['a']),
+      candidateIds: new Set<string>(),
+    });
+
+    expect([...keep]).toEqual(['a']);
+  });
 });
 
 describe('applyRelativeComponentFilter', () => {

@@ -1,6 +1,7 @@
 import type { ProjectedSpot, TissueActivationMatrix } from '@/types/preprocess';
 import { getProjectedSpotLowresBounds } from './spotProjection';
 import {
+  applyBoundaryGrowth,
   applyConnectedSpotCleanup,
   applyDensityFilter,
   applyRelativeComponentFilter,
@@ -8,6 +9,8 @@ import {
 import {
   buildChannelIntegralImages,
   computeRawSaturation,
+  MIN_CHANNEL_SEPARATION,
+  otsuWithSeparation,
   selectAutoChannel,
   type AutoChannelSelection,
   type TissueChannelId,
@@ -345,17 +348,65 @@ export async function runTissueAutoSelection(args: {
 
   if (thresholdModeIsAuto) {
     // Channel-agnostic spot classification: pick the stain channel whose
-    // spot-mean distribution separates best, threshold it with Otsu, then drop
-    // small isolated spot groups that are background patches with tissue-like
-    // statistics. No user-tunable parameters.
+    // spot-mean distribution separates best, threshold it with Otsu, recover
+    // the boundary ring, and drop small isolated spot groups (background
+    // patches with tissue-like statistics). No user-tunable parameters.
     autoSelection = selectAutoChannel(spotMeans);
     if (autoSelection) {
       const channelMeans = spotMeans[autoSelection.channel];
-      selectedIdSet = new Set(
+      let grownIds: Set<string> | null = null;
+      const strongIds = new Set(
         args.projectedSpots
           .filter((spot, index) => spot && channelMeans[index] >= autoSelection!.threshold)
           .map((spot) => spot.id),
       );
+
+      // Boundary spots only partially overlap tissue, so their means land
+      // below the main threshold. A second Otsu split on the below-threshold
+      // means identifies the boundary band; when that band is a distinct
+      // class sitting above the background mean, spots in it adjacent to the
+      // selection are recovered. Splits at or below the background mean are
+      // noise structure, not a boundary band, and are ignored.
+      const belowThresholdMeans = new Float64Array(args.projectedSpots.length);
+      let belowCount = 0;
+      for (let index = 0; index < args.projectedSpots.length; index += 1) {
+        const mean = channelMeans[index];
+        if (mean < autoSelection.threshold) {
+          belowThresholdMeans[belowCount] = mean;
+          belowCount += 1;
+        }
+      }
+      const boundary = otsuWithSeparation(belowThresholdMeans.subarray(0, belowCount));
+      let belowThresholdMean = 0;
+      for (let index = 0; index < belowCount; index += 1) {
+        belowThresholdMean += belowThresholdMeans[index];
+      }
+      belowThresholdMean = belowCount > 0 ? belowThresholdMean / belowCount : 0;
+
+      if (
+        belowCount > 0
+        && boundary.separation >= MIN_CHANNEL_SEPARATION
+        && boundary.threshold > belowThresholdMean
+      ) {
+        const weakIds = new Set(
+          args.projectedSpots
+            .filter((spot, index) => (
+              spot
+              && channelMeans[index] < autoSelection!.threshold
+              && channelMeans[index] >= boundary.threshold
+            ))
+            .map((spot) => spot.id),
+        );
+        if (weakIds.size > 0) {
+          grownIds = applyBoundaryGrowth({
+            projectedSpots: args.projectedSpots,
+            selectedIds: strongIds,
+            candidateIds: weakIds,
+          });
+        }
+      }
+
+      selectedIdSet = grownIds ?? strongIds;
       if (selectedIdSet.size > 0) {
         selectedIdSet = applyRelativeComponentFilter({
           projectedSpots: args.projectedSpots,

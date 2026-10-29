@@ -186,8 +186,8 @@ describe('runTissueAutoSelection (auto mode)', () => {
             id: `spot-${row}-${col}`,
             arrayRow: row,
             arrayCol: col,
-            x: 0.1 + (col - 1) * 0.2,
-            y: 0.1 + (row - 1) * 0.2,
+            x: (col - 0.5) / gridSize,
+            y: (row - 0.5) / gridSize,
             width: spotSize,
             height: spotSize,
           }),
@@ -301,6 +301,43 @@ describe('runTissueAutoSelection (auto mode)', () => {
       .map((spot) => spot.id);
     expect(result.selectedIds).toEqual(expectedIds);
     expect(result.summary.autoDetection?.channel).toBe('darkness');
+  });
+
+  it('recovers the boundary ring of partially covered spots', async () => {
+    // Value ladder on a 7x7 grid: strong tissue core, weaker boundary ring
+    // (spots that only partially overlap tissue), faint background. The main
+    // Otsu split isolates the core; the sub-Otsu boundary band plus one
+    // growth round must recover the ring but not the outer background.
+    const gridSpots = createGridProjectedSpots(7, 1 / 7);
+    const colorsBySpotId: Record<string, Rgb> = {};
+    for (const spot of gridSpots) {
+      const distance = Math.max(Math.abs(spot.arrayRow - 4), Math.abs(spot.arrayCol - 4));
+      if (distance <= 1) {
+        colorsBySpotId[spot.id] = [220, 140, 140];
+      } else if (distance === 2) {
+        colorsBySpotId[spot.id] = [220, 190, 190];
+      }
+      // distance >= 3 stays at the white background fill.
+    }
+
+    installImageDataStub({ projectedSpots: gridSpots, colorsBySpotId });
+
+    const result = await runTissueAutoSelection({
+      eosinLowresCropDataUrl: 'data:image/png;base64,stub',
+      cropWidth: 100,
+      cropHeight: 100,
+      tissueLowresScaleFactor: 1,
+      matrixRows: 7,
+      matrixColumns: 7,
+      projectedSpots: gridSpots,
+      params: { thresholdMode: 'auto' },
+    });
+
+    const expectedIds = gridSpots
+      .filter((spot) => Math.max(Math.abs(spot.arrayRow - 4), Math.abs(spot.arrayCol - 4)) <= 2)
+      .map((spot) => spot.id);
+    expect(result.selectedIds).toEqual(expectedIds);
+    expect(result.matrix.values.filter((value) => value === 1)).toHaveLength(25);
   });
 
   it('keeps a real tissue region even when legacy cleanup params would remove it', async () => {

@@ -82,6 +82,38 @@ export function applyDensityFilter(args: {
 }
 
 /**
+ * Adds candidate spots that touch the current selection (one grid ring).
+ * Boundary spots only partially overlap tissue, so their statistics sit below
+ * the main Otsu threshold; a single growth round recovers them without the
+ * runaway that unbounded transitive growth would cause.
+ */
+export function applyBoundaryGrowth(args: {
+  projectedSpots: ProjectedSpot[];
+  selectedIds: Set<string>;
+  candidateIds: Set<string>;
+}) {
+  const byGrid = new Map(args.projectedSpots.map((spot) => [keyFor(spot.arrayRow, spot.arrayCol), spot]));
+  const keep = new Set(args.selectedIds);
+
+  for (const spot of args.projectedSpots) {
+    if (args.selectedIds.has(spot.id) || !args.candidateIds.has(spot.id)) {
+      continue;
+    }
+
+    // Judge adjacency against the original selection only, so the loop cannot
+    // cascade into a second ring.
+    for (const neighbor of neighborsFor(spot, byGrid)) {
+      if (args.selectedIds.has(neighbor.id)) {
+        keep.add(spot.id);
+        break;
+      }
+    }
+  }
+
+  return keep;
+}
+
+/**
  * Keeps connected groups of selected spots that are large in absolute terms
  * and large relative to the biggest group. Real tissue forms large contiguous
  * regions; background patches whose statistics resemble tissue survive the
