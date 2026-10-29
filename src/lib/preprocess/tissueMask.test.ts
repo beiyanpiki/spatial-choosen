@@ -1,91 +1,86 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildAutoTissueMask,
-  closeMask,
+  buildChannelIntegralImages,
+  computeChannelValue,
+  computeDarkness,
+  computeRawSaturation,
   computeStainStrength,
-  fillMaskHoles,
-  hysteresisMask,
   otsuThresholdFromHistogram,
-  removeSmallComponents,
-  twoLevelOtsuThresholds,
+  otsuWithSeparation,
+  selectAutoChannel,
+  TISSUE_CHANNEL_IDS,
 } from './tissueMask';
-
-type Rect = {
-  startX: number;
-  endX: number;
-  startY: number;
-  endY: number;
-};
 
 const WHITE: readonly [number, number, number] = [250, 250, 250];
 const EOSIN_TISSUE: readonly [number, number, number] = [220, 120, 180];
-const EOSIN_RESIDUE: readonly [number, number, number] = [235, 175, 210];
-const GREY_ARTIFACT: readonly [number, number, number] = [128, 128, 128];
-const BLACK_ARTIFACT: readonly [number, number, number] = [30, 30, 30];
 
-const buildImageData = (args: {
-  width: number;
-  height: number;
-  fill?: readonly [number, number, number];
-  rectangles?: Array<Rect & { color: readonly [number, number, number] }>;
-}) => {
-  const [fr, fg, fb] = args.fill ?? WHITE;
-  const data = new Uint8ClampedArray(args.width * args.height * 4);
-
-  for (let index = 0; index < args.width * args.height; index += 1) {
+const buildImageData = (
+  pixels: Array<readonly [number, number, number]>,
+  width: number,
+) => {
+  const data = new Uint8ClampedArray(pixels.length * 4);
+  pixels.forEach((pixel, index) => {
     const offset = index * 4;
-    data[offset] = fr;
-    data[offset + 1] = fg;
-    data[offset + 2] = fb;
+    data[offset] = pixel[0];
+    data[offset + 1] = pixel[1];
+    data[offset + 2] = pixel[2];
     data[offset + 3] = 255;
-  }
-
-  for (const rect of args.rectangles ?? []) {
-    for (let py = Math.max(0, rect.startY); py < Math.min(args.height, rect.endY); py += 1) {
-      for (let px = Math.max(0, rect.startX); px < Math.min(args.width, rect.endX); px += 1) {
-        const offset = (py * args.width + px) * 4;
-        data[offset] = rect.color[0];
-        data[offset + 1] = rect.color[1];
-        data[offset + 2] = rect.color[2];
-        data[offset + 3] = 255;
-      }
-    }
-  }
-
-  return data;
+  });
+  return { data, width, height: pixels.length / width };
 };
 
-const countMaskPixels = (mask: Uint8Array) => {
-  let count = 0;
-  for (let index = 0; index < mask.length; index += 1) {
-    if (mask[index] === 1) {
-      count += 1;
-    }
-  }
-  return count;
-};
-
-const maskHasValueAt = (mask: Uint8Array, width: number, px: number, py: number) => (
-  mask[py * width + px] === 1
-);
-
-describe('computeStainStrength', () => {
-  it('maps eosin pink to positive values that grow with stain intensity', () => {
+describe('channel value helpers', () => {
+  it('maps eosin pink to positive stain values that grow with intensity', () => {
     expect(computeStainStrength(220, 120, 180)).toBeGreaterThan(0);
     expect(computeStainStrength(220, 120, 180)).toBeGreaterThan(computeStainStrength(235, 175, 210));
-    expect(computeStainStrength(220, 120, 180)).toBeLessThanOrEqual(255);
   });
 
-  it('maps grey and black regions to exactly zero regardless of brightness', () => {
+  it('maps grey and black regions to exactly zero stain regardless of brightness', () => {
     expect(computeStainStrength(255, 255, 255)).toBe(0);
     expect(computeStainStrength(128, 128, 128)).toBe(0);
     expect(computeStainStrength(30, 30, 30)).toBe(0);
-    expect(computeStainStrength(0, 0, 0)).toBe(0);
+    expect(computeStainStrength(255, 0, 0)).toBe(0);
   });
 
-  it('maps red-only and green-only stain colors to zero', () => {
-    expect(computeStainStrength(255, 0, 0)).toBe(0);
-    expect(computeStainStrength(0, 255, 0)).toBe(0);
+  it('computes saturation and darkness with higher meaning more tissue-like', () => {
+    expect(computeRawSaturation(220, 120, 180)).toBeGreaterThan(computeRawSaturation(250, 250, 250));
+    expect(computeDarkness(220, 120, 180)).toBeGreaterThan(computeDarkness(250, 250, 250));
+    expect(computeDarkness(60, 60, 60)).toBeCloseTo(195, 5);
+  });
+
+  it('exposes the same three channels everywhere', () => {
+    expect(TISSUE_CHANNEL_IDS).toEqual(['saturation', 'stain', 'darkness']);
+    for (const channel of TISSUE_CHANNEL_IDS) {
+      expect(computeChannelValue(channel, 0, 0, 0)).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describe('buildChannelIntegralImages', () => {
+  it('yields exact windowed means over a small image', () => {
+    // 2x2 image: two white pixels and two eosin pixels.
+    const { data, width, height } = buildImageData([
+      WHITE, EOSIN_TISSUE,
+      EOSIN_TISSUE, WHITE,
+    ], 2);
+    const integrals = buildChannelIntegralImages(data, width, height);
+
+    const mean = (channel: 'saturation' | 'stain' | 'darkness') => {
+      const { integral, stride } = integrals[channel];
+      return integral[2 * stride + 2] / 4;
+    };
+
+    const expectedSaturation = (
+      2 * computeRawSaturation(...WHITE)
+      + 2 * computeRawSaturation(...EOSIN_TISSUE)
+    ) / 4;
+    expect(mean('saturation')).toBeCloseTo(expectedSaturation, 6);
+
+    const expectedDarkness = (
+      2 * computeDarkness(...WHITE)
+      + 2 * computeDarkness(...EOSIN_TISSUE)
+    ) / 4;
+    expect(mean('darkness')).toBeCloseTo(expectedDarkness, 6);
   });
 });
 
@@ -105,222 +100,91 @@ describe('otsuThresholdFromHistogram', () => {
   });
 });
 
-describe('twoLevelOtsuThresholds', () => {
-  it('produces a low/high pair that separates three stain classes', () => {
-    const histogram = new Uint32Array(256);
-    histogram[0] = 6000;
-    histogram[10] = 900;
-    histogram[20] = 900;
+describe('otsuWithSeparation', () => {
+  it('scores a bimodal distribution with high separation and a threshold between modes', () => {
+    const values = new Float64Array([
+      ...new Array(50).fill(5),
+      ...new Array(50).fill(120),
+    ]);
 
-    const { low, high } = twoLevelOtsuThresholds(histogram);
-    expect(low).toBeGreaterThan(0);
-    expect(low).toBeLessThanOrEqual(10);
-    expect(high).toBeGreaterThan(10);
-    expect(high).toBeLessThanOrEqual(20);
+    const { threshold, separation } = otsuWithSeparation(values);
+    expect(threshold).toBeGreaterThan(5);
+    expect(threshold).toBeLessThanOrEqual(120);
+    expect(separation).toBeGreaterThan(0.9);
   });
 
-  it('falls back to a single threshold when the stain class does not split', () => {
-    const histogram = new Uint32Array(256);
-    histogram[0] = 6000;
-    histogram[8] = 900;
-    histogram[24] = 2500;
+  it('scores a uniform ramp lower than a clean bimodal split', () => {
+    const ramp = new Float64Array(
+      Array.from({ length: 100 }, (_unused, index) => 50 + index * 0.1),
+    );
+    const bimodal = new Float64Array([
+      ...new Array(50).fill(5),
+      ...new Array(50).fill(120),
+    ]);
 
-    const { low, high } = twoLevelOtsuThresholds(histogram);
-    expect(high).toBe(low);
-    expect(low).toBeGreaterThan(0);
+    const rampSeparation = otsuWithSeparation(ramp).separation;
+    const bimodalSeparation = otsuWithSeparation(bimodal).separation;
+    expect(bimodalSeparation).toBeGreaterThan(rampSeparation);
+    expect(bimodalSeparation).toBeGreaterThan(0.9);
   });
 
-  it('never returns a high threshold below the low threshold', () => {
-    const histogram = new Uint32Array(256);
-    histogram[10] = 500;
-
-    const { low, high } = twoLevelOtsuThresholds(histogram);
-    expect(high).toBeGreaterThanOrEqual(low);
-  });
-});
-
-describe('closeMask', () => {
-  it('bridges gaps narrower than twice the radius', () => {
-    const width = 21;
-    const height = 5;
-    const mask = new Uint8Array(width * height);
-    for (let px = 0; px < 8; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-    for (let px = 13; px < width; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-
-    const closed = closeMask(mask, width, height, 3);
-    for (let px = 0; px < width; px += 1) {
-      expect(maskHasValueAt(closed, width, px, 2)).toBe(true);
-    }
+  it('returns zero separation for uniform values', () => {
+    const { threshold, separation } = otsuWithSeparation(new Float64Array(20).fill(0));
+    expect(separation).toBe(0);
+    expect(threshold).toBe(0);
   });
 
-  it('leaves gaps wider than twice the radius open', () => {
-    const width = 30;
-    const height = 5;
-    const mask = new Uint8Array(width * height);
-    for (let px = 0; px < 10; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-    for (let px = 22; px < width; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-
-    const closed = closeMask(mask, width, height, 3);
-    expect(maskHasValueAt(closed, width, 15, 2)).toBe(false);
+  it('handles empty input', () => {
+    expect(otsuWithSeparation(new Float64Array(0))).toEqual({ threshold: 255, separation: 0 });
   });
 });
 
-describe('hysteresisMask', () => {
-  it('keeps weak pixels attached to strong regions and drops isolated weak blobs', () => {
-    const width = 20;
-    const height = 5;
-    const strong = new Uint8Array(width * height);
-    const weak = new Uint8Array(width * height);
-
-    // Strong tissue on the left, weak halo adjacent to it.
-    for (let px = 0; px < 6; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        strong[py * width + px] = 1;
-      }
-    }
-    for (let px = 6; px < 9; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        weak[py * width + px] = 1;
-      }
-    }
-    // Isolated weak blob far away from tissue: the "similar background".
-    for (let px = 14; px < 18; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        weak[py * width + px] = 1;
-      }
-    }
-
-    const result = hysteresisMask(strong, weak, width, height);
-    expect(maskHasValueAt(result, width, 7, 2)).toBe(true);
-    expect(maskHasValueAt(result, width, 16, 2)).toBe(false);
-  });
-});
-
-describe('fillMaskHoles', () => {
-  it('fills enclosed background holes', () => {
-    const width = 10;
-    const height = 10;
-    const mask = new Uint8Array(width * height).fill(1);
-    for (let py = 4; py < 6; py += 1) {
-      for (let px = 4; px < 6; px += 1) {
-        mask[py * width + px] = 0;
-      }
-    }
-
-    const filled = fillMaskHoles(mask, width, height);
-    expect(countMaskPixels(filled)).toBe(width * height);
-  });
-
-  it('keeps background that touches the image border', () => {
-    const width = 10;
-    const height = 10;
-    const mask = new Uint8Array(width * height).fill(1);
-    for (let py = 0; py < height; py += 1) {
-      mask[py * width + 9] = 0;
-    }
-
-    const filled = fillMaskHoles(mask, width, height);
-    expect(maskHasValueAt(filled, width, 9, 5)).toBe(false);
-  });
-});
-
-describe('removeSmallComponents', () => {
-  it('drops components below both the absolute floor and the relative ratio', () => {
-    const width = 50;
-    const height = 10;
-    const mask = new Uint8Array(width * height);
-    for (let px = 0; px < 30; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-    for (let px = 40; px < 43; px += 1) {
-      for (let py = 0; py < 3; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-
-    const filtered = removeSmallComponents(mask, width, height, 10);
-    expect(maskHasValueAt(filtered, width, 15, 5)).toBe(true);
-    expect(maskHasValueAt(filtered, width, 41, 1)).toBe(false);
-  });
-
-  it('keeps a component that satisfies the relative ratio', () => {
-    const width = 50;
-    const height = 10;
-    const mask = new Uint8Array(width * height);
-    // Large component: 300 px. Companion: 40 px > ceil(300 * AUTO_COMPONENT_AREA_RATIO).
-    for (let px = 0; px < 30; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-    for (let px = 40; px < 44; px += 1) {
-      for (let py = 0; py < height; py += 1) {
-        mask[py * width + px] = 1;
-      }
-    }
-
-    const filtered = removeSmallComponents(mask, width, height, 10);
-    expect(maskHasValueAt(filtered, width, 42, 5)).toBe(true);
-  });
-});
-
-describe('buildAutoTissueMask', () => {
-  it('selects real tissue while rejecting similar-looking background patches and grey artifacts', () => {
-    const width = 100;
-    const height = 100;
-    const data = buildImageData({
-      width,
-      height,
-      rectangles: [
-        // Real tissue: strongly stained pink region.
-        { startX: 10, endX: 60, startY: 10, endY: 60, color: EOSIN_TISSUE },
-        // Background with similar (but weaker) stain statistics.
-        { startX: 5, endX: 30, startY: 70, endY: 95, color: EOSIN_RESIDUE },
-        // Grey and black scanner artifacts.
-        { startX: 70, endX: 90, startY: 5, endY: 25, color: GREY_ARTIFACT },
-        { startX: 65, endX: 85, startY: 70, endY: 95, color: BLACK_ARTIFACT },
-      ],
+describe('selectAutoChannel', () => {
+  it('picks the channel whose spot means separate best', () => {
+    const selection = selectAutoChannel({
+      // Saturation is cleanly bimodal; darkness is uniform.
+      saturation: new Float64Array([...new Array(40).fill(10), ...new Array(40).fill(100)]),
+      stain: new Float64Array(80).fill(0),
+      darkness: new Float64Array(80).fill(3),
     });
 
-    const result = buildAutoTissueMask(data, { width, height, spotPitchPx: 8 });
-
-    expect(result.hasStainSignal).toBe(true);
-    expect(result.lowThreshold).toBeGreaterThan(0);
-    expect(result.highThreshold).toBeGreaterThanOrEqual(result.lowThreshold);
-
-    // Tissue interior stays selected.
-    expect(maskHasValueAt(result.mask, width, 35, 35)).toBe(true);
-    // Residue patch, grey artifact and black artifact stay background.
-    expect(maskHasValueAt(result.mask, width, 17, 82)).toBe(false);
-    expect(maskHasValueAt(result.mask, width, 80, 15)).toBe(false);
-    expect(maskHasValueAt(result.mask, width, 75, 82)).toBe(false);
+    expect(selection?.channel).toBe('saturation');
+    expect(selection?.threshold).toBeGreaterThan(10);
+    expect(selection?.threshold).toBeLessThanOrEqual(100);
   });
 
-  it('returns an empty mask when the image carries no stain signal', () => {
-    const width = 20;
-    const height = 20;
-    const data = buildImageData({ width, height, fill: WHITE });
+  it('returns null when no channel separates well enough', () => {
+    const selection = selectAutoChannel({
+      saturation: new Float64Array(50).fill(4),
+      stain: new Float64Array(50).fill(0),
+      darkness: new Float64Array(50).fill(128),
+    });
 
-    const result = buildAutoTissueMask(data, { width, height, spotPitchPx: 8 });
-    expect(result.hasStainSignal).toBe(false);
-    expect(countMaskPixels(result.mask)).toBe(0);
+    expect(selection).toBeNull();
+  });
+
+  it('returns null when the foreground class would be a vanishing minority', () => {
+    // 1 of 200 spots above the threshold: below MIN_FOREGROUND_FRACTION.
+    const values = new Float64Array(200);
+    values.fill(10);
+    values[42] = 200;
+
+    const selection = selectAutoChannel({
+      saturation: values,
+      stain: new Float64Array(200).fill(0),
+      darkness: new Float64Array(200).fill(0),
+    });
+
+    expect(selection).toBeNull();
+  });
+
+  it('skips channels with no values', () => {
+    const selection = selectAutoChannel({
+      saturation: new Float64Array([...new Array(30).fill(2), ...new Array(30).fill(90)]),
+      stain: new Float64Array(0),
+      darkness: new Float64Array(60).fill(0),
+    });
+
+    expect(selection?.channel).toBe('saturation');
   });
 });

@@ -13,7 +13,7 @@ export type TissueParams = {
 
 export const DEFAULT_TISSUE_PARAMS: TissueParams = {
   thresholdMode: 'auto',
-  activationThreshold: 0.5,
+  activationThreshold: 0.1,
   blockThreshold: 35,
   dbscanEps: 0.03,
   dbscanMinSamples: 3,

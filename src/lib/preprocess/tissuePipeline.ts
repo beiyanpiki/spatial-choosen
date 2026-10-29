@@ -1,7 +1,18 @@
 import type { ProjectedSpot, TissueActivationMatrix } from '@/types/preprocess';
 import { getProjectedSpotLowresBounds } from './spotProjection';
-import { applyConnectedSpotCleanup, applyDensityFilter } from './tissueCleanup';
-import { buildAutoTissueMask, computeRawSaturation } from './tissueMask';
+import {
+  applyConnectedSpotCleanup,
+  applyDensityFilter,
+  applyRelativeComponentFilter,
+} from './tissueCleanup';
+import {
+  buildChannelIntegralImages,
+  computeRawSaturation,
+  selectAutoChannel,
+  type AutoChannelSelection,
+  type TissueChannelId,
+  TISSUE_CHANNEL_IDS,
+} from './tissueMask';
 import { matrixFromSelectedSpotIds } from './tissueMatrix';
 import { normalizeTissueParams, type TissueParams } from './tissueThresholds';
 
@@ -11,78 +22,7 @@ type SchedulerLike = {
   yield?: () => Promise<void>;
 };
 
-const medianOf = (values: number[]) => {
-  if (values.length === 0) {
-    return 0;
-  }
-
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1
-    ? sorted[middle]
-    : (sorted[middle - 1] + sorted[middle]) / 2;
-};
-
-/**
- * Estimates the projected spot pitch in lowres pixels from grid adjacency, so
- * the auto mask's morphology scales with the chip instead of adding knobs.
- */
-const computeSpotPitchPx = (args: {
-  projectedSpots: ProjectedSpot[];
-  imageWidth: number;
-  imageHeight: number;
-}) => {
-  const lowresWidth = args.imageWidth;
-  const lowresHeight = args.imageHeight;
-  const byGrid = new Map(args.projectedSpots.map((spot) => [`${spot.arrayRow}:${spot.arrayCol}`, spot]));
-  const pitches: number[] = [];
-
-  for (const spot of args.projectedSpots) {
-    for (const neighbor of [
-      byGrid.get(`${spot.arrayRow}:${spot.arrayCol + 1}`),
-      byGrid.get(`${spot.arrayRow + 1}:${spot.arrayCol}`),
-    ]) {
-      if (!neighbor) {
-        continue;
-      }
-
-      pitches.push(
-        Math.hypot(
-          (neighbor.x - spot.x) * lowresWidth,
-          (neighbor.y - spot.y) * lowresHeight,
-        ),
-      );
-    }
-  }
-
-  if (pitches.length > 0) {
-    return Math.max(1, medianOf(pitches));
-  }
-
-  // Degenerate grids (a single projected spot): fall back to the mean cell size.
-  return Math.max(1, Math.sqrt((lowresWidth * lowresHeight) / Math.max(1, args.projectedSpots.length)));
-};
-
-const buildMaskIntegralImage = (mask: Uint8Array, width: number, height: number) => {
-  const stride = width + 1;
-  const integral = new Uint32Array((height + 1) * stride);
-
-  for (let py = 0; py < height; py += 1) {
-    let rowSum = 0;
-    for (let px = 0; px < width; px += 1) {
-      if (mask[py * width + px] === 1) {
-        rowSum += 1;
-      }
-      integral[(py + 1) * stride + (px + 1)] = integral[py * stride + (px + 1)] + rowSum;
-    }
-  }
-
-  return { integral, stride };
-};
-
-const computeActivePixelRatio = (args: {
-  activePixelIntegralImage: Uint32Array;
-  integralStride: number;
+const resolveSpotWindow = (args: {
   imageWidth: number;
   imageHeight: number;
   cropWidth: number;
@@ -97,9 +37,31 @@ const computeActivePixelRatio = (args: {
     tissue_lowres_scalef: args.tissueLowresScaleFactor,
   });
   const startX = Math.max(0, Math.min(args.imageWidth, bounds.startX));
-  const endX = Math.max(startX, Math.min(args.imageWidth, bounds.endX));
+  const endX = Math.max(startX + 1, Math.min(args.imageWidth, bounds.endX));
   const startY = Math.max(0, Math.min(args.imageHeight, bounds.startY));
-  const endY = Math.max(startY, Math.min(args.imageHeight, bounds.endY));
+  const endY = Math.max(startY + 1, Math.min(args.imageHeight, bounds.endY));
+
+  return { startX, endX, startY, endY };
+};
+
+const computeActivePixelRatio = (args: {
+  activePixelIntegralImage: Uint32Array;
+  integralStride: number;
+  imageWidth: number;
+  imageHeight: number;
+  cropWidth: number;
+  cropHeight: number;
+  tissueLowresScaleFactor: number;
+  spot: ProjectedSpot;
+}) => {
+  const { startX, endX, startY, endY } = resolveSpotWindow({
+    imageWidth: args.imageWidth,
+    imageHeight: args.imageHeight,
+    cropWidth: args.cropWidth,
+    cropHeight: args.cropHeight,
+    tissueLowresScaleFactor: args.tissueLowresScaleFactor,
+    spot: args.spot,
+  });
 
   const totalPixels = (endX - startX) * (endY - startY);
   const activePixels = args.activePixelIntegralImage[endY * args.integralStride + endX]
@@ -198,8 +160,8 @@ export type TissueParitySummary = {
   selectedCount: number;
   selectedPercent: number;
   maskCoverage: number;
-  /** Otsu thresholds computed by the auto mode; null for legacy modes. */
-  autoThresholds?: { low: number; high: number } | null;
+  /** Channel and Otsu threshold chosen by auto-mode detection; null for legacy modes. */
+  autoDetection?: AutoChannelSelection | null;
 };
 
 export type TissuePipelineResult = {
@@ -307,39 +269,25 @@ export async function runTissueAutoSelection(args: {
   const thresholdMode = params.thresholdMode;
   const thresholdModeIsAuto = thresholdMode === 'auto';
   const imageData = await loadImageData(args.eosinLowresCropDataUrl);
-  let autoThresholds: { low: number; high: number } | null = null;
-  let integral: Uint32Array;
-  let stride: number;
-
-  if (thresholdMode === 'auto') {
-    const spotPitchPx = computeSpotPitchPx({
-      projectedSpots: args.projectedSpots,
-      imageWidth: imageData.width,
-      imageHeight: imageData.height,
-    });
-    const autoMask = buildAutoTissueMask(imageData.data, {
-      width: imageData.width,
-      height: imageData.height,
-      spotPitchPx,
-    });
-    ({ integral, stride } = buildMaskIntegralImage(
-      autoMask.mask,
-      imageData.width,
-      imageData.height,
-    ));
-    if (autoMask.hasStainSignal) {
-      autoThresholds = { low: autoMask.lowThreshold, high: autoMask.highThreshold };
-    }
-  } else {
-    ({ integral, stride } = buildActivePixelIntegralImage(
+  let autoSelection: AutoChannelSelection | null = null;
+  const legacyIntegral = thresholdMode === 'auto'
+    ? null
+    : buildActivePixelIntegralImage(
       imageData.data,
       imageData.width,
       imageData.height,
       params.blockThreshold,
       thresholdMode,
-    ));
-  }
+    );
 
+  const spotMeans = {
+    saturation: new Float64Array(args.projectedSpots.length),
+    stain: new Float64Array(args.projectedSpots.length),
+    darkness: new Float64Array(args.projectedSpots.length),
+  } as Record<TissueChannelId, Float64Array>;
+  const channelIntegrals = thresholdModeIsAuto
+    ? buildChannelIntegralImages(imageData.data, imageData.width, imageData.height)
+    : null;
   const candidateIds: string[] = [];
 
   for (let index = 0; index < args.projectedSpots.length; index += 1) {
@@ -348,19 +296,40 @@ export async function runTissueAutoSelection(args: {
       continue;
     }
 
-    const activePixelRatio = computeActivePixelRatio({
-      activePixelIntegralImage: integral,
-      integralStride: stride,
-      imageWidth: imageData.width,
-      imageHeight: imageData.height,
-      cropWidth: args.cropWidth,
-      cropHeight: args.cropHeight,
-      tissueLowresScaleFactor: args.tissueLowresScaleFactor,
-      spot,
-    });
+    if (channelIntegrals) {
+      const { startX, endX, startY, endY } = resolveSpotWindow({
+        imageWidth: imageData.width,
+        imageHeight: imageData.height,
+        cropWidth: args.cropWidth,
+        cropHeight: args.cropHeight,
+        tissueLowresScaleFactor: args.tissueLowresScaleFactor,
+        spot,
+      });
+      const totalPixels = (endX - startX) * (endY - startY);
 
-    if (activePixelRatio >= params.activationThreshold) {
-      candidateIds.push(spot.id);
+      for (const channel of TISSUE_CHANNEL_IDS) {
+        const { integral: channelIntegral, stride: channelStride } = channelIntegrals[channel];
+        const channelSum = channelIntegral[endY * channelStride + endX]
+          - channelIntegral[startY * channelStride + endX]
+          - channelIntegral[endY * channelStride + startX]
+          + channelIntegral[startY * channelStride + startX];
+        spotMeans[channel][index] = totalPixels > 0 ? channelSum / totalPixels : 0;
+      }
+    } else if (legacyIntegral) {
+      const activePixelRatio = computeActivePixelRatio({
+        activePixelIntegralImage: legacyIntegral.integral,
+        integralStride: legacyIntegral.stride,
+        imageWidth: imageData.width,
+        imageHeight: imageData.height,
+        cropWidth: args.cropWidth,
+        cropHeight: args.cropHeight,
+        tissueLowresScaleFactor: args.tissueLowresScaleFactor,
+        spot,
+      });
+
+      if (activePixelRatio >= params.activationThreshold) {
+        candidateIds.push(spot.id);
+      }
     }
 
     const processedSpotCount = index + 1;
@@ -374,9 +343,32 @@ export async function runTissueAutoSelection(args: {
 
   let selectedIdSet = new Set(candidateIds);
 
-  // Auto mode already enforces spatial coherence in image space (closing,
-  // hysteresis, connected-component filtering), so the grid-level heuristics
-  // and their extra hyperparameters only apply to the legacy modes.
+  if (thresholdModeIsAuto) {
+    // Channel-agnostic spot classification: pick the stain channel whose
+    // spot-mean distribution separates best, threshold it with Otsu, then drop
+    // small isolated spot groups that are background patches with tissue-like
+    // statistics. No user-tunable parameters.
+    autoSelection = selectAutoChannel(spotMeans);
+    if (autoSelection) {
+      const channelMeans = spotMeans[autoSelection.channel];
+      selectedIdSet = new Set(
+        args.projectedSpots
+          .filter((spot, index) => spot && channelMeans[index] >= autoSelection!.threshold)
+          .map((spot) => spot.id),
+      );
+      if (selectedIdSet.size > 0) {
+        selectedIdSet = applyRelativeComponentFilter({
+          projectedSpots: args.projectedSpots,
+          selectedIds: selectedIdSet,
+        });
+      }
+    } else {
+      selectedIdSet = new Set();
+    }
+  }
+
+  // Legacy grid heuristics and their hyperparameters only apply to the
+  // legacy modes; the auto pipeline has its own component filter above.
   if (!thresholdModeIsAuto && selectedIdSet.size > 0 && params.minConnectedSpotCount > 1) {
     selectedIdSet = applyConnectedSpotCleanup({
       projectedSpots: args.projectedSpots,
@@ -420,7 +412,7 @@ export async function runTissueAutoSelection(args: {
     selectedCount,
     selectedPercent,
     maskCoverage: selectedPercent,
-    autoThresholds: thresholdModeIsAuto ? autoThresholds : null,
+    autoDetection: thresholdModeIsAuto ? autoSelection : null,
   };
 
   const warning = selectedCount === 0 || selectedPercent < 1 ? 'Auto-selection result is empty or low-confidence.' : null;

@@ -80,3 +80,68 @@ export function applyDensityFilter(args: {
 
   return keep;
 }
+
+/**
+ * Keeps connected groups of selected spots that are large in absolute terms
+ * and large relative to the biggest group. Real tissue forms large contiguous
+ * regions; background patches whose statistics resemble tissue survive the
+ * threshold as small isolated islands, which this filter removes. Both bounds
+ * are fixed relative constants of the auto pipeline, not user knobs.
+ */
+export const AUTO_COMPONENT_MIN_SPOTS = 4;
+export const AUTO_COMPONENT_AREA_RATIO = 0.05;
+
+export function applyRelativeComponentFilter(args: {
+  projectedSpots: ProjectedSpot[];
+  selectedIds: Set<string>;
+}) {
+  const byId: SpotMap = new Map(args.projectedSpots.map((spot) => [spot.id, spot]));
+  const byGrid = new Map(args.projectedSpots.map((spot) => [keyFor(spot.arrayRow, spot.arrayCol), spot]));
+  const visited = new Set<string>();
+  const components: string[][] = [];
+
+  for (const spotId of args.selectedIds) {
+    if (visited.has(spotId)) continue;
+    const seed = byId.get(spotId);
+    if (!seed) continue;
+
+    const component: string[] = [];
+    const queue: ProjectedSpot[] = [seed];
+    visited.add(seed.id);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) continue;
+      component.push(current.id);
+
+      for (const neighbor of neighborsFor(current, byGrid)) {
+        if (!args.selectedIds.has(neighbor.id) || visited.has(neighbor.id)) continue;
+        visited.add(neighbor.id);
+        queue.push(neighbor);
+      }
+    }
+
+    components.push(component);
+  }
+
+  if (components.length === 0) {
+    return args.selectedIds;
+  }
+
+  let largest = 0;
+  for (const component of components) {
+    if (component.length > largest) largest = component.length;
+  }
+
+  const keepThreshold = Math.max(AUTO_COMPONENT_MIN_SPOTS, Math.ceil(largest * AUTO_COMPONENT_AREA_RATIO));
+  const keep = new Set<string>();
+  for (const component of components) {
+    if (component.length >= keepThreshold) {
+      component.forEach((id) => {
+        keep.add(id);
+      });
+    }
+  }
+
+  return keep;
+}

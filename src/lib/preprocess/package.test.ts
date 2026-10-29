@@ -330,14 +330,14 @@ describe('preprocess package matrix-first validation', () => {
     expect(result.tissueSelection.matrix?.values).toHaveLength(4096);
   });
 
-  it('accepts canonical payloads using the auto threshold mode with auto thresholds summary', async () => {
+  it('accepts canonical payloads using the auto threshold mode with auto detection summary', async () => {
     const project = createProject();
     project.tissueSelection.thresholdMode = 'auto';
     project.tissueSelection.paritySummary = {
       selectedCount: 12,
       selectedPercent: 25,
       maskCoverage: 25,
-      autoThresholds: { low: 9, high: 24 },
+      autoDetection: { channel: 'saturation', threshold: 29.7, separation: 0.74 },
     };
 
     const result = await deserializePreprocessProject(createPackageBlob({
@@ -346,7 +346,11 @@ describe('preprocess package matrix-first validation', () => {
     }));
 
     expect(result.tissueSelection.thresholdMode).toBe('auto');
-    expect(result.tissueSelection.paritySummary?.autoThresholds).toEqual({ low: 9, high: 24 });
+    expect(result.tissueSelection.paritySummary?.autoDetection).toEqual({
+      channel: 'saturation',
+      threshold: 29.7,
+      separation: 0.74,
+    });
   });
 
   it('rejects import before File checks outside browser runtime', async () => {

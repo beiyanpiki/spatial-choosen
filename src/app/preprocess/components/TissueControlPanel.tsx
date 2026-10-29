@@ -154,11 +154,12 @@ export function TissueControlPanel({
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [hexDraft, setHexDraft] = useState('');
   const hasInvalidLocalThresholdState =
-    activationThresholdInput === '' ||
-    hasInvalidActivationThresholdState(activationThresholdInput) ||
-    (thresholdMode !== 'auto' &&
-      (blockThresholdInput === '' ||
-        hasInvalidBlockThresholdState(blockThresholdInput)));
+    thresholdMode === 'auto'
+      ? false
+      : activationThresholdInput === '' ||
+        hasInvalidActivationThresholdState(activationThresholdInput) ||
+        blockThresholdInput === '' ||
+        hasInvalidBlockThresholdState(blockThresholdInput);
 
   useEffect(() => {
     setActivationThresholdInput(String(activationThreshold));
@@ -389,39 +390,12 @@ export function TissueControlPanel({
               </ButtonGroup>
             </FormControl>
             {thresholdMode === 'auto' ? (
-              <>
-                <FormControl isDisabled={isUnsupported || isDetecting}>
-                  <FormLabel fontSize="xs" color="gray.500" mb={1.5}>Tissue Signal Threshold</FormLabel>
-                  <Input
-                    type="number"
-                    step="0.05"
-                    min={0}
-                    max={1}
-                    value={activationThresholdInput}
-                    data-testid="tissue-activation-threshold-input"
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      const parsedValue = parseActivationThresholdInput(nextValue);
-
-                      if (parsedValue === null) {
-                        if (/^\d*\.?\d+$/.test(nextValue)) {
-                          setActivationThresholdInput(String(activationThreshold));
-                          return;
-                        }
-
-                        setActivationThresholdInput(nextValue);
-                        return;
-                      }
-
-                      setActivationThresholdInput(nextValue);
-                      onActivationThresholdChange(parsedValue);
-                    }}
-                  />
-                </FormControl>
-                <Text fontSize="xs" color="gray.500">
-                  Auto mode derives the stain thresholds from the image (Otsu) and removes background patches automatically; only the spot coverage ratio above is adjustable.
-                </Text>
-              </>
+              <Text fontSize="xs" color="gray.500" data-testid="tissue-auto-mode-hint">
+                Auto mode is fully automatic: per-spot stain statistics (saturation, eosin
+                stain strength, darkness) are thresholded with Otsu and small isolated
+                background patches are removed. No parameters to adjust — switch to a
+                legacy mode for manual threshold control.
+              </Text>
             ) : (
               <SimpleGrid columns={2} spacing={3} alignItems="end">
                 <FormControl isDisabled={isUnsupported || isDetecting}>

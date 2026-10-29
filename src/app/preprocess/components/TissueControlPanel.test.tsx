@@ -275,7 +275,7 @@ describe("TissueControlPanel", () => {
 		expect(onRunAutoDetection).toHaveBeenCalledTimes(1);
 	});
 
-	it("auto mode hides the manual block threshold and re-exposes it for legacy modes", async () => {
+	it("auto mode is parameter-free and hides both threshold inputs until a legacy mode is chosen", async () => {
 		const user = userEvent.setup();
 		const { onThresholdModeChange } = renderPanel({
 			thresholdMode: "auto",
@@ -288,14 +288,18 @@ describe("TissueControlPanel", () => {
 		expect(
 			screen.queryByTestId("tissue-block-threshold-input"),
 		).not.toBeInTheDocument();
-		expect(screen.getByTestId("tissue-activation-threshold-input")).toHaveValue(
-			0.5,
-		);
+		expect(
+			screen.queryByTestId("tissue-activation-threshold-input"),
+		).not.toBeInTheDocument();
+		expect(screen.getByTestId("tissue-auto-mode-hint")).toBeInTheDocument();
 
 		await user.click(modeOption("raw"));
 		expect(onThresholdModeChange).toHaveBeenCalledWith("raw");
 		expect(
 			screen.getByTestId("tissue-block-threshold-input"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByTestId("tissue-activation-threshold-input"),
 		).toBeInTheDocument();
 	});
 

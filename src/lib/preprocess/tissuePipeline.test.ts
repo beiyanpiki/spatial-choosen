@@ -110,10 +110,18 @@ const installImageDataStub = (args: {
   colorsBySpotId: Record<string, Rgb>;
   width?: number;
   height?: number;
+  background?: Rgb;
 }) => {
   const width = args.width ?? 100;
   const height = args.height ?? 100;
-  const imageData = new Uint8ClampedArray(width * height * 4).fill(255);
+  const [bgR, bgG, bgB] = args.background ?? [255, 255, 255];
+  const imageData = new Uint8ClampedArray(width * height * 4);
+  for (let offset = 0; offset < imageData.length; offset += 4) {
+    imageData[offset] = bgR;
+    imageData[offset + 1] = bgG;
+    imageData[offset + 2] = bgB;
+    imageData[offset + 3] = 255;
+  }
 
   for (const spot of args.projectedSpots) {
     const rgb = args.colorsBySpotId[spot.id];
@@ -225,10 +233,9 @@ describe('runTissueAutoSelection (auto mode)', () => {
 
     expect(result.selectedIds).toEqual(AUTO_TISSUE_SPOT_IDS);
     expect(result.params.thresholdMode).toBe('auto');
-    expect(result.summary.autoThresholds?.low).toBeGreaterThan(0);
-    expect(result.summary.autoThresholds?.high).toBeGreaterThanOrEqual(
-      result.summary.autoThresholds?.low ?? 0,
-    );
+    expect(result.summary.autoDetection?.channel).toBeOneOf(['saturation', 'stain', 'darkness']);
+    expect(result.summary.autoDetection?.threshold).toBeGreaterThan(0);
+    expect(result.summary.autoDetection?.separation).toBeGreaterThan(0.05);
     expect(result.warning).toBeNull();
     expect(result.matrix.values.filter((value) => value === 1)).toHaveLength(9);
   });
@@ -254,8 +261,46 @@ describe('runTissueAutoSelection (auto mode)', () => {
     });
 
     expect(result.selectedIds).toEqual([]);
-    expect(result.summary.autoThresholds).toBeNull();
+    expect(result.summary.autoDetection).toBeNull();
     expect(result.warning).toBe('Auto-selection result is empty or low-confidence.');
+  });
+
+  it('classifies low-contrast grayscale tissue through the darkness channel', async () => {
+    // Mirrors the instrument eosin reference scans: near-uniform dark image
+    // with no color stain, where tissue is only slightly darker than
+    // background and global pixel statistics are nearly unimodal.
+    const gridSpots = createGridProjectedSpots(5, 0.2);
+    const colorsBySpotId: Record<string, Rgb> = {};
+    for (const spot of gridSpots) {
+      if (spot.arrayRow <= 3 && spot.arrayCol <= 3) {
+        colorsBySpotId[spot.id] = [104, 104, 104];
+      }
+    }
+
+    installImageDataStub({
+      projectedSpots: gridSpots,
+      colorsBySpotId,
+      background: [116, 116, 116],
+    });
+
+    const result = await runTissueAutoSelection({
+      eosinLowresCropDataUrl: 'data:image/png;base64,stub',
+      cropWidth: 100,
+      cropHeight: 100,
+      tissueLowresScaleFactor: 1,
+      matrixRows: 5,
+      matrixColumns: 5,
+      projectedSpots: gridSpots,
+      params: {
+        thresholdMode: 'auto',
+      },
+    });
+
+    const expectedIds = gridSpots
+      .filter((spot) => spot.arrayRow <= 3 && spot.arrayCol <= 3)
+      .map((spot) => spot.id);
+    expect(result.selectedIds).toEqual(expectedIds);
+    expect(result.summary.autoDetection?.channel).toBe('darkness');
   });
 
   it('keeps a real tissue region even when legacy cleanup params would remove it', async () => {

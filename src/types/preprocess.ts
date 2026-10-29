@@ -501,8 +501,12 @@ export type CanonicalTissueSelectionSlice = PreprocessSliceBase & {
     selectedCount: number;
     selectedPercent: number;
     maskCoverage: number;
-    /** Otsu thresholds computed by auto-mode detection; absent in older projects. */
-    autoThresholds?: { low: number; high: number } | null;
+    /** Channel and Otsu threshold chosen by auto-mode detection; absent in older projects. */
+    autoDetection?: {
+      channel: "saturation" | "stain" | "darkness";
+      threshold: number;
+      separation: number;
+    } | null;
   } | null;
   warning: string | null;
   /** Global presentation for tissue-selected spots on the canvas. */

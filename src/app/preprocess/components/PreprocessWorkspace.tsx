@@ -2153,8 +2153,8 @@ export function PreprocessWorkspace({
 				!tissueAutoDetectionReadiness.ready
 			? tissueAutoDetectionReadiness.reason
 			: project?.tissueSelection.status === "complete"
-				? project.tissueSelection.paritySummary?.autoThresholds
-					? `Tissue spot selection is complete (Otsu thresholds ${project.tissueSelection.paritySummary.autoThresholds.low}/${project.tissueSelection.paritySummary.autoThresholds.high} of 255). Refine the selection by marking spots as tissue or background if necessary.`
+				? project.tissueSelection.paritySummary?.autoDetection
+					? `Tissue spot selection is complete (auto: ${project.tissueSelection.paritySummary.autoDetection.channel} channel, Otsu threshold ${project.tissueSelection.paritySummary.autoDetection.threshold.toFixed(1)}). Refine the selection by marking spots as tissue or background if necessary.`
 					: "Tissue spot selection is complete. Refine the selection by marking spots as tissue or background if necessary."
 				: "Choose a signal mode and auto-select tissue spots to refresh the tissue matrix.";
 	const tissueProjectedSpots = useMemo(
