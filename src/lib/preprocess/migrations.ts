@@ -165,6 +165,7 @@ const normalizeLegacyThresholdMode = (
 	}
 
 	if (
+		thresholdMode === "auto" ||
 		thresholdMode === "gray-min" ||
 		thresholdMode === "gray-max" ||
 		thresholdMode === "raw"
@@ -194,7 +195,8 @@ const isCanonicalTissueSelectionInput = (
 
 	return (
 		(slice.mode === "matrix" || slice.mode === "imported") &&
-		(slice.thresholdMode === "raw" ||
+		(slice.thresholdMode === "auto" ||
+			slice.thresholdMode === "raw" ||
 			slice.thresholdMode === "gray-max" ||
 			slice.thresholdMode === "gray-min") &&
 		typeof slice.supportState === "string" &&

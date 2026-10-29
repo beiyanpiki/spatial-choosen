@@ -247,13 +247,14 @@
 <li>Spot Size / Chip size：选择芯片尺寸。当前支持 15um 和 50um 芯片配置；不同芯片对应不同的 spot 网格和模板。更换规格会清除已有组织编辑，应在人工精修前确认。</li>
 <li>Automatic Tissue Detection / Auto detection：根据裁剪后的伊红图像自动识别组织区域。</li>
 <li>Signal mode / Threshold mode：阈值模式。<ul>
+<li>auto（默认，无需任何参数）：对每个 projected spot 在其像素范围内统计三种染色敏感特征的均值——颜色饱和度、伊红染色强度（Schreiber 等 2024 年提出的 "pinkness" 变换，灰色/黑色扫描伪影精确归零）与明暗度（darkness）。系统自动选择组织与背景分离度最好的通道并用 Otsu 阈值分类；仅部分覆盖组织边缘的 spot 由数据驱动的边界回收步骤补回；零星孤立的小块（即染色参数与组织相近的背景区域）再用连通域过滤剔除。无需调节任何参数，检测完成后状态栏会显示所选通道与阈值。该方案既适用于染色鲜明的粉色图像，也适用于仪器低对比度伊红参考图（后者只有 spot 级统计量能清晰分离）。</li>
 <li>raw：基于图像饱和度进行阈值检测，常用于染色区域较明显的图像。</li>
 <li>gray-min：基于最小灰度通道进行阈值检测。</li>
 <li>gray-max：基于最大灰度通道进行阈值检测。</li>
 </ul>
 </li>
-<li>Tissue Signal Threshold / Activation threshold：spot 激活比例。输入值允许 0 到 1，自动检测时有效值会限制在 0 到 0.3。若某个 spot 内满足阈值条件的像素比例低于该值，则不会被判定为组织区域。</li>
-<li>Saturation Threshold / Background cutoff：阈值强度，取值范围为 0 到 255。raw 模式下显示为 Saturation Threshold，灰度模式下显示为 Background cutoff。</li>
+<li>Tissue Signal Threshold / Activation threshold：spot 激活比例。输入值允许 0 到 1。若某个 spot 内满足阈值条件的像素比例低于该值，则不会被判定为组织区域。旧有模式下有效值限制在 0 到 0.3；auto 模式下该输入隐藏（无任何可调参数）。</li>
+<li>Saturation Threshold / Background cutoff：阈值强度，取值范围为 0 到 255，仅在旧有模式下显示（raw 模式显示为 Saturation Threshold，灰度模式显示为 Background cutoff）。</li>
 <li>Manual Refinement / Selection controls：手动选择工具。</li>
 <li>Hide spot grid / Show spot grid：隐藏或显示 spot 网格。</li>
 <li>Invert selection：反选当前组织激活矩阵。</li>

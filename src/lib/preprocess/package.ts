@@ -955,7 +955,7 @@ const assertCanonicalTissueSelectionSlice = (
   if (slice.mode !== 'matrix' && slice.mode !== 'imported') {
     throw new Error('Project field "tissueSelection.mode" is invalid or missing');
   }
-  if (slice.thresholdMode !== 'raw' && slice.thresholdMode !== 'gray-max' && slice.thresholdMode !== 'gray-min') {
+  if (slice.thresholdMode !== 'auto' && slice.thresholdMode !== 'raw' && slice.thresholdMode !== 'gray-max' && slice.thresholdMode !== 'gray-min') {
     throw new Error('Project field "tissueSelection.thresholdMode" is invalid or missing');
   }
   for (const key of ["activationThreshold", "blockThreshold", "dbscanEps", "dbscanMinSamples", "minConnectedSpotCount"] as const) {
@@ -1013,7 +1013,7 @@ const assertLegacyTissueSelectionSlice = (value: unknown) => {
   if (slice.mode !== 'polygon' && slice.mode !== 'brush' && slice.mode !== 'threshold' && slice.mode !== 'imported' && slice.mode !== 'matrix') {
     throw new Error('Project field "tissueSelection.mode" is invalid or missing');
   }
-  if (slice.thresholdMode !== 'gray-min' && slice.thresholdMode !== 'dark' && slice.thresholdMode !== 'light' && slice.thresholdMode !== 'raw' && slice.thresholdMode !== 'gray-max') {
+  if (slice.thresholdMode !== 'auto' && slice.thresholdMode !== 'gray-min' && slice.thresholdMode !== 'dark' && slice.thresholdMode !== 'light' && slice.thresholdMode !== 'raw' && slice.thresholdMode !== 'gray-max') {
     throw new Error('Project field "tissueSelection.thresholdMode" is invalid or missing');
   }
   for (const key of ['activationThreshold', 'blockThreshold', 'dbscanEps', 'dbscanMinSamples', 'minConnectedSpotCount'] as const) {

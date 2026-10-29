@@ -245,14 +245,22 @@ const clampLocalizationScale = (value: number) =>
 	Math.min(4, Math.max(0.5, value));
 
 const MAX_ACTIVATION_THRESHOLD = 0.3;
+const MAX_AUTO_ACTIVATION_THRESHOLD = 1;
 
-const clampActivationThreshold = (value: number, fallback = 0) => {
+const clampActivationThreshold = (
+	value: number,
+	mode: PreprocessProject["tissueSelection"]["thresholdMode"] = "auto",
+	fallback = 0,
+) => {
 	if (!Number.isFinite(value)) {
 		return fallback;
 	}
 
+	const max = mode === "auto"
+		? MAX_AUTO_ACTIVATION_THRESHOLD
+		: MAX_ACTIVATION_THRESHOLD;
 	const normalized = Math.round(value * 100) / 100;
-	return Math.min(MAX_ACTIVATION_THRESHOLD, Math.max(0, normalized));
+	return Math.min(max, Math.max(0, normalized));
 };
 
 const normalizeLocalizationRotationDegrees = (value: number) => {
@@ -618,6 +626,7 @@ const buildTissueDetectionSnapshot = (args: {
 	tissueLowresScaleFactor: args.tissueImageArgs.tissueLowresScaleFactor,
 	activationThreshold: clampActivationThreshold(
 		args.project.tissueSelection.activationThreshold,
+		args.project.tissueSelection.thresholdMode,
 	),
 	blockThreshold: args.project.tissueSelection.blockThreshold,
 	thresholdMode: args.project.tissueSelection.thresholdMode,
@@ -643,8 +652,10 @@ const matchesTissueDetectionSnapshot = (
 		readiness.tissueImageArgs.cropHeight === snapshot.cropHeight &&
 		readiness.tissueImageArgs.tissueLowresScaleFactor ===
 			snapshot.tissueLowresScaleFactor &&
-		clampActivationThreshold(project.tissueSelection.activationThreshold) ===
-			snapshot.activationThreshold &&
+		clampActivationThreshold(
+			project.tissueSelection.activationThreshold,
+			project.tissueSelection.thresholdMode,
+		) === snapshot.activationThreshold &&
 		project.tissueSelection.blockThreshold === snapshot.blockThreshold &&
 		project.tissueSelection.thresholdMode === snapshot.thresholdMode &&
 		buildProjectedSpotSignature(readiness.projectedSpots) ===
@@ -2028,6 +2039,7 @@ export function PreprocessWorkspace({
 					thresholdMode: project.tissueSelection.thresholdMode,
 					activationThreshold: clampActivationThreshold(
 						project.tissueSelection.activationThreshold,
+						project.tissueSelection.thresholdMode,
 					),
 					blockThreshold: project.tissueSelection.blockThreshold,
 					dbscanEps: project.tissueSelection.dbscanEps,
@@ -2141,7 +2153,9 @@ export function PreprocessWorkspace({
 				!tissueAutoDetectionReadiness.ready
 			? tissueAutoDetectionReadiness.reason
 			: project?.tissueSelection.status === "complete"
-				? "Tissue spot selection is complete. Refine the selection by marking spots as tissue or background if necessary."
+				? project.tissueSelection.paritySummary?.autoDetection
+					? `Tissue spot selection is complete (auto: ${project.tissueSelection.paritySummary.autoDetection.channel} channel, Otsu threshold ${project.tissueSelection.paritySummary.autoDetection.threshold.toFixed(1)}). Refine the selection by marking spots as tissue or background if necessary.`
+					: "Tissue spot selection is complete. Refine the selection by marking spots as tissue or background if necessary."
 				: "Choose a signal mode and auto-select tissue spots to refresh the tissue matrix.";
 	const tissueProjectedSpots = useMemo(
 		() => project?.chipConfig.projectedSpots ?? [],

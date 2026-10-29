@@ -471,7 +471,7 @@ export type TissueActivationMatrix = {
 
 export type TissueSelectionSupportState = 'supported' | 'unsupported';
 
-export type TissueThresholdMode = 'raw' | 'gray-max' | 'gray-min';
+export type TissueThresholdMode = 'auto' | 'raw' | 'gray-max' | 'gray-min';
 
 export type TissueSpotStyle = {
   color: string;
@@ -501,6 +501,12 @@ export type CanonicalTissueSelectionSlice = PreprocessSliceBase & {
     selectedCount: number;
     selectedPercent: number;
     maskCoverage: number;
+    /** Channel and Otsu threshold chosen by auto-mode detection; absent in older projects. */
+    autoDetection?: {
+      channel: "saturation" | "stain" | "darkness";
+      threshold: number;
+      separation: number;
+    } | null;
   } | null;
   warning: string | null;
   /** Global presentation for tissue-selected spots on the canvas. */
